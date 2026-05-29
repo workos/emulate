@@ -5,7 +5,7 @@
   "description": "Local WorkOS API emulator for tests and development",
   "repository": {
     "type": "git",
-    "url": "https://github.com/workos/emulate"
+    "url": "git+https://github.com/workos/emulate.git"
   },
   "keywords": [
     "workos",
@@ -15,7 +15,7 @@
     "testing"
   ],
   "bin": {
-    "workos-emulate": "./dist/cli.js"
+    "workos-emulate": "dist/cli.js"
   },
   "files": [
     "dist",
