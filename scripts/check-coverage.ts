@@ -4,8 +4,8 @@
  * registered routes to find missing or extra endpoints.
  *
  * Usage:
- *   pnpm check:coverage path/to/openapi.yaml
- *   pnpm check:coverage ~/Developer/workos/packages/api/open-api-spec.yaml
+ *   npm run check:coverage -- path/to/openapi.yaml
+ *   npm run check:coverage -- ~/Developer/workos/packages/api/open-api-spec.yaml
  *
  * Reports:
  *   - Spec endpoints missing from the emulator
@@ -138,7 +138,7 @@ function main(): void {
   const specPath = process.argv[2];
   if (!specPath) {
     console.error('Usage: check-coverage <openapi-spec-path>');
-    console.error('  e.g.: pnpm check:coverage ~/Developer/workos/packages/api/open-api-spec.yaml');
+    console.error('  e.g.: npm run check:coverage -- ~/Developer/workos/packages/api/open-api-spec.yaml');
     process.exit(1);
   }
 

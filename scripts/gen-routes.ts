@@ -4,8 +4,8 @@
  * files (entities, store, helpers, route stubs).
  *
  * Usage:
- *   pnpm gen:routes path/to/openapi.yaml [--out-dir src/workos/generated]
- *   pnpm gen:routes path/to/openapi.json --dry-run
+ *   npm run gen:routes -- path/to/openapi.yaml [--out-dir src/workos/generated]
+ *   npm run gen:routes -- path/to/openapi.json --dry-run
  *
  * The generated code matches the hand-written patterns in src/workos/.
  * Running twice on the same spec produces identical output (idempotent).
