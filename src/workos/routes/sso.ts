@@ -2,24 +2,25 @@ import { type RouteContext, parseJsonBody, WorkOSApiError, generateId } from '..
 import { getWorkOSStore } from '../store.js';
 import { formatSSOProfile, expiresIn, isExpired, assertLocalRedirectUri } from '../helpers.js';
 import type { WorkOSConnection } from '../entities.js';
-import { STORE_KEY_PREFIXES } from '../constants.js';
+import { STORE_KEY_PREFIXES, STORE_KEYS } from '../constants.js';
+import { renderLoginPage } from '../login-page.js';
+
+interface SSOAuthorizeParams {
+  redirectUri: string;
+  state: string | null;
+  connectionId: string | null;
+  organizationId: string | null;
+  domainHint: string | null;
+  email: string | null;
+}
 
 export function ssoRoutes(ctx: RouteContext): void {
   const { app, store, jwt } = ctx;
   const ws = getWorkOSStore(store);
 
-  app.get('/sso/authorize', (c) => {
-    const url = new URL(c.req.url);
-    const redirectUri = url.searchParams.get('redirect_uri');
-    const state = url.searchParams.get('state');
-    const connectionId = url.searchParams.get('connection');
-    const organizationId = url.searchParams.get('organization');
-    const domainHint = url.searchParams.get('domain_hint');
-    const loginHint = url.searchParams.get('login_hint');
+  function resolveAndRedirect(c: any, params: SSOAuthorizeParams) {
+    const { redirectUri, state, connectionId, organizationId, domainHint, email: loginHint } = params;
 
-    if (!redirectUri) {
-      throw new WorkOSApiError(400, 'Missing required parameter: redirect_uri', 'invalid_request');
-    }
     assertLocalRedirectUri(redirectUri);
 
     let connection: WorkOSConnection | undefined;
@@ -27,11 +28,11 @@ export function ssoRoutes(ctx: RouteContext): void {
     if (connectionId) {
       connection = ws.connections.get(connectionId);
     } else if (organizationId) {
-      connection = ws.connections.findBy('organization_id', organizationId).find((c) => c.state === 'active');
+      connection = ws.connections.findBy('organization_id', organizationId).find((cn) => cn.state === 'active');
     } else if (domainHint) {
       connection = ws.connections
         .all()
-        .find((c) => c.state === 'active' && c.domains.some((d) => d.domain === domainHint));
+        .find((cn) => cn.state === 'active' && cn.domains.some((d) => d.domain === domainHint));
     }
 
     if (!connection || connection.state !== 'active') {
@@ -69,6 +70,65 @@ export function ssoRoutes(ctx: RouteContext): void {
     redirect.searchParams.set('code', authCode.code);
     if (state) redirect.searchParams.set('state', state);
     return c.redirect(redirect.toString());
+  }
+
+  app.get('/sso/authorize', (c) => {
+    const url = new URL(c.req.url);
+    const redirectUri = url.searchParams.get('redirect_uri');
+    const state = url.searchParams.get('state');
+    const connectionId = url.searchParams.get('connection');
+    const organizationId = url.searchParams.get('organization');
+    const domainHint = url.searchParams.get('domain_hint');
+    const loginHint = url.searchParams.get('login_hint');
+
+    if (!redirectUri) {
+      throw new WorkOSApiError(400, 'Missing required parameter: redirect_uri', 'invalid_request');
+    }
+
+    const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
+    if (interactive) {
+      const hiddenFields: Record<string, string> = { redirect_uri: redirectUri };
+      if (state) hiddenFields.state = state;
+      if (connectionId) hiddenFields.connection = connectionId;
+      if (organizationId) hiddenFields.organization = organizationId;
+      if (domainHint) hiddenFields.domain_hint = domainHint;
+
+      return c.html(
+        renderLoginPage({
+          title: 'SSO Login',
+          subtitle: 'Sign in with your corporate identity.',
+          emailHint: loginHint ?? undefined,
+          formAction: '/sso/authorize',
+          hiddenFields,
+        }),
+      );
+    }
+
+    return resolveAndRedirect(c, {
+      redirectUri,
+      state,
+      connectionId,
+      organizationId,
+      domainHint,
+      email: loginHint,
+    });
+  });
+
+  app.post('/sso/authorize', async (c) => {
+    const form = await c.req.parseBody();
+    const redirectUri = form.redirect_uri as string;
+    if (!redirectUri) {
+      throw new WorkOSApiError(400, 'Missing required parameter: redirect_uri', 'invalid_request');
+    }
+
+    return resolveAndRedirect(c, {
+      redirectUri,
+      state: (form.state as string) ?? null,
+      connectionId: (form.connection as string) ?? null,
+      organizationId: (form.organization as string) ?? null,
+      domainHint: (form.domain_hint as string) ?? null,
+      email: (form.email as string) ?? null,
+    });
   });
 
   app.post('/sso/token', async (c) => {

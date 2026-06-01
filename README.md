@@ -8,6 +8,7 @@ Local WorkOS API emulator for tests and development.
 workos-emulate
 workos-emulate --port 9100 --json
 workos-emulate --seed workos-emulate.config.yaml
+workos-emulate --interactive          # serve login pages for E2E browser testing
 ```
 
 The emulator defaults to `http://localhost:4100` and the API key `sk_test_default`.
@@ -90,12 +91,12 @@ The same pattern works for any language with a WorkOS SDK (Ruby, Go, Java, etc.)
 ## Programmatic API (Node.js)
 
 ```ts
-import { createEmulator } from '@workos/emulate';
+import { createEmulator } from "@workos/emulate";
 
 const emulator = await createEmulator({
   port: 0,
   seed: {
-    users: [{ email: 'test@example.com', password: 'secret' }],
+    users: [{ email: "test@example.com", password: "secret" }],
   },
 });
 
@@ -168,13 +169,13 @@ errorHooks:
     count: 3
 ```
 
-| Field    | Required | Description |
-|----------|----------|-------------|
-| `method` | yes      | HTTP method to match (`GET`, `POST`, etc.) or `*` for any |
+| Field    | Required | Description                                                                                                       |
+| -------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `method` | yes      | HTTP method to match (`GET`, `POST`, etc.) or `*` for any                                                         |
 | `path`   | yes      | URL path to match — exact (`/user_management/users`), prefix with wildcard (`/user_management/*`), or `*` for all |
-| `status` | yes      | HTTP status code to return |
-| `body`   | no       | Custom JSON response body (`message`, `code`, `errors`). A sensible default is used when omitted. |
-| `count`  | no       | Number of times the hook fires before it auto-removes. Omit for unlimited. |
+| `status` | yes      | HTTP status code to return                                                                                        |
+| `body`   | no       | Custom JSON response body (`message`, `code`, `errors`). A sensible default is used when omitted.                 |
+| `count`  | no       | Number of times the hook fires before it auto-removes. Omit for unlimited.                                        |
 
 ### Runtime HTTP API
 
@@ -200,10 +201,10 @@ const emulator = await createEmulator({ port: 0 });
 
 // Make user creation return a 422
 const hook = emulator.addErrorHook({
-  method: 'POST',
-  path: '/user_management/users',
+  method: "POST",
+  path: "/user_management/users",
   status: 422,
-  body: { message: 'Email is invalid', code: 'unprocessable_entity' },
+  body: { message: "Email is invalid", code: "unprocessable_entity" },
 });
 
 // Your app code under test handles the error...
@@ -217,3 +218,60 @@ emulator.listErrorHooks();
 // reset() clears all hooks and re-seeds from the original config
 emulator.reset();
 ```
+
+## Interactive Auth (E2E Browser Testing)
+
+By default, the SSO and AuthKit authorize endpoints auto-redirect with an auth code — great for API-level tests, but agent browsers and E2E test frameworks need an actual login page to interact with.
+
+Pass `--interactive` (CLI) or `interactiveAuth: true` (programmatic) to enable login pages:
+
+```bash
+workos-emulate --interactive --seed workos-emulate.config.yaml
+```
+
+```ts
+const emulator = await createEmulator({
+  interactiveAuth: true,
+  seed: {
+    users: [{ email: "test@example.com", password: "secret" }],
+    connections: [
+      { name: "Test SSO", organization: "Acme", domains: ["example.com"] },
+    ],
+    organizations: [{ name: "Acme" }],
+  },
+});
+```
+
+### What changes
+
+| Endpoint                         | Default (auto)                                   | Interactive                                   |
+| -------------------------------- | ------------------------------------------------ | --------------------------------------------- |
+| `GET /sso/authorize`             | Immediately redirects to callback with auth code | Serves an HTML login page with an email field |
+| `GET /user_management/authorize` | Immediately redirects to callback with auth code | Serves an HTML login page with an email field |
+
+When interactive mode is on:
+
+1. Your app redirects to `/sso/authorize?connection=...&redirect_uri=...` (or `/user_management/authorize?...`)
+2. The emulator serves a login page instead of auto-redirecting
+3. The browser (or agent) fills in the email field and submits the form
+4. The emulator creates an auth code and redirects back to your app's callback URL
+
+The `login_hint` parameter pre-fills the email field, so agent browsers can skip typing if desired.
+
+### E2E example with Playwright
+
+```ts
+test("SSO login flow", async ({ page }) => {
+  await page.goto("http://localhost:3000/login");
+  await page.click("text=Sign in with SSO");
+
+  // Emulator serves the login page
+  await page.fill('input[name="email"]', "alice@example.com");
+  await page.click('button[type="submit"]');
+
+  // Redirected back to your app with a valid session
+  await expect(page).toHaveURL(/dashboard/);
+});
+```
+
+This replaces the need for WorkOS's Test Identity Provider — no dashboard login required, works in incognito, works with headless browsers.

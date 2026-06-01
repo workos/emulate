@@ -10,6 +10,7 @@ interface CliArgs {
   seed?: string;
   json: boolean;
   help: boolean;
+  interactive: boolean;
 }
 
 const DEFAULT_PORT = 4100;
@@ -23,13 +24,14 @@ Start a local WorkOS API emulator.
 Options:
   --port, -p <port>   Port to listen on (default: ${DEFAULT_PORT})
   --seed, -s <path>   Path to seed config file (YAML or JSON)
+  --interactive, -i   Show login pages for SSO/AuthKit (for E2E browser testing)
   --json              Print startup details as JSON
   --help, -h          Show this help message
 `);
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const parsed: CliArgs = { port: DEFAULT_PORT, json: false, help: false };
+  const parsed: CliArgs = { port: DEFAULT_PORT, json: false, help: false, interactive: false };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -43,6 +45,11 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg === '--json') {
       parsed.json = true;
+      continue;
+    }
+
+    if (arg === '--interactive' || arg === '-i') {
+      parsed.interactive = true;
       continue;
     }
 
@@ -128,6 +135,7 @@ async function main(): Promise<void> {
   const emulator = await createEmulator({
     port: argv.port,
     seed: seedConfig,
+    interactiveAuth: argv.interactive,
   });
 
   if (argv.json) {

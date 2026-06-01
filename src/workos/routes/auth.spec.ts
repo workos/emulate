@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
 import { getWorkOSStore } from '../store.js';
+import { STORE_KEYS } from '../constants.js';
 import type { Store } from '../../core/index.js';
 
 const apiKeys: ApiKeyMap = { sk_test_auth: { environment: 'test' } };
@@ -473,5 +474,131 @@ describe('Auth routes', () => {
     expect(res.status).toBe(400);
     const body = await json(res);
     expect(body.code).toBe('invalid_one_time_code');
+  });
+});
+
+describe('AuthKit interactive auth', () => {
+  let app: ReturnType<typeof createTestApp>['app'];
+  let store: Store;
+
+  beforeEach(() => {
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
+    store.setData(STORE_KEYS.interactiveAuth, true);
+  });
+
+  const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
+  const json = (res: Response) => res.json() as Promise<any>;
+
+  it('GET /user_management/authorize returns HTML login page', async () => {
+    const ws = getWorkOSStore(store);
+    ws.users.insert({
+      object: 'user',
+      email: 'alice@test.com',
+      first_name: null,
+      last_name: null,
+      email_verified: false,
+      profile_picture_url: null,
+      last_sign_in_at: null,
+      external_id: null,
+      metadata: {},
+      locale: null,
+      password_hash: null,
+      impersonator: null,
+    });
+
+    const res = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&state=abc',
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('Sign In');
+    expect(html).toContain('<form');
+    expect(html).toContain('name="email"');
+    expect(html).toContain('name="redirect_uri"');
+  });
+
+  it('GET /user_management/authorize pre-fills login_hint', async () => {
+    const res = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&login_hint=bob@test.com',
+    );
+    const html = await res.text();
+    expect(html).toContain('value="bob@test.com"');
+  });
+
+  it('POST /user_management/authorize processes form and redirects with code', async () => {
+    const ws = getWorkOSStore(store);
+    ws.users.insert({
+      object: 'user',
+      email: 'post@test.com',
+      first_name: null,
+      last_name: null,
+      email_verified: false,
+      profile_picture_url: null,
+      last_sign_in_at: null,
+      external_id: null,
+      metadata: {},
+      locale: null,
+      password_hash: null,
+      impersonator: null,
+    });
+
+    const formBody = new URLSearchParams({
+      email: 'post@test.com',
+      redirect_uri: 'http://localhost:3000/callback',
+      state: 'xyz',
+    });
+
+    const res = await app.request('/user_management/authorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody.toString(),
+    });
+    expect(res.status).toBe(302);
+    const location = res.headers.get('location')!;
+    const url = new URL(location);
+    expect(url.searchParams.get('code')).toBeTruthy();
+    expect(url.searchParams.get('state')).toBe('xyz');
+  });
+
+  it('full interactive flow: form submit → code → authenticate', async () => {
+    const ws = getWorkOSStore(store);
+    ws.users.insert({
+      object: 'user',
+      email: 'e2e@test.com',
+      first_name: null,
+      last_name: null,
+      email_verified: false,
+      profile_picture_url: null,
+      last_sign_in_at: null,
+      external_id: null,
+      metadata: {},
+      locale: null,
+      password_hash: null,
+      impersonator: null,
+    });
+
+    const formBody = new URLSearchParams({
+      email: 'e2e@test.com',
+      redirect_uri: 'http://localhost:3000/callback',
+    });
+
+    const authRes = await app.request('/user_management/authorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody.toString(),
+    });
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    expect(body.user.email).toBe('e2e@test.com');
+    expect(body.access_token).toBeDefined();
   });
 });

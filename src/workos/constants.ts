@@ -4,6 +4,7 @@ export const STORE_KEYS = {
   eventBus: 'eventBus',
   apiKeyMap: 'apiKeyMap',
   jwtTemplate: 'jwt_template',
+  interactiveAuth: 'interactiveAuth',
 } as const;
 
 /** Prefix for dynamic store keys */

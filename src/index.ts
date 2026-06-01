@@ -1,5 +1,6 @@
 import { createServer, type ApiKeyMap, addErrorHook, removeErrorHook, getErrorHooks, type ErrorHook, type ErrorHookInput } from './core/index.js';
 import { workosPlugin, seedFromConfig, type WorkOSSeedConfig } from './workos/index.js';
+import { STORE_KEYS } from './workos/constants.js';
 import { serve } from '@hono/node-server';
 import { parseJsonBody } from './core/index.js';
 
@@ -30,6 +31,7 @@ export interface EmulatorSeedConfig {
 export interface EmulatorOptions {
   port?: number;
   seed?: EmulatorSeedConfig;
+  interactiveAuth?: boolean;
 }
 
 export interface Emulator {
@@ -56,6 +58,10 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     baseUrl,
     apiKeys,
   });
+
+  if (options.interactiveAuth) {
+    store.setData(STORE_KEYS.interactiveAuth, true);
+  }
 
   // Health check endpoint
   app.get('/health', (c) => c.json({ status: 'ok' }));

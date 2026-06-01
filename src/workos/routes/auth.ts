@@ -12,6 +12,7 @@ import {
 } from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
+import { renderLoginPage } from '../login-page.js';
 
 interface PendingAuth {
   user_id: string;
@@ -19,21 +20,21 @@ interface PendingAuth {
   auth_method: string;
 }
 
+interface AuthorizeParams {
+  redirectUri: string;
+  state: string | null;
+  codeChallenge: string | null;
+  codeChallengeMethod: string | null;
+  loginHint: string | null;
+}
+
 export function authRoutes(ctx: RouteContext): void {
   const { app, store, jwt } = ctx;
   const ws = getWorkOSStore(store);
 
-  app.get('/user_management/authorize', (c) => {
-    const url = new URL(c.req.url);
-    const redirectUri = url.searchParams.get('redirect_uri');
-    const state = url.searchParams.get('state');
-    const codeChallenge = url.searchParams.get('code_challenge');
-    const codeChallengeMethod = url.searchParams.get('code_challenge_method');
-    const loginHint = url.searchParams.get('login_hint');
+  function resolveAndRedirect(c: any, params: AuthorizeParams) {
+    const { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint } = params;
 
-    if (!redirectUri) {
-      throw new WorkOSApiError(400, 'redirect_uri is required', 'invalid_request');
-    }
     assertLocalRedirectUri(redirectUri);
 
     let user;
@@ -71,6 +72,55 @@ export function authRoutes(ctx: RouteContext): void {
     redirect.searchParams.set('code', authCode.code);
     if (state) redirect.searchParams.set('state', state);
     return c.redirect(redirect.toString());
+  }
+
+  app.get('/user_management/authorize', (c) => {
+    const url = new URL(c.req.url);
+    const redirectUri = url.searchParams.get('redirect_uri');
+    const state = url.searchParams.get('state');
+    const codeChallenge = url.searchParams.get('code_challenge');
+    const codeChallengeMethod = url.searchParams.get('code_challenge_method');
+    const loginHint = url.searchParams.get('login_hint');
+
+    if (!redirectUri) {
+      throw new WorkOSApiError(400, 'redirect_uri is required', 'invalid_request');
+    }
+
+    const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
+    if (interactive) {
+      const hiddenFields: Record<string, string> = { redirect_uri: redirectUri };
+      if (state) hiddenFields.state = state;
+      if (codeChallenge) hiddenFields.code_challenge = codeChallenge;
+      if (codeChallengeMethod) hiddenFields.code_challenge_method = codeChallengeMethod;
+
+      return c.html(
+        renderLoginPage({
+          title: 'Sign In',
+          subtitle: 'Enter your email to sign in to your account.',
+          emailHint: loginHint ?? undefined,
+          formAction: '/user_management/authorize',
+          hiddenFields,
+        }),
+      );
+    }
+
+    return resolveAndRedirect(c, { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint });
+  });
+
+  app.post('/user_management/authorize', async (c) => {
+    const form = await c.req.parseBody();
+    const redirectUri = form.redirect_uri as string;
+    if (!redirectUri) {
+      throw new WorkOSApiError(400, 'redirect_uri is required', 'invalid_request');
+    }
+
+    return resolveAndRedirect(c, {
+      redirectUri,
+      state: (form.state as string) ?? null,
+      codeChallenge: (form.code_challenge as string) ?? null,
+      codeChallengeMethod: (form.code_challenge_method as string) ?? null,
+      loginHint: (form.email as string) ?? null,
+    });
   });
 
   // Device authorization endpoint
