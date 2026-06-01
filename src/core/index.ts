@@ -28,3 +28,12 @@ export {
   parseJsonBody,
 } from './middleware/error-handler.js';
 export { authMiddleware, type WorkOSAppEnv, type WorkOSAuthContext, type ApiKeyMap } from './middleware/auth.js';
+export {
+  type ErrorHook,
+  type ErrorHookInput,
+  type ErrorHookBody,
+  addErrorHook,
+  removeErrorHook,
+  getErrorHooks,
+  setErrorHooks,
+} from './error-hooks.js';

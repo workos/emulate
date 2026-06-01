@@ -1,6 +1,19 @@
-import { createServer, type ApiKeyMap } from './core/index.js';
+import { createServer, type ApiKeyMap, addErrorHook, removeErrorHook, getErrorHooks, type ErrorHook, type ErrorHookInput } from './core/index.js';
 import { workosPlugin, seedFromConfig, type WorkOSSeedConfig } from './workos/index.js';
 import { serve } from '@hono/node-server';
+import { parseJsonBody } from './core/index.js';
+
+export interface ErrorHookSeedConfig {
+  method: string;
+  path: string;
+  status: number;
+  body?: {
+    message?: string;
+    code?: string;
+    errors?: Array<{ field: string; code: string; message?: string }>;
+  };
+  count?: number;
+}
 
 export interface EmulatorSeedConfig {
   apiKeys?: Record<string, { environment: string }>;
@@ -11,6 +24,7 @@ export interface EmulatorSeedConfig {
   roles?: WorkOSSeedConfig['roles'];
   permissions?: WorkOSSeedConfig['permissions'];
   webhookEndpoints?: WorkOSSeedConfig['webhookEndpoints'];
+  errorHooks?: ErrorHookSeedConfig[];
 }
 
 export interface EmulatorOptions {
@@ -24,6 +38,9 @@ export interface Emulator {
   apiKey: string;
   close(): Promise<void>;
   reset(): void;
+  addErrorHook(hook: ErrorHookInput): ErrorHook;
+  removeErrorHook(id: string): boolean;
+  listErrorHooks(): ErrorHook[];
 }
 
 export async function createEmulator(options: EmulatorOptions = {}): Promise<Emulator> {
@@ -43,11 +60,47 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   // Health check endpoint
   app.get('/health', (c) => c.json({ status: 'ok' }));
 
+  // Error hooks management endpoints
+  app.get('/_emulate/hooks', (c) => c.json(getErrorHooks(store)));
+
+  app.post('/_emulate/hooks', async (c) => {
+    const body = await parseJsonBody(c);
+    const method = body.method as string | undefined;
+    const path = body.path as string | undefined;
+    const status = body.status as number | undefined;
+    if (!method || !path || !status) {
+      return c.json({ message: 'method, path, and status are required', code: 'bad_request' }, 400);
+    }
+    const hook = addErrorHook(store, {
+      method,
+      path,
+      status,
+      body: body.body as ErrorHookInput['body'],
+      count: body.count as number | undefined,
+    });
+    return c.json(hook, 201);
+  });
+
+  app.delete('/_emulate/hooks/:id', (c) => {
+    const removed = removeErrorHook(store, c.req.param('id'));
+    if (!removed) return c.json({ message: 'Hook not found', code: 'not_found' }, 404);
+    return c.body(null, 204);
+  });
+
+  const seedErrorHooks = () => {
+    if (options.seed?.errorHooks) {
+      for (const hook of options.seed.errorHooks) {
+        addErrorHook(store, hook);
+      }
+    }
+  };
+
   const seedFn = () => {
     workosPlugin.seed?.(store, baseUrl);
     if (options.seed) {
       seedFromConfig(store, baseUrl, options.seed);
     }
+    seedErrorHooks();
   };
   seedFn();
 
@@ -75,6 +128,15 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
       return new Promise((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
       });
+    },
+    addErrorHook(hook: ErrorHookInput): ErrorHook {
+      return addErrorHook(store, hook);
+    },
+    removeErrorHook(id: string): boolean {
+      return removeErrorHook(store, id);
+    },
+    listErrorHooks(): ErrorHook[] {
+      return getErrorHooks(store);
     },
   };
 }

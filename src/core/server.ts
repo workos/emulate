@@ -4,6 +4,7 @@ import { Store } from './store.js';
 import { JWTManager } from './jwt.js';
 import { createApiErrorHandler, requestIdMiddleware } from './middleware/error-handler.js';
 import { authMiddleware, type ApiKeyMap, type WorkOSAppEnv } from './middleware/auth.js';
+import { errorHooksMiddleware } from './error-hooks.js';
 import type { ServicePlugin } from './plugin.js';
 
 export interface ServerOptions {
@@ -43,7 +44,7 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
     '/user_management/sessions/logout',
   ]);
 
-  const PUBLIC_PATH_PREFIXES = ['/sso/', '/user_management/sessions/jwks/', '/data-integrations/'];
+  const PUBLIC_PATH_PREFIXES = ['/sso/', '/user_management/sessions/jwks/', '/data-integrations/', '/_emulate/'];
 
   app.use('*', async (c, next) => {
     const path = new URL(c.req.url).pathname;
@@ -102,6 +103,9 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
 
     await next();
   });
+
+  // Error hooks — intercept matching requests and return configured errors
+  app.use('*', errorHooksMiddleware(store));
 
   // Store API key map for route access
   store.setData('apiKeyMap', apiKeys);
