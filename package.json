@@ -48,6 +48,7 @@
   "devDependencies": {
     "@types/node": "~22.19.7",
     "@vitest/coverage-v8": "^4.0.18",
+    "@workos/openapi-spec": "^0.6.0",
     "oxfmt": "^0.54.0",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
@@ -69,6 +70,7 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "gen:routes": "tsx scripts/gen-routes.ts",
+    "gen:events": "tsx scripts/gen-events.ts",
     "check:coverage": "tsx scripts/check-coverage.ts"
   },
   "author": "WorkOS",
