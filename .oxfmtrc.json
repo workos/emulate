@@ -1,0 +1,6 @@
+{
+  "singleQuote": true,
+  "printWidth": 120,
+  "sortPackageJson": false,
+  "ignorePatterns": ["package-lock.json", "CHANGELOG.md"]
+}

@@ -1,4 +1,12 @@
-import { createServer, type ApiKeyMap, addErrorHook, removeErrorHook, getErrorHooks, type ErrorHook, type ErrorHookInput } from './core/index.js';
+import {
+  createServer,
+  type ApiKeyMap,
+  addErrorHook,
+  removeErrorHook,
+  getErrorHooks,
+  type ErrorHook,
+  type ErrorHookInput,
+} from './core/index.js';
 import { workosPlugin, seedFromConfig, type WorkOSSeedConfig } from './workos/index.js';
 import { STORE_KEYS } from './workos/constants.js';
 import { serve } from '@hono/node-server';
