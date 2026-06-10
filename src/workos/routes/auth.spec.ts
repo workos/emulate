@@ -770,4 +770,92 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(event.data).toMatchObject({ auth_method: 'password', status: 'active', ended_at: null });
     expect(event.data.expires_at).toBeTruthy();
   });
+
+  it('MFA-completed sessions report auth_method: unknown (no spec enum value)', async () => {
+    const user = await registerUser('evt-mfa@test.com', 'secret');
+    const ws = getWorkOSStore(store);
+
+    const factor = ws.authFactors.insert({
+      object: 'authentication_factor',
+      user_id: user.id,
+      type: 'totp',
+      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+    });
+    const challenge = ws.authChallenges.insert({
+      object: 'authentication_challenge',
+      user_id: user.id,
+      factor_id: factor.id,
+      expires_at: new Date(Date.now() + 600000).toISOString(),
+      code: '123456',
+    });
+    const pendingToken = 'pending_evt_mfa';
+    store.setData(`pending_auth:${pendingToken}`, { user_id: user.id, organization_id: null, auth_method: 'MFA' });
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+        code: '123456',
+        pending_authentication_token: pendingToken,
+        authentication_challenge_id: challenge.id,
+      }),
+    });
+
+    // No 'mfa' value exists in the spec session auth_method enum; we report the valid 'unknown'.
+    const [session] = eventsNamed('session.created');
+    expect(session).toBeDefined();
+    expect(session.data).toMatchObject({ auth_method: 'unknown' });
+  });
+
+  it('email-verification sessions report auth_method: unknown (no spec enum value)', async () => {
+    const user = await registerUser('evt-verify-session@test.com', 'secret');
+
+    const sendRes = await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' });
+    const verification = await json(sendRes);
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        code: verification.code,
+        user_id: user.id,
+      }),
+    });
+
+    const [session] = eventsNamed('session.created');
+    expect(session).toBeDefined();
+    expect(session.data).toMatchObject({ auth_method: 'unknown' });
+  });
+
+  it('token refresh does not emit an authentication event', async () => {
+    await registerUser('evt-refresh@test.com', 'secret');
+
+    const loginRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'evt-refresh@test.com', password: 'secret' }),
+    });
+    const { refresh_token } = await json(loginRes);
+
+    const authEventsAfterLogin = getWorkOSStore(store)
+      .events.all()
+      .filter((e) => e.event.startsWith('authentication.')).length;
+
+    const refreshRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token }),
+    });
+    expect(refreshRes.status).toBe(200);
+
+    // A rotation is not a fresh login, so it must add no authentication.* event...
+    const authEventsAfterRefresh = getWorkOSStore(store)
+      .events.all()
+      .filter((e) => e.event.startsWith('authentication.')).length;
+    expect(authEventsAfterRefresh).toBe(authEventsAfterLogin);
+    // ...and specifically no spurious oauth_succeeded, which the OAuth authMethod would otherwise fire.
+    expect(eventsNamed('authentication.oauth_succeeded')).toHaveLength(0);
+  });
 });

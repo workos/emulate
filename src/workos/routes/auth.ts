@@ -192,6 +192,10 @@ export function authRoutes(ctx: RouteContext): void {
     let user;
     let organizationId: string | null = null;
     let authMethod: string;
+    // A token refresh rotates credentials for an existing session; it is not a fresh
+    // login, so it must not emit an authentication.*_succeeded event. Grants that are
+    // genuine authentications leave this true; refresh_token flips it off.
+    let isFreshLogin = true;
 
     switch (grantType) {
       case 'authorization_code': {
@@ -336,6 +340,7 @@ export function authRoutes(ctx: RouteContext): void {
         // Rotate: delete old, issue new below
         ws.refreshTokens.delete(refreshToken.id);
         authMethod = 'OAuth';
+        isFreshLogin = false;
         break;
       }
 
@@ -517,7 +522,7 @@ export function authRoutes(ctx: RouteContext): void {
     // Emit authentication event (hybrid Option B for action-specific events)
     const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
     const succeededEvent = AUTH_EVENTS[authMethod]?.succeeded;
-    if (eventBus && succeededEvent) {
+    if (eventBus && succeededEvent && isFreshLogin) {
       eventBus.emit({
         event: succeededEvent,
         data: buildAuthenticationEventData({
