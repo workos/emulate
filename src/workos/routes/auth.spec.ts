@@ -508,9 +508,7 @@ describe('AuthKit interactive auth', () => {
       impersonator: null,
     });
 
-    const res = await app.request(
-      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&state=abc',
-    );
+    const res = await app.request('/user_management/authorize?redirect_uri=http://localhost:3000/callback&state=abc');
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('Sign In');
@@ -600,5 +598,177 @@ describe('AuthKit interactive auth', () => {
     const body = await json(tokenRes);
     expect(body.user.email).toBe('e2e@test.com');
     expect(body.access_token).toBeDefined();
+  });
+});
+
+describe('authentication events (spec-named, spec-shaped)', () => {
+  let app: ReturnType<typeof createTestApp>['app'];
+  let store: Store;
+
+  beforeEach(() => {
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
+  });
+
+  const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
+  const json = (res: Response) => res.json() as Promise<any>;
+
+  const eventsNamed = (name: string) =>
+    getWorkOSStore(store)
+      .events.all()
+      .filter((e) => e.event === name);
+
+  async function registerUser(email: string, password: string) {
+    const res = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    return json(res);
+  }
+
+  it('emits authentication.password_succeeded with the spec payload', async () => {
+    const user = await registerUser('evt-pass@test.com', 'secret');
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'spec-agent' },
+      body: JSON.stringify({ grant_type: 'password', email: 'evt-pass@test.com', password: 'secret' }),
+    });
+
+    const [event] = eventsNamed('authentication.password_succeeded');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'password',
+      status: 'succeeded',
+      user_id: user.id,
+      email: 'evt-pass@test.com',
+      user_agent: 'spec-agent',
+    });
+    expect(event.data).toHaveProperty('ip_address');
+  });
+
+  it('emits authentication.password_failed with a required error object', async () => {
+    await registerUser('evt-fail@test.com', 'secret');
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'evt-fail@test.com', password: 'wrong' }),
+    });
+    expect(res.status).toBe(401);
+
+    const [event] = eventsNamed('authentication.password_failed');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'password',
+      status: 'failed',
+      email: 'evt-fail@test.com',
+      error: { code: 'invalid_credentials', message: 'Invalid credentials' },
+    });
+  });
+
+  it('emits authentication.oauth_succeeded for the authorization code flow', async () => {
+    await registerUser('evt-oauth@test.com', 'secret');
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+
+    const [event] = eventsNamed('authentication.oauth_succeeded');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({ type: 'oauth', status: 'succeeded' });
+  });
+
+  it('emits authentication.oauth_failed for an invalid code', async () => {
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code: 'bogus' }),
+    });
+    expect(res.status).toBe(400);
+
+    const [event] = eventsNamed('authentication.oauth_failed');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'oauth',
+      status: 'failed',
+      error: { code: 'invalid_code', message: 'Invalid code' },
+    });
+  });
+
+  it('emits magic_auth.created on code request and magic_auth_succeeded on exchange', async () => {
+    const user = await registerUser('evt-magic@test.com', 'secret');
+
+    await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'evt-magic@test.com' }),
+    });
+
+    const [created] = eventsNamed('magic_auth.created');
+    expect(created).toBeDefined();
+    expect(created.data).toMatchObject({ user_id: user.id, email: 'evt-magic@test.com' });
+    const code = created.data.code as string;
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        code,
+        email: 'evt-magic@test.com',
+      }),
+    });
+
+    const [succeeded] = eventsNamed('authentication.magic_auth_succeeded');
+    expect(succeeded).toBeDefined();
+    expect(succeeded.data).toMatchObject({ type: 'magic_auth', status: 'succeeded', user_id: user.id });
+  });
+
+  it('emits email_verification.created and email_verification_succeeded', async () => {
+    const user = await registerUser('evt-verify@test.com', 'secret');
+
+    const sendRes = await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' });
+    const verification = await json(sendRes);
+
+    const [created] = eventsNamed('email_verification.created');
+    expect(created).toBeDefined();
+    expect(created.data).toMatchObject({ user_id: user.id, email: 'evt-verify@test.com' });
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        code: verification.code,
+        user_id: user.id,
+      }),
+    });
+
+    const [succeeded] = eventsNamed('authentication.email_verification_succeeded');
+    expect(succeeded).toBeDefined();
+    expect(succeeded.data).toMatchObject({ type: 'email_verification', status: 'succeeded', user_id: user.id });
+  });
+
+  it('creates sessions with spec-required fields (auth_method, status, expires_at)', async () => {
+    await registerUser('evt-session@test.com', 'secret');
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'evt-session@test.com', password: 'secret' }),
+    });
+
+    const [event] = eventsNamed('session.created');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({ auth_method: 'password', status: 'active', ended_at: null });
+    expect(event.data.expires_at).toBeTruthy();
   });
 });
