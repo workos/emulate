@@ -9,6 +9,9 @@ import {
   expiresIn,
   assertLocalRedirectUri,
   sealSession,
+  AUTH_EVENTS,
+  AUTH_METHOD_SESSION_VALUES,
+  buildAuthenticationEventData,
 } from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
@@ -158,6 +161,34 @@ export function authRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, 'grant_type is required', 'invalid_request');
     }
 
+    const requestIp = c.req.header('x-forwarded-for') ?? null;
+    const requestUserAgent = c.req.header('user-agent') ?? null;
+
+    /** Emit the spec's authentication.*_failed event for a credential failure, then throw. */
+    const failAuth: (
+      method: string,
+      info: { email?: string | null; userId?: string | null },
+      error: WorkOSApiError,
+    ) => never = (method, info, error) => {
+      const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
+      const failedEvent = AUTH_EVENTS[method]?.failed;
+      if (eventBus && failedEvent) {
+        eventBus.emit({
+          event: failedEvent,
+          data: buildAuthenticationEventData({
+            status: 'failed',
+            method,
+            userId: info.userId,
+            email: info.email,
+            ipAddress: requestIp,
+            userAgent: requestUserAgent,
+            error: { code: error.code, message: error.message },
+          }),
+        });
+      }
+      throw error;
+    };
+
     let user;
     let organizationId: string | null = null;
     let authMethod: string;
@@ -168,9 +199,13 @@ export function authRoutes(ctx: RouteContext): void {
         if (!code) throw new WorkOSApiError(400, 'code is required', 'invalid_request');
 
         const authCode = ws.authCodes.findOneBy('code', code);
-        if (!authCode) throw new WorkOSApiError(400, 'Invalid code', 'invalid_code');
+        if (!authCode) failAuth('OAuth', {}, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
         if (isExpired(authCode.expires_at)) {
-          throw new WorkOSApiError(400, 'Code has expired', 'expired_code');
+          failAuth(
+            'OAuth',
+            { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },
+            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+          );
         }
 
         if (authCode.code_challenge) {
@@ -186,7 +221,11 @@ export function authRoutes(ctx: RouteContext): void {
             challenge = codeVerifier;
           }
           if (challenge !== authCode.code_challenge) {
-            throw new WorkOSApiError(400, 'Invalid code_verifier', 'invalid_code_verifier');
+            failAuth(
+              'OAuth',
+              { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },
+              new WorkOSApiError(400, 'Invalid code_verifier', 'invalid_code_verifier'),
+            );
           }
         }
 
@@ -206,7 +245,11 @@ export function authRoutes(ctx: RouteContext): void {
 
         user = ws.users.findOneBy('email', email);
         if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
-          throw new WorkOSApiError(401, 'Invalid credentials', 'invalid_credentials');
+          failAuth(
+            'Password',
+            { email, userId: user?.id },
+            new WorkOSApiError(401, 'Invalid credentials', 'invalid_credentials'),
+          );
         }
         authMethod = 'Password';
         break;
@@ -223,10 +266,14 @@ export function authRoutes(ctx: RouteContext): void {
 
         const magicAuth = ws.magicAuths.all().find((ma) => ma.code === code && ma.email === email);
         if (!magicAuth) {
-          throw new WorkOSApiError(400, 'Invalid code', 'invalid_code');
+          failAuth('MagicAuth', { email }, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
         }
         if (isExpired(magicAuth.expires_at)) {
-          throw new WorkOSApiError(400, 'Code has expired', 'expired_code');
+          failAuth(
+            'MagicAuth',
+            { email: magicAuth.email, userId: magicAuth.user_id },
+            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+          );
         }
 
         user = ws.users.get(magicAuth.user_id);
@@ -246,10 +293,18 @@ export function authRoutes(ctx: RouteContext): void {
 
         const ev = ws.emailVerifications.findBy('user_id', userId).find((v) => v.code === code);
         if (!ev) {
-          throw new WorkOSApiError(400, 'Invalid code', 'invalid_code');
+          failAuth(
+            'EmailVerification',
+            { userId, email: ws.users.get(userId)?.email },
+            new WorkOSApiError(400, 'Invalid code', 'invalid_code'),
+          );
         }
         if (isExpired(ev.expires_at)) {
-          throw new WorkOSApiError(400, 'Code has expired', 'expired_code');
+          failAuth(
+            'EmailVerification',
+            { email: ev.email, userId: ev.user_id },
+            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+          );
         }
 
         ws.users.update(userId, { email_verified: true });
@@ -308,12 +363,20 @@ export function authRoutes(ctx: RouteContext): void {
         }
         if (isExpired(challenge.expires_at)) {
           ws.authChallenges.delete(challenge.id);
-          throw new WorkOSApiError(400, 'Challenge has expired', 'expired_challenge');
+          failAuth(
+            'MFA',
+            { userId: pending.user_id, email: ws.users.get(pending.user_id)?.email },
+            new WorkOSApiError(400, 'Challenge has expired', 'expired_challenge'),
+          );
         }
 
         // Verify code against the challenge's stored code
         if (challenge.code && code !== challenge.code) {
-          throw new WorkOSApiError(400, 'Invalid one-time code', 'invalid_one_time_code');
+          failAuth(
+            'MFA',
+            { userId: pending.user_id, email: ws.users.get(pending.user_id)?.email },
+            new WorkOSApiError(400, 'Invalid one-time code', 'invalid_one_time_code'),
+          );
         }
 
         ws.authChallenges.delete(challenge.id);
@@ -390,8 +453,12 @@ export function authRoutes(ctx: RouteContext): void {
       object: 'session',
       user_id: user.id,
       organization_id: organizationId,
-      ip_address: c.req.header('x-forwarded-for') ?? null,
-      user_agent: c.req.header('user-agent') ?? null,
+      ip_address: requestIp,
+      user_agent: requestUserAgent,
+      auth_method: AUTH_METHOD_SESSION_VALUES[authMethod] ?? 'unknown',
+      status: 'active',
+      expires_at: expiresIn(30 * 24 * 60), // matches refresh token lifetime
+      ended_at: null,
     });
 
     // Resolve role + permissions for org-scoped sessions
@@ -449,11 +516,18 @@ export function authRoutes(ctx: RouteContext): void {
 
     // Emit authentication event (hybrid Option B for action-specific events)
     const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
-    if (eventBus) {
-      const authEventType = `authentication.${authMethod.toLowerCase()}_succeeded`;
+    const succeededEvent = AUTH_EVENTS[authMethod]?.succeeded;
+    if (eventBus && succeededEvent) {
       eventBus.emit({
-        event: authEventType,
-        data: { user_id: user.id, email: updatedUser.email, method: authMethod, ip_address: session.ip_address },
+        event: succeededEvent,
+        data: buildAuthenticationEventData({
+          status: 'succeeded',
+          method: authMethod,
+          userId: user.id,
+          email: updatedUser.email,
+          ipAddress: session.ip_address,
+          userAgent: session.user_agent,
+        }),
       });
     }
 

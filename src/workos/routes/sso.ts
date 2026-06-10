@@ -1,7 +1,15 @@
 import { type RouteContext, parseJsonBody, WorkOSApiError, generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatSSOProfile, expiresIn, isExpired, assertLocalRedirectUri } from '../helpers.js';
+import {
+  formatSSOProfile,
+  expiresIn,
+  isExpired,
+  assertLocalRedirectUri,
+  AUTH_EVENTS,
+  buildAuthenticationEventData,
+} from '../helpers.js';
 import type { WorkOSConnection } from '../entities.js';
+import type { EventBus } from '../event-bus.js';
 import { STORE_KEY_PREFIXES, STORE_KEYS } from '../constants.js';
 import { renderLoginPage } from '../login-page.js';
 
@@ -136,6 +144,37 @@ export function ssoRoutes(ctx: RouteContext): void {
     const grantType = body.grant_type as string;
     const code = body.code as string;
 
+    const emitSsoEvent = (
+      status: 'succeeded' | 'failed',
+      info: {
+        email?: string | null;
+        userId?: string | null;
+        organizationId?: string | null;
+        connectionId?: string | null;
+      },
+      error?: WorkOSApiError,
+    ): void => {
+      const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
+      if (!eventBus) return;
+      eventBus.emit({
+        event: status === 'succeeded' ? AUTH_EVENTS.SSO.succeeded : AUTH_EVENTS.SSO.failed,
+        data: buildAuthenticationEventData({
+          status,
+          method: 'SSO',
+          userId: info.userId,
+          email: info.email,
+          ipAddress: c.req.header('x-forwarded-for') ?? null,
+          userAgent: c.req.header('user-agent') ?? null,
+          ...(error ? { error: { code: error.code, message: error.message } } : {}),
+          sso: {
+            organization_id: info.organizationId ?? null,
+            connection_id: info.connectionId ?? null,
+            session_id: null,
+          },
+        }),
+      });
+    };
+
     if (grantType !== 'authorization_code') {
       throw new WorkOSApiError(400, 'Unsupported grant_type', 'invalid_request');
     }
@@ -145,11 +184,24 @@ export function ssoRoutes(ctx: RouteContext): void {
 
     const auth = ws.ssoAuthorizations.findOneBy('code', code);
     if (!auth) {
-      throw new WorkOSApiError(400, 'Invalid authorization code', 'invalid_code');
+      const error = new WorkOSApiError(400, 'Invalid authorization code', 'invalid_code');
+      emitSsoEvent('failed', {}, error);
+      throw error;
     }
     if (isExpired(auth.expires_at)) {
       ws.ssoAuthorizations.delete(auth.id);
-      throw new WorkOSApiError(400, 'Authorization code has expired', 'expired_code');
+      const expiredProfile = ws.ssoProfiles.get(auth.profile_id);
+      const error = new WorkOSApiError(400, 'Authorization code has expired', 'expired_code');
+      emitSsoEvent(
+        'failed',
+        {
+          email: expiredProfile?.email,
+          organizationId: auth.organization_id,
+          connectionId: expiredProfile?.connection_id,
+        },
+        error,
+      );
+      throw error;
     }
 
     const profile = ws.ssoProfiles.get(auth.profile_id);
@@ -166,6 +218,14 @@ export function ssoRoutes(ctx: RouteContext): void {
     });
 
     store.setData(`${STORE_KEY_PREFIXES.ssoToken}${accessToken}`, profile.id);
+
+    // SSO is profile-based; a user-management user may not exist for this email
+    emitSsoEvent('succeeded', {
+      email: profile.email,
+      userId: ws.users.findOneBy('email', profile.email)?.id ?? null,
+      organizationId: auth.organization_id ?? profile.organization_id,
+      connectionId: profile.connection_id,
+    });
 
     return c.json({
       profile: formatSSOProfile(profile),

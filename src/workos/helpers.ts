@@ -1,5 +1,6 @@
 import { randomBytes, createHash, createCipheriv } from 'node:crypto';
 import { WorkOSApiError, type CursorPaginatedResult, type Entity } from '../core/index.js';
+import { EVENTS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
 import type { WorkOSStore } from './store.js';
 import type {
   WorkOSOrganization,
@@ -100,6 +101,60 @@ export function formatUser(user: WorkOSUser): Record<string, unknown> {
 
 export function formatSession(s: WorkOSSession): Record<string, unknown> {
   return formatEntity(s);
+}
+
+/** Maps the emulator's PascalCase authentication_method values to the spec's snake_case event `type`. */
+export const AUTH_METHOD_EVENT_TYPES: Record<string, string> = {
+  OAuth: 'oauth',
+  Password: 'password',
+  MagicAuth: 'magic_auth',
+  EmailVerification: 'email_verification',
+  MFA: 'mfa',
+  SSO: 'sso',
+};
+
+/** Maps authentication_method values to the session `auth_method` enum (note: magic_code, not magic_auth). */
+export const AUTH_METHOD_SESSION_VALUES: Record<string, string> = {
+  OAuth: 'oauth',
+  Password: 'password',
+  MagicAuth: 'magic_code',
+  SSO: 'sso',
+};
+
+/** authentication.* event names per method, resolved from the spec-generated catalog. */
+export const AUTH_EVENTS: Record<string, { succeeded: WorkOSEventName; failed: WorkOSEventName }> = {
+  OAuth: { succeeded: EVENTS.authenticationOauthSucceeded, failed: EVENTS.authenticationOauthFailed },
+  Password: { succeeded: EVENTS.authenticationPasswordSucceeded, failed: EVENTS.authenticationPasswordFailed },
+  MagicAuth: { succeeded: EVENTS.authenticationMagicAuthSucceeded, failed: EVENTS.authenticationMagicAuthFailed },
+  EmailVerification: {
+    succeeded: EVENTS.authenticationEmailVerificationSucceeded,
+    failed: EVENTS.authenticationEmailVerificationFailed,
+  },
+  MFA: { succeeded: EVENTS.authenticationMfaSucceeded, failed: EVENTS.authenticationMfaFailed },
+  SSO: { succeeded: EVENTS.authenticationSsoSucceeded, failed: EVENTS.authenticationSsoFailed },
+};
+
+export function buildAuthenticationEventData(opts: {
+  status: 'succeeded' | 'failed';
+  method: string;
+  userId?: string | null;
+  email?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  error?: { code: string; message: string };
+  sso?: { organization_id: string | null; connection_id: string | null; session_id: string | null };
+}): Record<string, unknown> {
+  const data: AuthenticationEventData = {
+    type: (AUTH_METHOD_EVENT_TYPES[opts.method] ?? opts.method.toLowerCase()) as AuthenticationEventData['type'],
+    status: opts.status,
+    user_id: opts.userId ?? null,
+    email: opts.email ?? null,
+    ip_address: opts.ipAddress ?? null,
+    user_agent: opts.userAgent ?? null,
+    ...(opts.error ? { error: opts.error } : {}),
+    ...(opts.sso ? { sso: opts.sso } : {}),
+  };
+  return { ...data };
 }
 
 export function formatEmailVerification(ev: WorkOSEmailVerification): Record<string, unknown> {
