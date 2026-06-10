@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer, type ApiKeyMap } from './index.js';
 import { workosPlugin } from '../workos/index.js';
-import { addErrorHook, getErrorHooks, removeErrorHook, setErrorHooks } from './error-hooks.js';
+import { addErrorHook, getErrorHooks, removeErrorHook } from './error-hooks.js';
 import type { Store } from './store.js';
 
 const apiKeys: ApiKeyMap = { sk_test_hooks: { environment: 'test' } };

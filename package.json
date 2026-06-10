@@ -50,6 +50,7 @@
     "@vitest/coverage-v8": "^4.0.18",
     "@workos/openapi-spec": "^0.6.0",
     "oxfmt": "^0.54.0",
+    "oxlint": "^1.69.0",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
@@ -67,6 +68,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "gen:routes": "tsx scripts/gen-routes.ts",

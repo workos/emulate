@@ -14,12 +14,10 @@ function createTestApp() {
 
 describe('SSO routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
-  let store: Store;
 
   beforeEach(() => {
     const server = createTestApp();
     app = server.app;
-    store = server.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });

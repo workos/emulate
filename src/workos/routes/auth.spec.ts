@@ -488,7 +488,6 @@ describe('AuthKit interactive auth', () => {
     store.setData(STORE_KEYS.interactiveAuth, true);
   });
 
-  const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
   const json = (res: Response) => res.json() as Promise<any>;
 
   it('GET /user_management/authorize returns HTML login page', async () => {
