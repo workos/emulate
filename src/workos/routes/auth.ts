@@ -12,6 +12,8 @@ import {
   AUTH_EVENTS,
   AUTH_METHOD_SESSION_VALUES,
   buildAuthenticationEventData,
+  generateCode,
+  formatAuthChallenge,
 } from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
@@ -189,13 +191,55 @@ export function authRoutes(ctx: RouteContext): void {
       throw error;
     };
 
+    /**
+     * Initiate the MFA second factor. Records the primary method on a pending-auth token so
+     * the eventual session reports it (not 'unknown'), creates a challenge for the factor, and
+     * returns the spec's `mfa_challenge` code plus the fields a client needs to complete the
+     * urn:workos:oauth:grant-type:mfa-totp grant. (The spec documents the mfa_challenge code but
+     * not this response body; the pending_authentication_token/challenge fields mirror WorkOS.)
+     */
+    const issueMfaChallenge = (
+      mfaUser: { id: string },
+      orgId: string | null,
+      primaryMethod: string,
+      factor: { id: string },
+    ) => {
+      const pendingToken = generateId('pending');
+      store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, {
+        user_id: mfaUser.id,
+        organization_id: orgId,
+        auth_method: primaryMethod,
+      });
+      const challenge = ws.authChallenges.insert({
+        object: 'authentication_challenge',
+        user_id: mfaUser.id,
+        factor_id: factor.id,
+        expires_at: expiresIn(10),
+        code: generateCode(),
+      });
+      return c.json(
+        {
+          code: 'mfa_challenge',
+          message: 'Multi-factor authentication is required to continue.',
+          pending_authentication_token: pendingToken,
+          authentication_challenge: formatAuthChallenge(challenge),
+        },
+        403,
+      );
+    };
+
     let user;
     let organizationId: string | null = null;
     let authMethod: string;
-    // A token refresh rotates credentials for an existing session; it is not a fresh
-    // login, so it must not emit an authentication.*_succeeded event. Grants that are
-    // genuine authentications leave this true; refresh_token flips it off.
+    // The session's auth_method can differ from the event method: an MFA completion emits
+    // authentication.mfa_succeeded but the session records the primary factor that was
+    // challenged (e.g. 'password'). Left undefined, the session falls back to authMethod.
+    let sessionAuthMethod: string | undefined;
+    // A token refresh rotates credentials for an existing session; it is not a fresh login,
+    // so it creates no new session and emits no authentication.*_succeeded event. Genuine
+    // authentications leave this true; refresh_token flips it off and sets refreshSessionId.
     let isFreshLogin = true;
+    let refreshSessionId: string | null = null;
 
     switch (grantType) {
       case 'authorization_code': {
@@ -256,6 +300,13 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
         authMethod = 'Password';
+
+        // A user with enrolled factors must clear a second factor before a session is issued:
+        // hand back a pending token (recording 'Password' as the primary method) and a challenge.
+        const passwordFactors = ws.authFactors.findBy('user_id', user.id);
+        if (passwordFactors.length > 0) {
+          return issueMfaChallenge(user, organizationId, 'Password', passwordFactors[0]);
+        }
         break;
       }
 
@@ -337,7 +388,9 @@ export function authRoutes(ctx: RouteContext): void {
         // Allow body.organization_id to switch org context (switchToOrganization)
         organizationId = (body.organization_id as string) ?? refreshToken.organization_id;
 
-        // Rotate: delete old, issue new below
+        // Rotate within the existing session: capture it for reuse, delete the old token,
+        // and issue a new one below — no new session, no authentication event.
+        refreshSessionId = refreshToken.session_id;
         ws.refreshTokens.delete(refreshToken.id);
         authMethod = 'OAuth';
         isFreshLogin = false;
@@ -389,7 +442,10 @@ export function authRoutes(ctx: RouteContext): void {
 
         user = ws.users.get(pending.user_id);
         organizationId = pending.organization_id;
+        // Event is authentication.mfa_succeeded; the session records the primary factor the
+        // pending token was issued for (MFA is a second factor, not a session auth method).
         authMethod = 'MFA';
+        sessionAuthMethod = pending.auth_method;
         break;
       }
 
@@ -451,20 +507,28 @@ export function authRoutes(ctx: RouteContext): void {
 
     if (!user) throw notFound('User');
 
-    ws.users.update(user.id, { last_sign_in_at: new Date().toISOString() });
+    // A fresh login creates a new session (firing session.created); a refresh_token rotation
+    // reuses the existing session, so it emits neither session.created nor an auth event.
+    let session;
+    if (isFreshLogin) {
+      ws.users.update(user.id, { last_sign_in_at: new Date().toISOString() });
+      session = ws.sessions.insert({
+        object: 'session',
+        user_id: user.id,
+        organization_id: organizationId,
+        ip_address: requestIp,
+        user_agent: requestUserAgent,
+        auth_method: AUTH_METHOD_SESSION_VALUES[sessionAuthMethod ?? authMethod] ?? 'unknown',
+        status: 'active',
+        expires_at: expiresIn(30 * 24 * 60), // matches refresh token lifetime
+        ended_at: null,
+      });
+    } else {
+      const existing = refreshSessionId ? ws.sessions.get(refreshSessionId) : undefined;
+      if (!existing) throw new WorkOSApiError(400, 'Invalid refresh token', 'invalid_grant');
+      session = existing;
+    }
     const updatedUser = ws.users.get(user.id)!;
-
-    const session = ws.sessions.insert({
-      object: 'session',
-      user_id: user.id,
-      organization_id: organizationId,
-      ip_address: requestIp,
-      user_agent: requestUserAgent,
-      auth_method: AUTH_METHOD_SESSION_VALUES[authMethod] ?? 'unknown',
-      status: 'active',
-      expires_at: expiresIn(30 * 24 * 60), // matches refresh token lifetime
-      ended_at: null,
-    });
 
     // Resolve role + permissions for org-scoped sessions
     let roleSlug: string | undefined;

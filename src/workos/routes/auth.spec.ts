@@ -771,7 +771,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(event.data.expires_at).toBeTruthy();
   });
 
-  it('MFA-completed sessions report auth_method: unknown (no spec enum value)', async () => {
+  it('MFA session falls back to auth_method: unknown when the pending token records no mapped primary', async () => {
     const user = await registerUser('evt-mfa@test.com', 'secret');
     const ws = getWorkOSStore(store);
 
@@ -802,7 +802,8 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       }),
     });
 
-    // No 'mfa' value exists in the spec session auth_method enum; we report the valid 'unknown'.
+    // The pending token here records only 'MFA' (not a primary factor), so the session falls
+    // back to the valid 'unknown' rather than an out-of-enum value like 'mfa'.
     const [session] = eventsNamed('session.created');
     expect(session).toBeDefined();
     expect(session.data).toMatchObject({ auth_method: 'unknown' });
@@ -829,7 +830,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(session.data).toMatchObject({ auth_method: 'unknown' });
   });
 
-  it('token refresh does not emit an authentication event', async () => {
+  it('token refresh rotates tokens without emitting login or session events', async () => {
     await registerUser('evt-refresh@test.com', 'secret');
 
     const loginRes = await app.request('/user_management/authenticate', {
@@ -849,13 +850,65 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       body: JSON.stringify({ grant_type: 'refresh_token', refresh_token }),
     });
     expect(refreshRes.status).toBe(200);
+    // Rotation still hands back fresh tokens.
+    expect((await json(refreshRes)).refresh_token).toBeTruthy();
 
     // A rotation is not a fresh login, so it must add no authentication.* event...
     const authEventsAfterRefresh = getWorkOSStore(store)
       .events.all()
       .filter((e) => e.event.startsWith('authentication.')).length;
     expect(authEventsAfterRefresh).toBe(authEventsAfterLogin);
-    // ...and specifically no spurious oauth_succeeded, which the OAuth authMethod would otherwise fire.
+    // ...no spurious oauth_succeeded, which the OAuth authMethod would otherwise fire...
     expect(eventsNamed('authentication.oauth_succeeded')).toHaveLength(0);
+    // ...and it reuses the existing session rather than minting a new one.
+    expect(eventsNamed('session.created')).toHaveLength(1);
+    expect(getWorkOSStore(store).sessions.all()).toHaveLength(1);
+  });
+
+  it('password login for an MFA-enrolled user challenges, then keys the session to the primary factor', async () => {
+    const user = await registerUser('evt-mfa-flow@test.com', 'secret');
+    const ws = getWorkOSStore(store);
+    ws.authFactors.insert({
+      object: 'authentication_factor',
+      user_id: user.id,
+      type: 'totp',
+      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+    });
+
+    // First factor: password returns an mfa_challenge carrying a pending token + challenge,
+    // and creates neither a session nor a login event.
+    const challengeRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'evt-mfa-flow@test.com', password: 'secret' }),
+    });
+    expect(challengeRes.status).toBe(403);
+    const challengeBody = await json(challengeRes);
+    expect(challengeBody.code).toBe('mfa_challenge');
+    expect(challengeBody.pending_authentication_token).toBeTruthy();
+    expect(challengeBody.authentication_challenge.id).toBeTruthy();
+    expect(eventsNamed('session.created')).toHaveLength(0);
+    expect(eventsNamed('authentication.password_succeeded')).toHaveLength(0);
+
+    // Second factor: completing mfa-totp issues the session (code read from the store, since
+    // the spec excludes it from the challenge response).
+    const challengeId = challengeBody.authentication_challenge.id as string;
+    const code = ws.authChallenges.get(challengeId)!.code!;
+    const mfaRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+        code,
+        pending_authentication_token: challengeBody.pending_authentication_token,
+        authentication_challenge_id: challengeId,
+      }),
+    });
+    expect(mfaRes.status).toBe(200);
+
+    // The event is mfa_succeeded, but the session records the primary factor (password).
+    expect(eventsNamed('authentication.mfa_succeeded')).toHaveLength(1);
+    const [session] = eventsNamed('session.created');
+    expect(session.data).toMatchObject({ auth_method: 'password' });
   });
 });

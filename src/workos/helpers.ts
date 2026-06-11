@@ -116,12 +116,12 @@ export const AUTH_METHOD_EVENT_TYPES: Record<string, string> = {
 /**
  * Maps authentication_method values to the session `auth_method` enum (note: magic_code, not magic_auth).
  *
- * MFA and EmailVerification map to 'unknown' on purpose: the spec's session auth_method enum
- * (cross_app_auth, external_auth, impersonation, magic_code, migrated_session, oauth, passkey,
- * password, sso, unknown) has no value for either. MFA is a second factor rather than a primary
- * method, and email verification has no analogue at all. Reporting the originating primary factor
- * would require recording it through the pending-auth flow, which the emulator does not yet do —
- * left as follow-up. 'unknown' is a valid enum member, so consumers that validate the field pass.
+ * The spec's session auth_method enum (cross_app_auth, external_auth, impersonation, magic_code,
+ * migrated_session, oauth, passkey, password, sso, unknown) has no value for MFA or email
+ * verification. An MFA completion normally records its *primary* factor instead (e.g. 'password'),
+ * resolved from the pending-auth token via sessionAuthMethod in the authenticate handler. The MFA
+ * and EmailVerification entries here are fallbacks: when no primary method is known they resolve to
+ * 'unknown' — a valid enum member, so consumers that validate the field still pass.
  */
 export const AUTH_METHOD_SESSION_VALUES: Record<string, string> = {
   OAuth: 'oauth',
