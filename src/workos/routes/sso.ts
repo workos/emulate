@@ -1,12 +1,6 @@
 import { type RouteContext, parseJsonBody, WorkOSApiError, generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import {
-  formatSSOProfile,
-  expiresIn,
-  isExpired,
-  assertLocalRedirectUri,
-  emitAuthenticationEvent,
-} from '../helpers.js';
+import { formatSSOProfile, expiresIn, isExpired, assertLocalRedirectUri, emitAuthenticationEvent } from '../helpers.js';
 import type { WorkOSConnection } from '../entities.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEY_PREFIXES, STORE_KEYS } from '../constants.js';
