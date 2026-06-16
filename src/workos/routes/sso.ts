@@ -154,6 +154,11 @@ export function ssoRoutes(ctx: RouteContext): void {
         error: { code: error.code, message: error.message },
         ipAddress: c.req.header('x-forwarded-for') ?? null,
         userAgent: c.req.header('user-agent') ?? null,
+        sso: {
+          organization_id: null,
+          connection_id: null,
+          session_id: null,
+        },
       });
       throw error;
     }

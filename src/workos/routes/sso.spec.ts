@@ -297,6 +297,7 @@ describe('SSO authentication events', () => {
       type: 'sso',
       status: 'failed',
       error: { code: 'invalid_code', message: 'Invalid authorization code' },
+      sso: { organization_id: null, connection_id: null, session_id: null },
     });
   });
 });
