@@ -8,11 +8,11 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { createEmulator, type Emulator } from './index.js';
 import { EVENT_DATA_REQUIREMENTS } from './workos/generated/events.js';
 
-const WEBHOOK_SECRET = 'whsec_e2e_test_secret';
+let webhookSecret = '';
 
 interface ReceivedWebhook {
   id: string;
@@ -88,7 +88,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
   function verifySignature(webhook: ReceivedWebhook): void {
     const match = webhook.signature?.match(/^t=(\d+),v1=([a-f0-9]{64})$/);
     expect(match, `unexpected signature format: ${webhook.signature}`).toBeTruthy();
-    const expected = createHmac('sha256', WEBHOOK_SECRET).update(`${match![1]}.${webhook.rawBody}`).digest('hex');
+    const expected = createHmac('sha256', webhookSecret).update(`${match![1]}.${webhook.rawBody}`).digest('hex');
     expect(match![2]).toBe(expected);
   }
 
@@ -104,12 +104,13 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
   }
 
   beforeAll(async () => {
+    webhookSecret = randomBytes(32).toString('hex');
     receiver = await startWebhookReceiver();
     emulator = await createEmulator({ port: 0 });
 
     const res = await api('/webhook_endpoints', {
       method: 'POST',
-      body: JSON.stringify({ endpoint_url: receiver.url, secret: WEBHOOK_SECRET, events: [] }),
+      body: JSON.stringify({ endpoint_url: receiver.url, secret: webhookSecret, events: [] }),
     });
     expect(res.status).toBe(201);
   });
