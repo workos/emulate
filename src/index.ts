@@ -118,6 +118,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     }
     seedErrorHooks();
   };
+
   seedFn();
 
   const httpServer = serve({ fetch: app.fetch, port });
@@ -140,6 +141,10 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     reset() {
       store.reset();
       seedFn();
+      // Note: EventBus is not re-registered after reset because Hono's router
+      // cannot be modified after it's built. Route-level authentication events
+      // will not work after reset. This is acceptable for test scenarios where
+      // reset is primarily used, but not for production use.
     },
     close(): Promise<void> {
       return new Promise((resolve, reject) => {
