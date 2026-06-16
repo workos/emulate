@@ -6,6 +6,7 @@ import {
   getErrorHooks,
   type ErrorHook,
   type ErrorHookInput,
+  type Store,
 } from './core/index.js';
 import { workosPlugin, seedFromConfig, type WorkOSSeedConfig } from './workos/index.js';
 import { STORE_KEYS } from './workos/constants.js';
@@ -46,6 +47,7 @@ export interface Emulator {
   url: string;
   port: number;
   apiKey: string;
+  store: Store;
   close(): Promise<void>;
   reset(): void;
   addErrorHook(hook: ErrorHookInput): ErrorHook;
@@ -134,6 +136,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     url,
     port: actualPort,
     apiKey: primaryApiKey,
+    store,
     reset() {
       store.reset();
       seedFn();

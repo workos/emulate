@@ -341,4 +341,80 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       method: 'DELETE',
     });
   });
+
+  it('completes full MFA flow with password as primary factor and emits correct events', async () => {
+    const cursor = receiver.received.length;
+
+    // Step 1: Enroll an MFA factor for the user
+    const factorRes = await api(`/user_management/users/${userId}/auth_factors`, {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'totp',
+      }),
+    });
+    expect(factorRes.status).toBe(201);
+    const factor = await factorRes.json();
+
+    // Step 2: Authenticate with password to trigger MFA challenge
+    const passwordRes = await fetch(`${emulator.url}/user_management/authenticate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email, password: 'an even better passphrase' }),
+    });
+    expect(passwordRes.status).toBe(403);
+    const passwordChallenge = await passwordRes.json();
+    const pendingToken = passwordChallenge.pending_authentication_token as string;
+    const challengeId = passwordChallenge.authentication_challenge.id as string;
+
+    // Step 3: Access the emulator's internal store to get the challenge code
+    // In production, this would come from the user's TOTP app, but for testing
+    // we need to extract it from the store since it's excluded from the response
+    const { getWorkOSStore } = await import('./workos/store.js');
+    const ws = getWorkOSStore(emulator.store);
+    const challenge = ws.authChallenges.get(challengeId);
+    const challengeCode = challenge?.code;
+
+    if (!challengeCode) {
+      throw new Error('Challenge code not found in store');
+    }
+
+    // Step 4: Complete MFA challenge with the code
+    const mfaRes = await fetch(`${emulator.url}/user_management/authenticate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+        code: challengeCode,
+        pending_authentication_token: pendingToken,
+        authentication_challenge_id: challengeId,
+      }),
+    });
+    expect(mfaRes.status).toBe(200);
+    const mfaAuth = await mfaRes.json();
+    expect(mfaAuth.access_token).toBeTruthy();
+    expect(mfaAuth.refresh_token).toBeTruthy();
+
+    // Step 5: Verify session was created with auth_method='password' (primary factor, not 'mfa')
+    const sessionWebhook = await waitForWebhook('session.created', { after: cursor });
+    expect(sessionWebhook.data.auth_method).toBe('password');
+    expect(sessionWebhook.data.user_id).toBe(userId);
+    verifySignature(sessionWebhook);
+    expectSpecShape(sessionWebhook);
+
+    // Step 6: Verify authentication.mfa_succeeded event was emitted
+    const authWebhook = await waitForWebhook('authentication.mfa_succeeded', { after: cursor });
+    expect(authWebhook.data).toMatchObject({
+      type: 'mfa',
+      status: 'succeeded',
+      user_id: userId,
+      email,
+    });
+    verifySignature(authWebhook);
+    expectSpecShape(authWebhook);
+
+    // Cleanup: Remove the MFA factor for other tests
+    await api(`/user_management/auth_factors/${factor.id}`, {
+      method: 'DELETE',
+    });
+  });
 });
