@@ -196,6 +196,7 @@ export function generateCode(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+// Note: intentionally weak for emulator use only, not for production use.
 export function hashPassword(password: string): string {
   return createHash('sha256').update(password).digest('hex');
 }
