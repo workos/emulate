@@ -9,9 +9,8 @@ import {
   expiresIn,
   assertLocalRedirectUri,
   sealSession,
-  AUTH_EVENTS,
   AUTH_METHOD_SESSION_VALUES,
-  buildAuthenticationEventData,
+  emitAuthenticationEvent,
   generateCode,
   formatAuthChallenge,
 } from '../helpers.js';
@@ -172,22 +171,16 @@ export function authRoutes(ctx: RouteContext): void {
       info: { email?: string | null; userId?: string | null },
       error: WorkOSApiError,
     ) => never = (method, info, error) => {
-      const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
-      const failedEvent = AUTH_EVENTS[method]?.failed;
-      if (eventBus && failedEvent) {
-        eventBus.emit({
-          event: failedEvent,
-          data: buildAuthenticationEventData({
-            status: 'failed',
-            method,
-            userId: info.userId,
-            email: info.email,
-            ipAddress: requestIp,
-            userAgent: requestUserAgent,
-            error: { code: error.code, message: error.message },
-          }),
-        });
-      }
+      emitAuthenticationEvent({
+        eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+        method,
+        status: 'failed',
+        userId: info.userId,
+        email: info.email,
+        ipAddress: requestIp,
+        userAgent: requestUserAgent,
+        error: { code: error.code, message: error.message },
+      });
       throw error;
     };
 
@@ -584,19 +577,15 @@ export function authRoutes(ctx: RouteContext): void {
       : null;
 
     // Emit authentication event (hybrid Option B for action-specific events)
-    const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
-    const succeededEvent = AUTH_EVENTS[authMethod]?.succeeded;
-    if (eventBus && succeededEvent && isFreshLogin) {
-      eventBus.emit({
-        event: succeededEvent,
-        data: buildAuthenticationEventData({
-          status: 'succeeded',
-          method: authMethod,
-          userId: user.id,
-          email: updatedUser.email,
-          ipAddress: session.ip_address,
-          userAgent: session.user_agent,
-        }),
+    if (isFreshLogin) {
+      emitAuthenticationEvent({
+        eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+        method: authMethod,
+        status: 'succeeded',
+        userId: user.id,
+        email: updatedUser.email,
+        ipAddress: session.ip_address,
+        userAgent: session.user_agent,
       });
     }
 

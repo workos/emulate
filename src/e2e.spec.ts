@@ -301,4 +301,43 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
     expect(loginRes.status).toBe(200);
     await waitForWebhook('authentication.password_succeeded', { after: cursor });
   });
+
+  it('triggers MFA challenge when user has enrolled factor and authenticates with password', async () => {
+    const cursor = receiver.received.length;
+
+    // Step 1: Enroll an MFA factor for the user
+    const factorRes = await api(`/user_management/users/${userId}/auth_factors`, {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'totp',
+      }),
+    });
+    expect(factorRes.status).toBe(201);
+    const factor = await factorRes.json();
+
+    // Step 2: Authenticate with password - should trigger MFA challenge
+    const passwordRes = await fetch(`${emulator.url}/user_management/authenticate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email, password: 'an even better passphrase' }),
+    });
+    expect(passwordRes.status).toBe(403);
+    const passwordChallenge = await passwordRes.json();
+    expect(passwordChallenge.code).toBe('mfa_challenge');
+    expect(passwordChallenge.pending_authentication_token).toBeTruthy();
+    expect(passwordChallenge.authentication_challenge).toBeTruthy();
+
+    // Verify that no session was created (MFA challenge prevents session creation)
+    const sessionWebhooks = receiver.received.slice(cursor).filter((w) => w.event === 'session.created');
+    expect(sessionWebhooks.length).toBe(0);
+
+    // Verify that no authentication event was emitted yet (MFA not completed)
+    const authWebhooks = receiver.received.slice(cursor).filter((w) => w.event.startsWith('authentication.'));
+    expect(authWebhooks.length).toBe(0);
+
+    // Cleanup: Remove the MFA factor for other tests
+    await api(`/user_management/auth_factors/${factor.id}`, {
+      method: 'DELETE',
+    });
+  });
 });

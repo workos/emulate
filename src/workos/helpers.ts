@@ -2,6 +2,7 @@ import { randomBytes, createHash, createCipheriv } from 'node:crypto';
 import { WorkOSApiError, type CursorPaginatedResult, type Entity } from '../core/index.js';
 import { EVENTS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
 import type { WorkOSStore } from './store.js';
+import type { EventBus } from './event-bus.js';
 import type {
   WorkOSOrganization,
   WorkOSOrganizationDomain,
@@ -168,6 +169,38 @@ export function buildAuthenticationEventData(opts: {
   return { ...data };
 }
 
+/**
+ * Emit an authentication event (succeeded or failed) for a given method.
+ * This unified helper handles both regular auth events and SSO-specific events.
+ */
+export function emitAuthenticationEvent(opts: {
+  eventBus: EventBus | undefined;
+  method: string;
+  status: 'succeeded' | 'failed';
+  userId?: string | null;
+  email?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  error?: { code: string; message: string };
+  sso?: { organization_id: string | null; connection_id: string | null; session_id: string | null };
+}): void {
+  const { eventBus, method, status, ...eventData } = opts;
+  if (!eventBus) return;
+
+  const authEvent = AUTH_EVENTS[method];
+  if (!authEvent) return;
+
+  const eventName = status === 'succeeded' ? authEvent.succeeded : authEvent.failed;
+  eventBus.emit({
+    event: eventName,
+    data: buildAuthenticationEventData({
+      status,
+      method,
+      ...eventData,
+    }),
+  });
+}
+
 export function formatEmailVerification(ev: WorkOSEmailVerification): Record<string, unknown> {
   return formatEntity(ev);
 }
@@ -196,7 +229,11 @@ export function generateCode(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-// Note: intentionally weak for emulator use only, not for production use.
+/**
+ * Hash password using SHA256.
+ * NOTE: This is intentionally weak for emulator/testing only.
+ * Production systems should use bcrypt, scrypt, or Argon2 with proper salt and iterations.
+ */
 export function hashPassword(password: string): string {
   return createHash('sha256').update(password).digest('hex');
 }
