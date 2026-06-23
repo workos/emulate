@@ -36,8 +36,9 @@ import { featureFlagRoutes } from './routes/feature-flags.js';
 import { dataIntegrationRoutes } from './routes/data-integrations.js';
 import { webhookEndpointRoutes } from './routes/webhook-endpoints.js';
 import { eventRoutes } from './routes/events.js';
-import { EventBus } from './event-bus.js';
+import { EventBus, type EventBusOptions } from './event-bus.js';
 import { STORE_KEYS, EVENTS } from './constants.js';
+import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import {
   generateVerificationToken,
   hashPassword,
@@ -155,6 +156,14 @@ export interface WorkOSSeedConfig {
 }
 
 export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSeedConfig): void {
+  // Validate the config before seeding
+  const validation = validateSeedConfig(config);
+  if (!validation.valid) {
+    throw new Error(
+      `Invalid seed configuration:\n${formatValidationErrors(validation.errors)}`
+    );
+  }
+
   const ws = getWorkOSStore(store);
 
   if (config.users) {
@@ -378,7 +387,14 @@ export const workosPlugin: ServicePlugin = {
 
     // Set up event bus with collection hooks (Option A from spec)
     // Store on ctx.store for route-level access (hybrid Option A+B for action events)
-    const eventBus = new EventBus(ctx.store);
+    // Check for webhook retry config in store data (set by emulator options)
+    const webhookRetryConfig = ctx.store.getData<any>('webhookRetryConfig');
+    const webhookDebugMode = ctx.store.getData<boolean>('webhookDebugMode') ?? false;
+
+    const eventBus = new EventBus(ctx.store, {
+      retryConfig: webhookRetryConfig,
+      debugMode: webhookDebugMode,
+    });
     ctx.store.setData(STORE_KEYS.eventBus, eventBus);
     const ws = getWorkOSStore(ctx.store);
 

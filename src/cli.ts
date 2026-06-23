@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import chalk from 'chalk';
 import { parse as parseYaml } from 'yaml';
 import { createEmulator, type EmulatorSeedConfig } from './index.js';
+import { validateSeedConfig, formatValidationErrors } from './workos/config-validator.js';
 
 interface CliArgs {
   port: number;
@@ -11,6 +12,7 @@ interface CliArgs {
   json: boolean;
   help: boolean;
   interactive: boolean;
+  validateConfig: boolean;
 }
 
 const DEFAULT_PORT = 4100;
@@ -25,13 +27,14 @@ Options:
   --port, -p <port>   Port to listen on (default: ${DEFAULT_PORT})
   --seed, -s <path>   Path to seed config file (YAML or JSON)
   --interactive, -i   Show login pages for SSO/AuthKit (for E2E browser testing)
+  --validate-config   Validate seed config file without starting server
   --json              Print startup details as JSON
   --help, -h          Show this help message
 `);
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const parsed: CliArgs = { port: DEFAULT_PORT, json: false, help: false, interactive: false };
+  const parsed: CliArgs = { port: DEFAULT_PORT, json: false, help: false, interactive: false, validateConfig: false };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -50,6 +53,11 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg === '--interactive' || arg === '-i') {
       parsed.interactive = true;
+      continue;
+    }
+
+    if (arg === '--validate-config') {
+      parsed.validateConfig = true;
       continue;
     }
 
@@ -132,6 +140,25 @@ async function main(): Promise<void> {
   }
 
   const seedConfig = argv.seed ? loadSeedFile(argv.seed) : autoDetectSeedFile();
+
+  // Handle config validation mode
+  if (argv.validateConfig) {
+    if (!seedConfig) {
+      console.error('No seed config file found to validate');
+      process.exit(1);
+    }
+
+    const validation = validateSeedConfig(seedConfig);
+    if (validation.valid) {
+      console.log(chalk.green('✓ Configuration is valid'));
+      process.exit(0);
+    } else {
+      console.error(chalk.red('✗ Configuration validation failed:'));
+      console.error(formatValidationErrors(validation.errors));
+      process.exit(1);
+    }
+  }
+
   const emulator = await createEmulator({
     port: argv.port,
     seed: seedConfig,

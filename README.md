@@ -108,6 +108,41 @@ emulator.reset();
 await emulator.close();
 ```
 
+### ⚠️ Important: EventBus Reset Limitation
+
+The `reset()` method clears all data and re-seeds from the original config, but **route-level authentication events will not work after reset**. This is because Hono's router cannot be modified after it's built, so the EventBus cannot be re-registered with the collection hooks.
+
+This limitation is acceptable for test scenarios where `reset()` is primarily used to clean up state between tests, but it means:
+- After calling `reset()`, authentication events (`authentication.*_succeeded`, `authentication.*_failed`) will not be emitted
+- Resource lifecycle events (user.created, organization.created, etc.) will still work
+- If you need authentication events after reset, you must create a new emulator instance
+
+```ts
+const emulator = await createEmulator({ port: 0 });
+
+// First run: authentication events work
+await fetch(`${emulator.url}/user_management/authenticate`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ grant_type: 'password', email: 'test@example.com', password: 'secret' }),
+});
+// authentication.password_succeeded webhook is delivered
+
+emulator.reset();
+
+// Second run: authentication events DO NOT work
+await fetch(`${emulator.url}/user_management/authenticate`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ grant_type: 'password', email: 'test@example.com', password: 'secret' }),
+});
+// NO authentication.password_succeeded webhook is delivered
+
+// Solution: create a new emulator instance if you need authentication events
+await emulator.close();
+const newEmulator = await createEmulator({ port: 0 });
+```
+
 ## Seed Data
 
 Create `workos-emulate.config.yaml` in the current directory or pass `--seed <path>`.
@@ -285,6 +320,157 @@ emulator.listErrorHooks();
 emulator.reset();
 ```
 
+### Advanced Error Hook Examples
+
+Error hooks can be used for sophisticated testing scenarios:
+
+#### Testing Retry Logic
+```ts
+const emulator = await createEmulator({ port: 0 });
+
+// Make the first 3 requests fail, then succeed
+emulator.addErrorHook({
+  method: 'POST',
+  path: '/user_management/users',
+  status: 503,
+  count: 3, // Auto-remove after 3 uses
+});
+
+// Your app's retry logic will handle the failures
+for (let i = 0; i < 4; i++) {
+  const res = await fetch(`${emulator.url}/user_management/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${emulator.apiKey}` },
+    body: JSON.stringify({ email: 'test@example.com' }),
+  });
+  console.log(`Attempt ${i + 1}:`, res.status);
+  // Attempt 1-3: 503, Attempt 4: 201
+}
+```
+
+#### Conditional Error Responses
+```ts
+// Simulate validation errors for specific inputs
+emulator.addErrorHook({
+  method: 'POST',
+  path: '/user_management/users',
+  status: 422,
+  body: {
+    message: 'Validation failed',
+    code: 'unprocessable_entity',
+    errors: [
+      { field: 'email', code: 'invalid', message: 'must be a valid email' },
+      { field: 'password', code: 'too_short', message: 'must be at least 8 characters' },
+    ],
+  },
+});
+```
+
+#### Testing Rate Limiting
+```ts
+// Simulate rate limiting after 10 requests
+let requestCount = 0;
+emulator.addErrorHook({
+  method: '*',
+  path: '/user_management/*',
+  status: 429,
+  body: {
+    message: 'Rate limit exceeded',
+    code: 'rate_limit_exceeded',
+  },
+  count: 1, // Will be managed manually
+});
+
+// In your test, manage the hook manually
+const checkRateLimit = async () => {
+  requestCount++;
+  if (requestCount > 10) {
+    // Add the rate limit hook
+    emulator.addErrorHook({
+      method: '*',
+      path: '/user_management/*',
+      status: 429,
+    });
+  }
+};
+```
+
+### Advanced Custom Seeding
+
+Custom seeding can be used to create complex test scenarios:
+
+#### Complete Organization Setup
+```yaml
+users:
+  - email: admin@acme.com
+    first_name: Admin
+    last_name: User
+    password: admin123
+    email_verified: true
+
+  - email: employee@acme.com
+    first_name: Regular
+    last_name: Employee
+    password: employee123
+    email_verified: true
+
+organizations:
+  - name: Acme Corp
+    external_id: acme_corp_123
+    domains:
+      - domain: acme.com
+        state: verified
+    memberships:
+      - user_id: user_admin_id  # Replace with actual user ID after creation
+        role: admin
+        status: active
+      - user_id: user_employee_id  # Replace with actual user ID
+        role: member
+        status: active
+
+roles:
+  - slug: admin
+    name: Administrator
+    description: Full access to all resources
+    permissions: [users:read, users:write, organizations:read, organizations:write]
+
+  - slug: member
+    name: Member
+    description: Standard access
+    permissions: [users:read, organizations:read]
+
+permissions:
+  - slug: users:read
+    name: Read Users
+  - slug: users:write
+    name: Write Users
+  - slug: organizations:read
+    name: Read Organizations
+  - slug: organizations:write
+    name: Write Organizations
+
+connections:
+  - name: Acme SSO
+    connection_type: GenericSAML
+    organization: Acme Corp
+    state: active
+    domains: [acme.com]
+    profiles:
+      - email: admin@acme.com
+        first_name: Admin
+        last_name: User
+        groups: [admins, it_staff]
+      - email: employee@acme.com
+        first_name: Regular
+        last_name: Employee
+        groups: [employees]
+
+webhookEndpoints:
+  - endpoint_url: http://localhost:5000/webhooks
+    events: []
+    enabled: true
+```
+
 ## Interactive Auth (E2E Browser Testing)
 
 By default, the SSO and AuthKit authorize endpoints auto-redirect with an auth code — great for API-level tests, but agent browsers and E2E test frameworks need an actual login page to interact with.
@@ -339,3 +525,34 @@ test('SSO login flow', async ({ page }) => {
 ```
 
 This replaces the need for WorkOS's Test Identity Provider — no dashboard login required, works in incognito, works with headless browsers.
+
+## Security Considerations
+
+The WorkOS Emulator is designed for testing and development environments. When using it in production-like scenarios, consider the following security implications:
+
+### Authentication & Authorization
+- **No real authentication**: The emulator uses a simple API key system (`sk_test_default`) that provides no real security. Anyone with access to the emulator can make API calls.
+- **No rate limiting**: By default, the emulator has no rate limiting. In production scenarios, implement rate limiting to prevent abuse.
+- **Public error hook endpoints**: The `/_emulate/hooks` endpoints require no authentication and can be used by anyone who can reach the server.
+
+### Data Security
+- **In-memory storage**: All data is stored in memory and lost when the server stops. Do not use for persistent data.
+- **No encryption**: Data is not encrypted at rest or in transit. Use HTTPS in production environments.
+- **No audit logging**: While the emulator has audit log endpoints, it doesn't provide real security auditing.
+
+### Webhook Security
+- **Simple signature verification**: Webhook signatures use HMAC-SHA256, but ensure your webhook endpoints validate signatures properly.
+- **No webhook authentication**: The emulator doesn't authenticate webhook endpoints — ensure your endpoints are secure.
+
+### Network Security
+- **Bind to localhost**: By default, the emulator binds to `localhost`. If you need to expose it, use a firewall or VPN.
+- **No CORS restrictions**: The emulator doesn't enforce CORS. Configure CORS in your application if needed.
+- **No TLS/SSL**: The emulator doesn't provide HTTPS. Use a reverse proxy (nginx, Caddy) for TLS termination in production.
+
+### Recommendations
+- **Use only in development/testing**: The emulator is not designed for production use.
+- **Run behind a reverse proxy**: Use nginx, Caddy, or similar for TLS termination and additional security.
+- **Implement authentication**: Add proper authentication if exposing the emulator to external networks.
+- **Use environment variables**: Store sensitive configuration (API keys, secrets) in environment variables.
+- **Regular updates**: Keep the emulator updated to get security fixes and improvements.
+- **Network isolation**: Run the emulator in an isolated network environment when possible.

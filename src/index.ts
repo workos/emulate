@@ -41,6 +41,13 @@ export interface EmulatorOptions {
   port?: number;
   seed?: EmulatorSeedConfig;
   interactiveAuth?: boolean;
+  webhookRetryConfig?: {
+    maxRetries?: number;
+    initialDelayMs?: number;
+    maxDelayMs?: number;
+    backoffMultiplier?: number;
+  };
+  webhookDebugMode?: boolean;
 }
 
 export interface Emulator {
@@ -71,6 +78,14 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
 
   if (options.interactiveAuth) {
     store.setData(STORE_KEYS.interactiveAuth, true);
+  }
+
+  if (options.webhookRetryConfig) {
+    store.setData('webhookRetryConfig', options.webhookRetryConfig);
+  }
+
+  if (options.webhookDebugMode) {
+    store.setData('webhookDebugMode', true);
   }
 
   // Health check endpoint
@@ -139,6 +154,11 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     apiKey: primaryApiKey,
     store,
     reset() {
+      console.warn(
+        '⚠️  EventBus reset limitation: Route-level authentication events (authentication.*_succeeded/failed) will not work after reset(). ' +
+        'Resource lifecycle events (user.created, organization.created, etc.) will still work. ' +
+        'If you need authentication events after reset, create a new emulator instance instead.'
+      );
       store.reset();
       seedFn();
       // Note: EventBus is not re-registered after reset because Hono's router
