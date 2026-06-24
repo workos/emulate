@@ -266,7 +266,7 @@ describe('Concurrent Webhook Delivery', () => {
         password: 'password123',
       }),
     });
-    const user1 = await user1Res.json();
+    await user1Res.json();
 
     const user2Res = await fetch(`${emulator.url}/user_management/users`, {
       method: 'POST',
@@ -279,7 +279,7 @@ describe('Concurrent Webhook Delivery', () => {
         password: 'password123',
       }),
     });
-    const user2 = await user2Res.json();
+    await user2Res.json();
 
     // Authenticate both users concurrently
     const authPromises = [

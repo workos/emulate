@@ -68,7 +68,7 @@ describe('Error Hooks Integration Tests', () => {
   });
 
   it('should respect count parameter and auto-remove hook', async () => {
-    const hook = emulator.addErrorHook({
+    emulator.addErrorHook({
       method: 'POST',
       path: '/organizations',
       status: 503,

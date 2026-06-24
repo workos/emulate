@@ -174,7 +174,7 @@ export class EventBus {
       try {
         await this.deliver(item.endpoint, item.event);
         success++;
-      } catch (error) {
+      } catch {
         failed++;
         this.deadLetterQueue.push(item); // Put it back if it still fails
       }

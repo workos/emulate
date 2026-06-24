@@ -36,7 +36,7 @@ import { featureFlagRoutes } from './routes/feature-flags.js';
 import { dataIntegrationRoutes } from './routes/data-integrations.js';
 import { webhookEndpointRoutes } from './routes/webhook-endpoints.js';
 import { eventRoutes } from './routes/events.js';
-import { EventBus, type EventBusOptions } from './event-bus.js';
+import { EventBus } from './event-bus.js';
 import { STORE_KEYS, EVENTS } from './constants.js';
 import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import {
