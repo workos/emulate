@@ -36,7 +36,10 @@ export class EventBus {
   private retryConfig: WebhookRetryConfig;
   private debugMode: boolean;
 
-  constructor(private store: Store, options: EventBusOptions = {}) {
+  constructor(
+    private store: Store,
+    options: EventBusOptions = {},
+  ) {
     this.retryConfig = options.retryConfig ?? DEFAULT_RETRY_CONFIG;
     this.debugMode = options.debugMode ?? false;
   }
@@ -99,7 +102,9 @@ export class EventBus {
     for (let attempt = 0; attempt <= this.retryConfig.maxRetries; attempt++) {
       try {
         if (this.debugMode) {
-          console.log(`[EventBus] Delivering webhook attempt ${attempt + 1}/${this.retryConfig.maxRetries + 1} to ${endpoint.endpoint_url}`);
+          console.log(
+            `[EventBus] Delivering webhook attempt ${attempt + 1}/${this.retryConfig.maxRetries + 1} to ${endpoint.endpoint_url}`,
+          );
         }
 
         const response = await fetch(endpoint.endpoint_url, {

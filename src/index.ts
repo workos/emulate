@@ -156,8 +156,8 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     reset() {
       console.warn(
         '⚠️  EventBus reset limitation: Route-level authentication events (authentication.*_succeeded/failed) will not work after reset(). ' +
-        'Resource lifecycle events (user.created, organization.created, etc.) will still work. ' +
-        'If you need authentication events after reset, create a new emulator instance instead.'
+          'Resource lifecycle events (user.created, organization.created, etc.) will still work. ' +
+          'If you need authentication events after reset, create a new emulator instance instead.',
       );
       store.reset();
       seedFn();

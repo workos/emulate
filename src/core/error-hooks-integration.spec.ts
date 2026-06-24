@@ -23,9 +23,7 @@ describe('Error Hooks Integration Tests', () => {
       body: {
         message: 'Validation failed',
         code: 'unprocessable_entity',
-        errors: [
-          { field: 'email', code: 'invalid', message: 'must be a valid email' },
-        ],
+        errors: [{ field: 'email', code: 'invalid', message: 'must be a valid email' }],
       },
     });
 
@@ -33,7 +31,7 @@ describe('Error Hooks Integration Tests', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({ email: 'test@example.com' }),
     });
@@ -56,7 +54,7 @@ describe('Error Hooks Integration Tests', () => {
     });
 
     const res = await fetch(`${emulator.url}/organizations`, {
-      headers: { 'Authorization': `Bearer ${emulator.apiKey}` },
+      headers: { Authorization: `Bearer ${emulator.apiKey}` },
     });
 
     expect(res.status).toBe(500);
@@ -80,7 +78,7 @@ describe('Error Hooks Integration Tests', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({ name: 'Test Org' }),
     });
@@ -91,7 +89,7 @@ describe('Error Hooks Integration Tests', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({ name: 'Test Org' }),
     });
@@ -102,7 +100,7 @@ describe('Error Hooks Integration Tests', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({ name: 'Test Org' }),
     });
@@ -117,7 +115,7 @@ describe('Error Hooks Integration Tests', () => {
     });
 
     const res = await fetch(`${emulator.url}/user_management/users`, {
-      headers: { 'Authorization': `Bearer ${emulator.apiKey}` },
+      headers: { Authorization: `Bearer ${emulator.apiKey}` },
     });
 
     expect(res.status).toBe(429);
@@ -133,7 +131,7 @@ describe('Error Hooks Integration Tests', () => {
     });
 
     const getRes = await fetch(`${emulator.url}/organizations`, {
-      headers: { 'Authorization': `Bearer ${emulator.apiKey}` },
+      headers: { Authorization: `Bearer ${emulator.apiKey}` },
     });
     expect(getRes.status).toBe(403);
 
@@ -141,7 +139,7 @@ describe('Error Hooks Integration Tests', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({ name: 'Test' }),
     });
@@ -211,7 +209,7 @@ describe('Error Hooks Integration Tests', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${emulator.apiKey}`,
+          Authorization: `Bearer ${emulator.apiKey}`,
         },
         body: JSON.stringify({ name: `Test Org ${i}` }),
       });
@@ -223,7 +221,7 @@ describe('Error Hooks Integration Tests', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({ name: 'Test Org 4' }),
     });
@@ -281,7 +279,7 @@ describe('Error Hooks Integration Tests', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({ name: 'Test Org' }),
     });
@@ -293,7 +291,7 @@ describe('Error Hooks Integration Tests', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({ name: 'Test Org' }),
     });

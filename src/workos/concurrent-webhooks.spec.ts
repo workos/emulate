@@ -55,7 +55,7 @@ describe('Concurrent Webhook Delivery', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({
         endpoint_url: receiver.url,
@@ -78,13 +78,13 @@ describe('Concurrent Webhook Delivery', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${emulator.apiKey}`,
+          Authorization: `Bearer ${emulator.apiKey}`,
         },
         body: JSON.stringify({
           email: `concurrent${i}@example.com`,
           password: 'password123',
         }),
-      })
+      }),
     );
 
     const responses = await Promise.all(userPromises);
@@ -108,7 +108,7 @@ describe('Concurrent Webhook Delivery', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${emulator.apiKey}`,
+          Authorization: `Bearer ${emulator.apiKey}`,
         },
         body: JSON.stringify({ email: 'user1@example.com', password: 'pass' }),
       }),
@@ -116,7 +116,7 @@ describe('Concurrent Webhook Delivery', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${emulator.apiKey}`,
+          Authorization: `Bearer ${emulator.apiKey}`,
         },
         body: JSON.stringify({ email: 'user2@example.com', password: 'pass' }),
       }),
@@ -125,7 +125,7 @@ describe('Concurrent Webhook Delivery', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${emulator.apiKey}`,
+          Authorization: `Bearer ${emulator.apiKey}`,
         },
         body: JSON.stringify({ name: 'Org 1' }),
       }),
@@ -133,7 +133,7 @@ describe('Concurrent Webhook Delivery', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${emulator.apiKey}`,
+          Authorization: `Bearer ${emulator.apiKey}`,
         },
         body: JSON.stringify({ name: 'Org 2' }),
       }),
@@ -164,7 +164,7 @@ describe('Concurrent Webhook Delivery', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${emulator.apiKey}`,
+          Authorization: `Bearer ${emulator.apiKey}`,
         },
         body: JSON.stringify({
           email: `rapid${i}@example.com`,
@@ -190,7 +190,7 @@ describe('Concurrent Webhook Delivery', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${emulator.apiKey}`,
+          Authorization: `Bearer ${emulator.apiKey}`,
         },
         body: JSON.stringify({
           email: `ordered${i}@example.com`,
@@ -225,7 +225,7 @@ describe('Concurrent Webhook Delivery', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({
         endpoint_url: failingReceiver.url,
@@ -239,7 +239,7 @@ describe('Concurrent Webhook Delivery', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({
         email: 'failing@example.com',
@@ -259,7 +259,7 @@ describe('Concurrent Webhook Delivery', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({
         email: 'auth1@example.com',
@@ -272,7 +272,7 @@ describe('Concurrent Webhook Delivery', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${emulator.apiKey}`,
+        Authorization: `Bearer ${emulator.apiKey}`,
       },
       body: JSON.stringify({
         email: 'auth2@example.com',

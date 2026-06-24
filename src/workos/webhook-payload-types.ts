@@ -192,7 +192,7 @@ export type EmailVerificationCreatedWebhook = BaseWebhookPayload & { data: Email
 // Helper function to validate webhook payload against event requirements
 export function validateWebhookPayload(
   event: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
 ): { valid: boolean; missingFields: string[] } {
   const requirements = EVENT_DATA_REQUIREMENTS[event as keyof typeof EVENT_DATA_REQUIREMENTS];
   if (!requirements) {
@@ -215,12 +215,12 @@ export function validateWebhookPayload(
 // Type-safe webhook payload creator
 export function createWebhookPayload<T extends Record<string, unknown>>(
   event: string,
-  data: T
+  data: T,
 ): BaseWebhookPayload & { data: T } {
   const validation = validateWebhookPayload(event, data);
   if (!validation.valid) {
     throw new Error(
-      `Invalid webhook payload for event ${event}. Missing fields: ${validation.missingFields.join(', ')}`
+      `Invalid webhook payload for event ${event}. Missing fields: ${validation.missingFields.join(', ')}`,
     );
   }
 

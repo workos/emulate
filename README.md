@@ -113,6 +113,7 @@ await emulator.close();
 The `reset()` method clears all data and re-seeds from the original config, but **route-level authentication events will not work after reset**. This is because Hono's router cannot be modified after it's built, so the EventBus cannot be re-registered with the collection hooks.
 
 This limitation is acceptable for test scenarios where `reset()` is primarily used to clean up state between tests, but it means:
+
 - After calling `reset()`, authentication events (`authentication.*_succeeded`, `authentication.*_failed`) will not be emitted
 - Resource lifecycle events (user.created, organization.created, etc.) will still work
 - If you need authentication events after reset, you must create a new emulator instance
@@ -325,6 +326,7 @@ emulator.reset();
 Error hooks can be used for sophisticated testing scenarios:
 
 #### Testing Retry Logic
+
 ```ts
 const emulator = await createEmulator({ port: 0 });
 
@@ -340,7 +342,7 @@ emulator.addErrorHook({
 for (let i = 0; i < 4; i++) {
   const res = await fetch(`${emulator.url}/user_management/users`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${emulator.apiKey}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${emulator.apiKey}` },
     body: JSON.stringify({ email: 'test@example.com' }),
   });
   console.log(`Attempt ${i + 1}:`, res.status);
@@ -349,6 +351,7 @@ for (let i = 0; i < 4; i++) {
 ```
 
 #### Conditional Error Responses
+
 ```ts
 // Simulate validation errors for specific inputs
 emulator.addErrorHook({
@@ -367,6 +370,7 @@ emulator.addErrorHook({
 ```
 
 #### Testing Rate Limiting
+
 ```ts
 // Simulate rate limiting after 10 requests
 let requestCount = 0;
@@ -400,6 +404,7 @@ const checkRateLimit = async () => {
 Custom seeding can be used to create complex test scenarios:
 
 #### Complete Organization Setup
+
 ```yaml
 users:
   - email: admin@acme.com
@@ -421,10 +426,10 @@ organizations:
       - domain: acme.com
         state: verified
     memberships:
-      - user_id: user_admin_id  # Replace with actual user ID after creation
+      - user_id: user_admin_id # Replace with actual user ID after creation
         role: admin
         status: active
-      - user_id: user_employee_id  # Replace with actual user ID
+      - user_id: user_employee_id # Replace with actual user ID
         role: member
         status: active
 
@@ -531,25 +536,30 @@ This replaces the need for WorkOS's Test Identity Provider — no dashboard logi
 The WorkOS Emulator is designed for testing and development environments. When using it in production-like scenarios, consider the following security implications:
 
 ### Authentication & Authorization
+
 - **No real authentication**: The emulator uses a simple API key system (`sk_test_default`) that provides no real security. Anyone with access to the emulator can make API calls.
 - **No rate limiting**: By default, the emulator has no rate limiting. In production scenarios, implement rate limiting to prevent abuse.
 - **Public error hook endpoints**: The `/_emulate/hooks` endpoints require no authentication and can be used by anyone who can reach the server.
 
 ### Data Security
+
 - **In-memory storage**: All data is stored in memory and lost when the server stops. Do not use for persistent data.
 - **No encryption**: Data is not encrypted at rest or in transit. Use HTTPS in production environments.
 - **No audit logging**: While the emulator has audit log endpoints, it doesn't provide real security auditing.
 
 ### Webhook Security
+
 - **Simple signature verification**: Webhook signatures use HMAC-SHA256, but ensure your webhook endpoints validate signatures properly.
 - **No webhook authentication**: The emulator doesn't authenticate webhook endpoints — ensure your endpoints are secure.
 
 ### Network Security
+
 - **Bind to localhost**: By default, the emulator binds to `localhost`. If you need to expose it, use a firewall or VPN.
 - **No CORS restrictions**: The emulator doesn't enforce CORS. Configure CORS in your application if needed.
 - **No TLS/SSL**: The emulator doesn't provide HTTPS. Use a reverse proxy (nginx, Caddy) for TLS termination in production.
 
 ### Recommendations
+
 - **Use only in development/testing**: The emulator is not designed for production use.
 - **Run behind a reverse proxy**: Use nginx, Caddy, or similar for TLS termination and additional security.
 - **Implement authentication**: Add proper authentication if exposing the emulator to external networks.

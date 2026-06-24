@@ -159,9 +159,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
   // Validate the config before seeding
   const validation = validateSeedConfig(config);
   if (!validation.valid) {
-    throw new Error(
-      `Invalid seed configuration:\n${formatValidationErrors(validation.errors)}`
-    );
+    throw new Error(`Invalid seed configuration:\n${formatValidationErrors(validation.errors)}`);
   }
 
   const ws = getWorkOSStore(store);

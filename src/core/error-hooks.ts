@@ -150,7 +150,7 @@ export function errorHooksMiddleware(store: Store): MiddlewareHandler {
                   code: 'rate_limit_exceeded',
                   retry_after: Math.ceil((entry.resetTime - now) / 1000),
                 },
-                429
+                429,
               );
             }
           } else {

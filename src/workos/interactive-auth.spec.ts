@@ -26,7 +26,7 @@ describe('Interactive Auth Mode', () => {
   it('should serve HTML login page for SSO authorize in interactive mode', async () => {
     const res = await fetch(
       `${emulator.url}/sso/authorize?client_id=test&redirect_uri=http://localhost:3000/callback&state=test&connection=conn_test`,
-      { redirect: 'manual' }
+      { redirect: 'manual' },
     );
 
     // Should return HTML, not redirect
@@ -42,7 +42,7 @@ describe('Interactive Auth Mode', () => {
   it('should serve HTML login page for user management authorize in interactive mode', async () => {
     const res = await fetch(
       `${emulator.url}/user_management/authorize?client_id=test&redirect_uri=http://localhost:3000/callback&state=test&login_hint=test@example.com`,
-      { redirect: 'manual' }
+      { redirect: 'manual' },
     );
 
     // Should return HTML, not redirect
@@ -59,7 +59,7 @@ describe('Interactive Auth Mode', () => {
     const email = 'prefill@example.com';
     const res = await fetch(
       `${emulator.url}/user_management/authorize?client_id=test&redirect_uri=http://localhost:3000/callback&state=test&login_hint=${email}`,
-      { redirect: 'manual' }
+      { redirect: 'manual' },
     );
 
     expect(res.status).toBe(200);
@@ -70,7 +70,7 @@ describe('Interactive Auth Mode', () => {
   it('should include hidden fields in the login form', async () => {
     const res = await fetch(
       `${emulator.url}/sso/authorize?client_id=test&redirect_uri=http://localhost:3000/callback&state=test&connection=conn_test`,
-      { redirect: 'manual' }
+      { redirect: 'manual' },
     );
 
     expect(res.status).toBe(200);
@@ -125,10 +125,7 @@ describe('Interactive Auth Mode', () => {
   });
 
   it('should return error for missing redirect_uri in interactive mode', async () => {
-    const res = await fetch(
-      `${emulator.url}/sso/authorize?client_id=test&state=test`,
-      { redirect: 'manual' }
-    );
+    const res = await fetch(`${emulator.url}/sso/authorize?client_id=test&state=test`, { redirect: 'manual' });
 
     expect(res.status).toBe(400);
   });
@@ -145,7 +142,7 @@ describe('Interactive Auth Mode', () => {
     try {
       const res = await fetch(
         `${nonInteractiveEmulator.url}/user_management/authorize?client_id=test&redirect_uri=http://localhost:3000/callback&state=test&login_hint=test@example.com`,
-        { redirect: 'manual' }
+        { redirect: 'manual' },
       );
 
       // Should auto-redirect in non-interactive mode
@@ -161,7 +158,7 @@ describe('Interactive Auth Mode', () => {
   it('should include proper form action URL', async () => {
     const res = await fetch(
       `${emulator.url}/sso/authorize?client_id=test&redirect_uri=http://localhost:3000/callback&state=test`,
-      { redirect: 'manual' }
+      { redirect: 'manual' },
     );
 
     expect(res.status).toBe(200);
@@ -173,7 +170,7 @@ describe('Interactive Auth Mode', () => {
     const email = 'user+tag@example.com';
     const res = await fetch(
       `${emulator.url}/user_management/authorize?client_id=test&redirect_uri=http://localhost:3000/callback&state=test&login_hint=${encodeURIComponent(email)}`,
-      { redirect: 'manual' }
+      { redirect: 'manual' },
     );
 
     expect(res.status).toBe(200);
