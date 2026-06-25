@@ -173,6 +173,58 @@ permissions:
     name: Write Posts
 ```
 
+### Machine-to-Machine (M2M) Applications
+
+Seed M2M Connect Applications so a service has a known `client_id` / client secret pair on
+startup — ideal for `docker compose up` style local development where credentials must exist
+before any dashboard interaction.
+
+```yaml
+organizations:
+  - name: Acme Corp
+
+connectApplications:
+  - name: Backend Service
+    type: m2m # default; use `oauth` for an OAuth app
+    organization: Acme Corp # required for m2m; owning org, by name
+    scopes: [posts:read, posts:write]
+    client_id: client_local_backend # optional; generated if omitted
+    client_secret: secret_local_backend # optional; generated if omitted
+```
+
+Each seeded application is provisioned with a client secret. Pin `client_secret` to bake a known
+value into a service's environment; otherwise one is generated. The application is then available
+via `GET /connect/applications`.
+
+> The runtime `client_credentials` token exchange (swap `client_id` + secret for a scoped access
+> token, then validate it) is not yet emulated — see [issue #7](https://github.com/workos/emulate/issues/7).
+> This seeds the M2M application resource; minting and validating tokens is tracked separately.
+
+### API Keys
+
+Seed organization- or user-owned API keys. Each seeded key is created as an `api_key` resource
+**and** registered in the auth allow-list, so the value authenticates requests to the emulator.
+
+```yaml
+organizations:
+  - name: Acme Corp
+
+apiKeys:
+  - name: CI Key
+    organization: Acme Corp # owner org, by name (or use `user_id`)
+    value: sk_test_ci_key # optional; must start with `sk_`; generated if omitted
+    permissions: [posts:read, posts:write]
+    # expires_at: 2030-01-01T00:00:00.000Z   # optional; never expires if omitted
+```
+
+```bash
+# The seeded value authenticates requests:
+curl http://localhost:4100/connect/applications -H "Authorization: Bearer sk_test_ci_key"
+```
+
+`apiKeys` also accepts the legacy auth allow-list map form (`{ sk_xxx: { environment } }`), which
+only registers values for authentication without creating resources.
+
 ## Testing Your Login Flow End-to-End
 
 The emulator implements the full [workos.com/docs](https://workos.com/docs) login story: every resource creation and authentication outcome fires a signed webhook, with event names and payload shapes generated from the WorkOS OpenAPI spec. You can run your app's entire login flow — hosted authorize, callback, token exchange, webhook handling — against the emulator without touching the real API.

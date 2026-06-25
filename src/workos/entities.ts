@@ -352,6 +352,11 @@ export interface WorkOSFlagTarget extends Entity {
 export interface WorkOSConnectApplication extends Entity {
   object: 'connect_application';
   name: string;
+  description: string | null;
+  application_type: 'oauth' | 'm2m';
+  /** Required for m2m applications; the organization the app belongs to. */
+  organization_id: string | null;
+  scopes: string[];
   redirect_uris: string[];
   client_id: string;
   logo_url: string | null;
@@ -381,11 +386,22 @@ export interface WorkOSRadarAttempt extends Entity {
   signals: Array<{ type: string; confidence: number }>;
 }
 
+/** The entity that owns an API key. Mirrors the spec's discriminated `owner` union. */
+export type WorkOSApiKeyOwner =
+  | { type: 'organization'; id: string }
+  | { type: 'user'; id: string; organization_id: string };
+
 export interface WorkOSApiKey extends Entity {
   object: 'api_key';
   name: string;
+  /** Full secret value, e.g. `sk_test_...`. Internal — never serialized; only `obfuscated_value` is returned. */
   key: string;
+  /** Internal — used to register the key in the auth allow-list; never serialized. */
   environment: string;
+  owner: WorkOSApiKeyOwner;
+  permissions: string[];
+  last_used_at: string | null;
+  expires_at: string | null;
 }
 
 export interface WorkOSEvent extends Entity {

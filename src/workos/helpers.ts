@@ -1,5 +1,5 @@
 import { randomBytes, createHash, createCipheriv } from 'node:crypto';
-import { WorkOSApiError, type CursorPaginatedResult, type Entity } from '../core/index.js';
+import { WorkOSApiError, generateId, type CursorPaginatedResult, type Entity } from '../core/index.js';
 import { EVENTS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
 import type { WorkOSStore } from './store.js';
 import type { EventBus } from './event-bus.js';
@@ -369,8 +369,34 @@ export function formatFlagTarget(t: WorkOSFlagTarget): Record<string, unknown> {
   return formatEntity(t);
 }
 
+/** Generate a Connect Application client_id, e.g. `client_01HXYZ...`. */
+export function generateClientId(): string {
+  return `client_${generateId('').slice(1)}`;
+}
+
 export function formatConnectApplication(a: WorkOSConnectApplication): Record<string, unknown> {
-  return formatEntity(a);
+  const base = {
+    object: 'connect_application',
+    id: a.id,
+    client_id: a.client_id,
+    description: a.description,
+    name: a.name,
+    scopes: a.scopes,
+    created_at: a.created_at,
+    updated_at: a.updated_at,
+  };
+
+  if (a.application_type === 'm2m') {
+    return { ...base, application_type: 'm2m', organization_id: a.organization_id };
+  }
+
+  return {
+    ...base,
+    application_type: 'oauth',
+    redirect_uris: a.redirect_uris.map((uri) => ({ uri, default: false })),
+    uses_pkce: false,
+    is_first_party: true,
+  };
 }
 
 const CLIENT_SECRET_EXCLUDE = new Set([...INTERNAL_FIELDS, 'value']);
@@ -383,10 +409,25 @@ export function formatRadarAttempt(a: WorkOSRadarAttempt): Record<string, unknow
   return formatEntity(a);
 }
 
-const API_KEY_EXCLUDE = new Set([...INTERNAL_FIELDS, 'key', 'environment']);
+/** Mask an API key value the way the spec shows it, e.g. `sk_...3456`. */
+export function obfuscateApiKey(key: string): string {
+  const prefix = key.startsWith('sk_') ? 'sk_' : key.slice(0, 3);
+  return `${prefix}...${key.slice(-4)}`;
+}
 
 export function formatApiKeyRecord(k: WorkOSApiKey): Record<string, unknown> {
-  return formatEntity(k, { exclude: API_KEY_EXCLUDE });
+  return {
+    object: 'api_key',
+    id: k.id,
+    owner: k.owner,
+    name: k.name,
+    obfuscated_value: obfuscateApiKey(k.key),
+    last_used_at: k.last_used_at,
+    expires_at: k.expires_at,
+    permissions: k.permissions,
+    created_at: k.created_at,
+    updated_at: k.updated_at,
+  };
 }
 
 const EVENT_EXCLUDE = new Set([...INTERNAL_FIELDS, 'updated_at']);

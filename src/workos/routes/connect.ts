@@ -1,9 +1,9 @@
 import { type RouteContext, notFound, parseJsonBody, validationError, parseListParams } from '../../core/index.js';
-import { generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatConnectApplication,
   formatClientSecret,
+  generateClientId,
   generateVerificationToken,
   formatListResponse,
 } from '../helpers.js';
@@ -28,11 +28,16 @@ export function connectRoutes(ctx: RouteContext): void {
       throw validationError('name is required', [{ field: 'name', code: 'required' }]);
     }
 
+    const applicationType = body.application_type === 'm2m' ? 'm2m' : 'oauth';
     const application = ws.connectApplications.insert({
       object: 'connect_application',
       name: name.trim(),
+      description: (body.description as string) ?? null,
+      application_type: applicationType,
+      organization_id: (body.organization_id as string) ?? null,
+      scopes: (body.scopes as string[]) ?? [],
       redirect_uris: (body.redirect_uris as string[]) ?? [],
-      client_id: `client_${generateId('connect')}`,
+      client_id: generateClientId(),
       logo_url: (body.logo_url as string) ?? null,
     });
 

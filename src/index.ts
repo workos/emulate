@@ -26,7 +26,7 @@ export interface ErrorHookSeedConfig {
 }
 
 export interface EmulatorSeedConfig {
-  apiKeys?: Record<string, { environment: string }>;
+  apiKeys?: WorkOSSeedConfig['apiKeys'];
   organizations?: WorkOSSeedConfig['organizations'];
   users?: WorkOSSeedConfig['users'];
   connections?: WorkOSSeedConfig['connections'];
@@ -34,6 +34,7 @@ export interface EmulatorSeedConfig {
   roles?: WorkOSSeedConfig['roles'];
   permissions?: WorkOSSeedConfig['permissions'];
   webhookEndpoints?: WorkOSSeedConfig['webhookEndpoints'];
+  connectApplications?: WorkOSSeedConfig['connectApplications'];
   errorHooks?: ErrorHookSeedConfig[];
 }
 
@@ -66,9 +67,12 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   const port = options.port ?? 4100;
   const baseUrl = `http://localhost:${port}`;
 
-  const apiKeys: ApiKeyMap = options.seed?.apiKeys ?? {
-    sk_test_default: { environment: 'test' },
-  };
+  // `apiKeys` may be the legacy auth allow-list map or an array of API key resources.
+  // The array form is seeded into the allow-list later (see seedFromConfig), so here we
+  // only honor the map form and otherwise fall back to the default key.
+  const seedApiKeys = options.seed?.apiKeys;
+  const apiKeys: ApiKeyMap =
+    seedApiKeys && !Array.isArray(seedApiKeys) ? seedApiKeys : { sk_test_default: { environment: 'test' } };
 
   const { app, store, jwt } = createServer(workosPlugin, {
     port,

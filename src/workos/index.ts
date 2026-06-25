@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { ServicePlugin, Store, RouteContext } from '../core/index.js';
+import type { ServicePlugin, Store, RouteContext, ApiKeyMap } from '../core/index.js';
 import { generateId } from '../core/index.js';
 import { getWorkOSStore } from './store.js';
 import { organizationRoutes } from './routes/organizations.js';
@@ -60,8 +60,9 @@ import {
   formatPasswordReset,
   formatApiKeyRecord,
   formatFeatureFlag,
+  generateClientId,
 } from './helpers.js';
-import type { WorkOSConnectionType, PipeProvider, PipeConnectionStatus } from './entities.js';
+import type { WorkOSConnectionType, PipeProvider, PipeConnectionStatus, WorkOSApiKeyOwner } from './entities.js';
 
 export { getWorkOSStore, type WorkOSStore } from './store.js';
 export * from './entities.js';
@@ -144,6 +145,49 @@ export interface WorkOSSeedWebhookEndpoint {
   enabled?: boolean;
 }
 
+export interface WorkOSSeedConnectApplication {
+  name: string;
+  /** Application type. Defaults to `m2m`. */
+  type?: 'm2m' | 'oauth';
+  /** Owning organization, by name. Required for `m2m` applications. */
+  organization?: string;
+  description?: string;
+  /** OAuth scopes granted to the application. */
+  scopes?: string[];
+  /** Pinned client_id. Generated (`client_...`) if omitted. */
+  client_id?: string;
+  /**
+   * Pinned client secret value. Generated (`secret_...`) if omitted. Stored as a
+   * client_secret resource so the seeded application has usable credentials. Pin it
+   * to bake a known secret into a service's environment.
+   */
+  client_secret?: string;
+  /** OAuth redirect URIs. Ignored for `m2m` applications. */
+  redirect_uris?: string[];
+}
+
+export interface WorkOSSeedApiKey {
+  name: string;
+  /** Owning organization, by name. Required unless `user_id` is set. */
+  organization?: string;
+  /** Owning user, by id. When set, `organization` supplies the required organization_id. */
+  user_id?: string;
+  /**
+   * Pinned secret value. Must start with `sk_` to be accepted for authentication.
+   * Generated (`sk_test_...`) if omitted.
+   */
+  value?: string;
+  /** Permission slugs assigned to the key. */
+  permissions?: string[];
+  /** Expiry timestamp (ISO 8601), or null for a key that never expires. */
+  expires_at?: string | null;
+  /** Auth environment. Defaults to `production` for `sk_live_*` values, else `test`. */
+  environment?: string;
+}
+
+/** Legacy auth allow-list: maps a raw API key value to its environment. */
+export type WorkOSSeedApiKeyAuthMap = Record<string, { environment: string }>;
+
 export interface WorkOSSeedConfig {
   organizations?: WorkOSSeedOrganization[];
   users?: WorkOSSeedUser[];
@@ -153,6 +197,13 @@ export interface WorkOSSeedConfig {
   roles?: WorkOSSeedRole[];
   permissions?: WorkOSSeedPermission[];
   webhookEndpoints?: WorkOSSeedWebhookEndpoint[];
+  connectApplications?: WorkOSSeedConnectApplication[];
+  /**
+   * API keys. Either the legacy auth allow-list map (value → environment) or an array
+   * of API key resources. The array form creates `api_key` records AND registers each
+   * value in the auth allow-list so the seeded key authenticates requests.
+   */
+  apiKeys?: WorkOSSeedApiKeyAuthMap | WorkOSSeedApiKey[];
 }
 
 export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSeedConfig): void {
@@ -342,6 +393,65 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         description: null,
       });
     }
+  }
+
+  if (config.connectApplications) {
+    for (const appConfig of config.connectApplications) {
+      const type = appConfig.type ?? 'm2m';
+      const org = appConfig.organization ? ws.organizations.findOneBy('name', appConfig.organization) : undefined;
+
+      const application = ws.connectApplications.insert({
+        object: 'connect_application',
+        name: appConfig.name,
+        description: appConfig.description ?? null,
+        application_type: type,
+        organization_id: org?.id ?? null,
+        scopes: appConfig.scopes ?? [],
+        redirect_uris: appConfig.redirect_uris ?? [],
+        client_id: appConfig.client_id ?? generateClientId(),
+        logo_url: null,
+      });
+
+      // Always provision a client secret so the seeded app has usable credentials.
+      const secretValue = appConfig.client_secret ?? `secret_${generateVerificationToken()}`;
+      ws.clientSecrets.insert({
+        object: 'client_secret',
+        application_id: application.id,
+        value: secretValue,
+        last_four: secretValue.slice(-4),
+      });
+    }
+  }
+
+  // The array form seeds API key resources; the map form is the legacy auth allow-list
+  // handled at server creation (see createEmulator), so it is skipped here.
+  if (Array.isArray(config.apiKeys)) {
+    const authMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {};
+    for (const keyConfig of config.apiKeys) {
+      const value = keyConfig.value ?? `sk_test_${generateVerificationToken()}`;
+      const environment = keyConfig.environment ?? (value.startsWith('sk_live_') ? 'production' : 'test');
+      const org = keyConfig.organization ? ws.organizations.findOneBy('name', keyConfig.organization) : undefined;
+
+      const owner: WorkOSApiKeyOwner = keyConfig.user_id
+        ? { type: 'user', id: keyConfig.user_id, organization_id: org?.id ?? '' }
+        : { type: 'organization', id: org?.id ?? '' };
+
+      ws.apiKeyRecords.insert({
+        object: 'api_key',
+        name: keyConfig.name,
+        key: value,
+        environment,
+        owner,
+        permissions: keyConfig.permissions ?? [],
+        last_used_at: null,
+        expires_at: keyConfig.expires_at ?? null,
+      });
+
+      // Register the value in the shared auth allow-list (the same object the auth
+      // middleware holds by reference) so the seeded key authenticates real requests.
+      authMap[value] = { environment };
+    }
+    store.setData(STORE_KEYS.apiKeyMap, authMap);
   }
 }
 

@@ -257,6 +257,85 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
     }
   }
 
+  // Validate connect applications
+  if (config.connectApplications) {
+    if (!Array.isArray(config.connectApplications)) {
+      errors.push({
+        path: 'connectApplications',
+        message: 'connectApplications must be an array',
+        value: config.connectApplications,
+      });
+    } else {
+      config.connectApplications.forEach((appConfig, index) => {
+        if (!appConfig.name || typeof appConfig.name !== 'string') {
+          errors.push({
+            path: `connectApplications[${index}].name`,
+            message: 'name is required and must be a string',
+            value: appConfig.name,
+          });
+        }
+        if (appConfig.type && !['m2m', 'oauth'].includes(appConfig.type)) {
+          errors.push({
+            path: `connectApplications[${index}].type`,
+            message: 'type must be "m2m" or "oauth" if provided',
+            value: appConfig.type,
+          });
+        }
+        const type = appConfig.type ?? 'm2m';
+        if (type === 'm2m' && (!appConfig.organization || typeof appConfig.organization !== 'string')) {
+          errors.push({
+            path: `connectApplications[${index}].organization`,
+            message: 'organization is required for m2m applications',
+            value: appConfig.organization,
+          });
+        }
+      });
+    }
+  }
+
+  // Validate API key resources. The map form is the legacy auth allow-list and is
+  // intentionally left unvalidated here; only the array (resource) form is checked.
+  if (config.apiKeys && Array.isArray(config.apiKeys)) {
+    config.apiKeys.forEach((keyConfig, index) => {
+      if (!keyConfig.name || typeof keyConfig.name !== 'string') {
+        errors.push({
+          path: `apiKeys[${index}].name`,
+          message: 'name is required and must be a string',
+          value: keyConfig.name,
+        });
+      }
+      if (!keyConfig.organization && !keyConfig.user_id) {
+        errors.push({
+          path: `apiKeys[${index}].organization`,
+          message: 'organization or user_id is required',
+        });
+      }
+      if (keyConfig.user_id && !keyConfig.organization) {
+        errors.push({
+          path: `apiKeys[${index}].organization`,
+          message: 'organization is required when user_id is set (supplies organization_id)',
+        });
+      }
+      if (
+        keyConfig.value !== undefined &&
+        (typeof keyConfig.value !== 'string' || !keyConfig.value.startsWith('sk_'))
+      ) {
+        errors.push({
+          path: `apiKeys[${index}].value`,
+          message: 'value must be a string starting with "sk_" if provided',
+          value: keyConfig.value,
+        });
+      }
+      if (keyConfig.permissions && !Array.isArray(keyConfig.permissions)) {
+        errors.push({
+          path: `apiKeys[${index}].permissions`,
+          message: 'permissions must be an array if provided',
+          value: keyConfig.permissions,
+        });
+      }
+    });
+  }
+
   return {
     valid: errors.length === 0,
     errors,
