@@ -1,7 +1,8 @@
 import { type RouteContext, parseJsonBody, WorkOSApiError, generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatSSOProfile, expiresIn, isExpired, assertLocalRedirectUri } from '../helpers.js';
+import { formatSSOProfile, expiresIn, isExpired, assertLocalRedirectUri, emitAuthenticationEvent } from '../helpers.js';
 import type { WorkOSConnection } from '../entities.js';
+import type { EventBus } from '../event-bus.js';
 import { STORE_KEY_PREFIXES, STORE_KEYS } from '../constants.js';
 import { renderLoginPage } from '../login-page.js';
 
@@ -145,11 +146,42 @@ export function ssoRoutes(ctx: RouteContext): void {
 
     const auth = ws.ssoAuthorizations.findOneBy('code', code);
     if (!auth) {
-      throw new WorkOSApiError(400, 'Invalid authorization code', 'invalid_code');
+      const error = new WorkOSApiError(400, 'Invalid authorization code', 'invalid_code');
+      emitAuthenticationEvent({
+        eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+        method: 'SSO',
+        status: 'failed',
+        error: { code: error.code, message: error.message },
+        ipAddress: c.req.header('x-forwarded-for') ?? null,
+        userAgent: c.req.header('user-agent') ?? null,
+        sso: {
+          organization_id: null,
+          connection_id: null,
+          session_id: null,
+        },
+      });
+      throw error;
     }
     if (isExpired(auth.expires_at)) {
       ws.ssoAuthorizations.delete(auth.id);
-      throw new WorkOSApiError(400, 'Authorization code has expired', 'expired_code');
+      const expiredProfile = ws.ssoProfiles.get(auth.profile_id);
+      const error = new WorkOSApiError(400, 'Authorization code has expired', 'expired_code');
+      emitAuthenticationEvent({
+        eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+        method: 'SSO',
+        status: 'failed',
+        email: expiredProfile?.email,
+        userId: ws.users.findOneBy('email', expiredProfile?.email ?? '')?.id,
+        error: { code: error.code, message: error.message },
+        ipAddress: c.req.header('x-forwarded-for') ?? null,
+        userAgent: c.req.header('user-agent') ?? null,
+        sso: {
+          organization_id: auth.organization_id,
+          connection_id: expiredProfile?.connection_id ?? null,
+          session_id: null,
+        },
+      });
+      throw error;
     }
 
     const profile = ws.ssoProfiles.get(auth.profile_id);
@@ -166,6 +198,22 @@ export function ssoRoutes(ctx: RouteContext): void {
     });
 
     store.setData(`${STORE_KEY_PREFIXES.ssoToken}${accessToken}`, profile.id);
+
+    // SSO is profile-based; a user-management user may not exist for this email
+    emitAuthenticationEvent({
+      eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+      method: 'SSO',
+      status: 'succeeded',
+      email: profile.email,
+      userId: ws.users.findOneBy('email', profile.email)?.id ?? null,
+      ipAddress: c.req.header('x-forwarded-for') ?? null,
+      userAgent: c.req.header('user-agent') ?? null,
+      sso: {
+        organization_id: auth.organization_id ?? profile.organization_id,
+        connection_id: profile.connection_id,
+        session_id: null,
+      },
+    });
 
     return c.json({
       profile: formatSSOProfile(profile),

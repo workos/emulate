@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { ServicePlugin, Store, RouteContext } from '../core/index.js';
 import { generateId } from '../core/index.js';
-import { getWorkOSStore, type WorkOSStore } from './store.js';
+import { getWorkOSStore } from './store.js';
 import { organizationRoutes } from './routes/organizations.js';
 import { organizationDomainRoutes } from './routes/organization-domains.js';
 import { membershipRoutes } from './routes/memberships.js';
@@ -38,6 +38,7 @@ import { webhookEndpointRoutes } from './routes/webhook-endpoints.js';
 import { eventRoutes } from './routes/events.js';
 import { EventBus } from './event-bus.js';
 import { STORE_KEYS, EVENTS } from './constants.js';
+import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import {
   generateVerificationToken,
   hashPassword,
@@ -54,6 +55,11 @@ import {
   formatDirectoryUser,
   formatDirectoryGroup,
   formatDomain,
+  formatEmailVerification,
+  formatMagicAuth,
+  formatPasswordReset,
+  formatApiKeyRecord,
+  formatFeatureFlag,
 } from './helpers.js';
 import type { WorkOSConnectionType, PipeProvider, PipeConnectionStatus } from './entities.js';
 
@@ -150,6 +156,12 @@ export interface WorkOSSeedConfig {
 }
 
 export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSeedConfig): void {
+  // Validate the config before seeding
+  const validation = validateSeedConfig(config);
+  if (!validation.valid) {
+    throw new Error(`Invalid seed configuration:\n${formatValidationErrors(validation.errors)}`);
+  }
+
   const ws = getWorkOSStore(store);
 
   if (config.users) {
@@ -373,7 +385,14 @@ export const workosPlugin: ServicePlugin = {
 
     // Set up event bus with collection hooks (Option A from spec)
     // Store on ctx.store for route-level access (hybrid Option A+B for action events)
-    const eventBus = new EventBus(ctx.store);
+    // Check for webhook retry config in store data (set by emulator options)
+    const webhookRetryConfig = ctx.store.getData<any>('webhookRetryConfig');
+    const webhookDebugMode = ctx.store.getData<boolean>('webhookDebugMode') ?? false;
+
+    const eventBus = new EventBus(ctx.store, {
+      retryConfig: webhookRetryConfig,
+      debugMode: webhookDebugMode,
+    });
     ctx.store.setData(STORE_KEYS.eventBus, eventBus);
     const ws = getWorkOSStore(ctx.store);
 
@@ -402,8 +421,18 @@ export const workosPlugin: ServicePlugin = {
       onDelete: (m) => eventBus.emit({ event: EVENTS.organizationMembershipDeleted, data: formatMembership(m) }),
     });
     ws.connections.setHooks({
-      onInsert: (c) => eventBus.emit({ event: EVENTS.connectionCreated, data: formatConnection(c) }),
-      onUpdate: (c) => eventBus.emit({ event: EVENTS.connectionUpdated, data: formatConnection(c) }),
+      // The spec has no connection.created/updated — only activation state transitions
+      onInsert: (c) => {
+        if (c.state === 'active') eventBus.emit({ event: EVENTS.connectionActivated, data: formatConnection(c) });
+      },
+      onUpdate: (c, prev) => {
+        if (c.state === prev.state) return;
+        if (c.state === 'active') {
+          eventBus.emit({ event: EVENTS.connectionActivated, data: formatConnection(c) });
+        } else if (c.state === 'inactive') {
+          eventBus.emit({ event: EVENTS.connectionDeactivated, data: formatConnection(c) });
+        }
+      },
       onDelete: (c) => eventBus.emit({ event: EVENTS.connectionDeleted, data: formatConnection(c) }),
     });
     ws.sessions.setHooks({
@@ -413,10 +442,34 @@ export const workosPlugin: ServicePlugin = {
     ws.invitations.setHooks({
       onInsert: (i) => eventBus.emit({ event: EVENTS.invitationCreated, data: formatInvitation(i) }),
     });
+    // Lifecycle resources created during login flows. No delete hooks: codes are
+    // deleted when consumed, and the spec has no events for that.
+    ws.emailVerifications.setHooks({
+      onInsert: (ev) => eventBus.emit({ event: EVENTS.emailVerificationCreated, data: formatEmailVerification(ev) }),
+    });
+    ws.magicAuths.setHooks({
+      onInsert: (ma) => eventBus.emit({ event: EVENTS.magicAuthCreated, data: formatMagicAuth(ma) }),
+    });
+    ws.passwordResets.setHooks({
+      onInsert: (pr) => eventBus.emit({ event: EVENTS.passwordResetCreated, data: formatPasswordReset(pr) }),
+    });
+    // Organization-scoped roles share the roles collection but have their own spec events
     ws.roles.setHooks({
-      onInsert: (r) => eventBus.emit({ event: EVENTS.roleCreated, data: formatRole(r) }),
-      onUpdate: (r) => eventBus.emit({ event: EVENTS.roleUpdated, data: formatRole(r) }),
-      onDelete: (r) => eventBus.emit({ event: EVENTS.roleDeleted, data: formatRole(r) }),
+      onInsert: (r) =>
+        eventBus.emit({
+          event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleCreated : EVENTS.roleCreated,
+          data: formatRole(r),
+        }),
+      onUpdate: (r) =>
+        eventBus.emit({
+          event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleUpdated : EVENTS.roleUpdated,
+          data: formatRole(r),
+        }),
+      onDelete: (r) =>
+        eventBus.emit({
+          event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleDeleted : EVENTS.roleDeleted,
+          data: formatRole(r),
+        }),
     });
     ws.permissions.setHooks({
       onInsert: (p) => eventBus.emit({ event: EVENTS.permissionCreated, data: formatPermission(p) }),
@@ -424,19 +477,29 @@ export const workosPlugin: ServicePlugin = {
       onDelete: (p) => eventBus.emit({ event: EVENTS.permissionDeleted, data: formatPermission(p) }),
     });
     ws.directories.setHooks({
-      onInsert: (d) => eventBus.emit({ event: EVENTS.directoryCreated, data: formatDirectory(d) }),
-      onUpdate: (d) => eventBus.emit({ event: EVENTS.directoryUpdated, data: formatDirectory(d) }),
-      onDelete: (d) => eventBus.emit({ event: EVENTS.directoryDeleted, data: formatDirectory(d) }),
+      // The spec has no dsync.updated — only activation and deletion
+      onInsert: (d) => eventBus.emit({ event: EVENTS.dsyncActivated, data: formatDirectory(d) }),
+      onDelete: (d) => eventBus.emit({ event: EVENTS.dsyncDeleted, data: formatDirectory(d) }),
     });
     ws.directoryUsers.setHooks({
-      onInsert: (u) => eventBus.emit({ event: EVENTS.directoryUserCreated, data: formatDirectoryUser(u) }),
-      onUpdate: (u) => eventBus.emit({ event: EVENTS.directoryUserUpdated, data: formatDirectoryUser(u) }),
-      onDelete: (u) => eventBus.emit({ event: EVENTS.directoryUserDeleted, data: formatDirectoryUser(u) }),
+      onInsert: (u) => eventBus.emit({ event: EVENTS.dsyncUserCreated, data: formatDirectoryUser(u) }),
+      onUpdate: (u) => eventBus.emit({ event: EVENTS.dsyncUserUpdated, data: formatDirectoryUser(u) }),
+      onDelete: (u) => eventBus.emit({ event: EVENTS.dsyncUserDeleted, data: formatDirectoryUser(u) }),
     });
     ws.directoryGroups.setHooks({
-      onInsert: (g) => eventBus.emit({ event: EVENTS.directoryGroupCreated, data: formatDirectoryGroup(g) }),
-      onUpdate: (g) => eventBus.emit({ event: EVENTS.directoryGroupUpdated, data: formatDirectoryGroup(g) }),
-      onDelete: (g) => eventBus.emit({ event: EVENTS.directoryGroupDeleted, data: formatDirectoryGroup(g) }),
+      onInsert: (g) => eventBus.emit({ event: EVENTS.dsyncGroupCreated, data: formatDirectoryGroup(g) }),
+      onUpdate: (g) => eventBus.emit({ event: EVENTS.dsyncGroupUpdated, data: formatDirectoryGroup(g) }),
+      onDelete: (g) => eventBus.emit({ event: EVENTS.dsyncGroupDeleted, data: formatDirectoryGroup(g) }),
+    });
+    ws.apiKeyRecords.setHooks({
+      onInsert: (k) => eventBus.emit({ event: EVENTS.apiKeyCreated, data: formatApiKeyRecord(k) }),
+      onUpdate: (k) => eventBus.emit({ event: EVENTS.apiKeyUpdated, data: formatApiKeyRecord(k) }),
+      onDelete: (k) => eventBus.emit({ event: EVENTS.apiKeyRevoked, data: formatApiKeyRecord(k) }),
+    });
+    ws.featureFlags.setHooks({
+      onInsert: (f) => eventBus.emit({ event: EVENTS.flagCreated, data: formatFeatureFlag(f) }),
+      onUpdate: (f) => eventBus.emit({ event: EVENTS.flagUpdated, data: formatFeatureFlag(f) }),
+      onDelete: (f) => eventBus.emit({ event: EVENTS.flagDeleted, data: formatFeatureFlag(f) }),
     });
     ws.webhookEndpoints.setHooks({
       onInsert: () => eventBus.rebuildIndex(),

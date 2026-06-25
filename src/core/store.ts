@@ -12,7 +12,7 @@ export type SortFn<T> = (a: T, b: T) => number;
 
 export interface CollectionHooks<T extends Entity> {
   onInsert?: (item: T) => void;
-  onUpdate?: (item: T) => void;
+  onUpdate?: (item: T, previous: T) => void;
   onDelete?: (item: T) => void;
 }
 
@@ -101,7 +101,7 @@ export class Collection<T extends Entity> {
     } as T;
     this.items.set(id, updated);
     this.addToIndex(updated);
-    this.hooks.onUpdate?.(updated);
+    this.hooks.onUpdate?.(updated, existing);
     return updated;
   }
 

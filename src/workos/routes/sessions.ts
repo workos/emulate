@@ -28,6 +28,8 @@ export function sessionRoutes(ctx: RouteContext): void {
     const session = ws.sessions.get(sessionId);
     if (!session) throw notFound('Session');
 
+    // Sessions have no onUpdate hook, so this only shapes the session.revoked payload
+    ws.sessions.update(session.id, { status: 'revoked', ended_at: new Date().toISOString() });
     ws.sessions.delete(session.id);
     return c.json({ success: true });
   });
@@ -43,7 +45,10 @@ export function sessionRoutes(ctx: RouteContext): void {
     }
 
     const session = ws.sessions.get(sessionId);
-    if (session) ws.sessions.delete(session.id);
+    if (session) {
+      ws.sessions.update(session.id, { status: 'revoked', ended_at: new Date().toISOString() });
+      ws.sessions.delete(session.id);
+    }
 
     if (returnTo) {
       assertLocalRedirectUri(returnTo);

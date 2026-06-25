@@ -1,4 +1,13 @@
-import { createServer, type ApiKeyMap, addErrorHook, removeErrorHook, getErrorHooks, type ErrorHook, type ErrorHookInput } from './core/index.js';
+import {
+  createServer,
+  type ApiKeyMap,
+  addErrorHook,
+  removeErrorHook,
+  getErrorHooks,
+  type ErrorHook,
+  type ErrorHookInput,
+  type Store,
+} from './core/index.js';
 import { workosPlugin, seedFromConfig, type WorkOSSeedConfig } from './workos/index.js';
 import { STORE_KEYS } from './workos/constants.js';
 import { serve } from '@hono/node-server';
@@ -32,12 +41,20 @@ export interface EmulatorOptions {
   port?: number;
   seed?: EmulatorSeedConfig;
   interactiveAuth?: boolean;
+  webhookRetryConfig?: {
+    maxRetries?: number;
+    initialDelayMs?: number;
+    maxDelayMs?: number;
+    backoffMultiplier?: number;
+  };
+  webhookDebugMode?: boolean;
 }
 
 export interface Emulator {
   url: string;
   port: number;
   apiKey: string;
+  store: Store;
   close(): Promise<void>;
   reset(): void;
   addErrorHook(hook: ErrorHookInput): ErrorHook;
@@ -61,6 +78,14 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
 
   if (options.interactiveAuth) {
     store.setData(STORE_KEYS.interactiveAuth, true);
+  }
+
+  if (options.webhookRetryConfig) {
+    store.setData('webhookRetryConfig', options.webhookRetryConfig);
+  }
+
+  if (options.webhookDebugMode) {
+    store.setData('webhookDebugMode', true);
   }
 
   // Health check endpoint
@@ -108,6 +133,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     }
     seedErrorHooks();
   };
+
   seedFn();
 
   const httpServer = serve({ fetch: app.fetch, port });
@@ -126,9 +152,19 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     url,
     port: actualPort,
     apiKey: primaryApiKey,
+    store,
     reset() {
+      console.warn(
+        '⚠️  EventBus reset limitation: Route-level authentication events (authentication.*_succeeded/failed) will not work after reset(). ' +
+          'Resource lifecycle events (user.created, organization.created, etc.) will still work. ' +
+          'If you need authentication events after reset, create a new emulator instance instead.',
+      );
       store.reset();
       seedFn();
+      // Note: EventBus is not re-registered after reset because Hono's router
+      // cannot be modified after it's built. Route-level authentication events
+      // will not work after reset. This is acceptable for test scenarios where
+      // reset is primarily used, but not for production use.
     },
     close(): Promise<void> {
       return new Promise((resolve, reject) => {

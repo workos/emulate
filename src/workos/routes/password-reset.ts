@@ -1,6 +1,8 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatPasswordReset, generateVerificationToken, hashPassword, expiresIn, isExpired } from '../helpers.js';
+import { STORE_KEYS, EVENTS } from '../constants.js';
+import type { EventBus } from '../event-bus.js';
 
 export function passwordResetRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -64,6 +66,10 @@ export function passwordResetRoutes(ctx: RouteContext): void {
       password_hash: hashPassword(newPassword),
     });
     ws.passwordResets.delete(pr.id);
+
+    // Manual emit: the spec event fires on confirmation, not on a collection insert
+    const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
+    eventBus?.emit({ event: EVENTS.passwordResetSucceeded, data: formatPasswordReset(pr) });
 
     return c.json({ user: { object: 'user', id: user.id, email: user.email } });
   });

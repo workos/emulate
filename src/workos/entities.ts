@@ -49,6 +49,10 @@ export interface WorkOSSession extends Entity {
   organization_id: string | null;
   ip_address: string | null;
   user_agent: string | null;
+  auth_method: string;
+  status: 'active' | 'expired' | 'revoked';
+  expires_at: string;
+  ended_at: string | null;
 }
 
 export interface WorkOSEmailVerification extends Entity {

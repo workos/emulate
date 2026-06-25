@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
 import type { Store } from '../../core/index.js';
 
@@ -15,7 +16,8 @@ describe('SSO routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const server = createTestApp();
+    app = server.app;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -214,5 +216,88 @@ describe('SSO interactive auth', () => {
     expect(tokenRes.status).toBe(200);
     const body = await json(tokenRes);
     expect(body.profile.email).toBe('alice@sso.example.com');
+  });
+});
+
+describe('SSO authentication events', () => {
+  let app: ReturnType<typeof createTestApp>['app'];
+  let store: Store;
+
+  beforeEach(() => {
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
+  });
+
+  const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
+  const json = (res: Response) => res.json() as Promise<any>;
+
+  const eventsNamed = (name: string) =>
+    getWorkOSStore(store)
+      .events.all()
+      .filter((e) => e.event === name);
+
+  async function createOrgWithConnection() {
+    const org = await json(
+      await req('/organizations', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'SSO Events Org' }),
+      }),
+    );
+    const conn = await json(
+      await req('/connections', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Events SSO',
+          organization_id: org.id,
+          connection_type: 'GenericSAML',
+          domains: ['sso-events.example.com'],
+        }),
+      }),
+    );
+    return { org, conn };
+  }
+
+  it('emits authentication.sso_succeeded with the spec sso object on token exchange', async () => {
+    const { org, conn } = await createOrgWithConnection();
+
+    const authRes = await app.request(
+      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+
+    const [event] = eventsNamed('authentication.sso_succeeded');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'sso',
+      status: 'succeeded',
+      sso: { organization_id: org.id, connection_id: conn.id, session_id: null },
+    });
+    expect(event.data).toHaveProperty('user_id');
+    expect(event.data).toHaveProperty('email');
+  });
+
+  it('emits authentication.sso_failed with an error object for an invalid code', async () => {
+    const res = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code: 'sso_bogus' }),
+    });
+    expect(res.status).toBe(400);
+
+    const [event] = eventsNamed('authentication.sso_failed');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'sso',
+      status: 'failed',
+      error: { code: 'invalid_code', message: 'Invalid authorization code' },
+      sso: { organization_id: null, connection_id: null, session_id: null },
+    });
   });
 });

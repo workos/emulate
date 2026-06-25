@@ -9,6 +9,10 @@ import {
   expiresIn,
   assertLocalRedirectUri,
   sealSession,
+  AUTH_METHOD_SESSION_VALUES,
+  emitAuthenticationEvent,
+  generateCode,
+  formatAuthChallenge,
 } from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
@@ -158,9 +162,77 @@ export function authRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, 'grant_type is required', 'invalid_request');
     }
 
+    const requestIp = c.req.header('x-forwarded-for') ?? null;
+    const requestUserAgent = c.req.header('user-agent') ?? null;
+
+    /** Emit the spec's authentication.*_failed event for a credential failure, then throw. */
+    const failAuth: (
+      method: string,
+      info: { email?: string | null; userId?: string | null },
+      error: WorkOSApiError,
+    ) => never = (method, info, error) => {
+      emitAuthenticationEvent({
+        eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+        method,
+        status: 'failed',
+        userId: info.userId,
+        email: info.email,
+        ipAddress: requestIp,
+        userAgent: requestUserAgent,
+        error: { code: error.code, message: error.message },
+      });
+      throw error;
+    };
+
+    /**
+     * Initiate the MFA second factor. Records the primary method on a pending-auth token so
+     * the eventual session reports it (not 'unknown'), creates a challenge for the factor, and
+     * returns the spec's `mfa_challenge` code plus the fields a client needs to complete the
+     * urn:workos:oauth:grant-type:mfa-totp grant. (The spec documents the mfa_challenge code but
+     * not this response body; the pending_authentication_token/challenge fields mirror WorkOS.)
+     */
+    const issueMfaChallenge = (
+      mfaUser: { id: string },
+      orgId: string | null,
+      primaryMethod: string,
+      factor: { id: string },
+    ) => {
+      const pendingToken = generateId('pending');
+      store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, {
+        user_id: mfaUser.id,
+        organization_id: orgId,
+        auth_method: primaryMethod,
+      });
+      const challenge = ws.authChallenges.insert({
+        object: 'authentication_challenge',
+        user_id: mfaUser.id,
+        factor_id: factor.id,
+        expires_at: expiresIn(10),
+        code: generateCode(),
+      });
+      return c.json(
+        {
+          code: 'mfa_challenge',
+          message: 'Multi-factor authentication is required to continue.',
+          pending_authentication_token: pendingToken,
+          authentication_challenge: formatAuthChallenge(challenge),
+        },
+        403,
+      );
+    };
+
     let user;
     let organizationId: string | null = null;
     let authMethod: string;
+    // The session's auth_method can differ from the event method: an MFA completion emits
+    // authentication.mfa_succeeded but the session records the primary factor that was
+    // challenged (e.g. 'password'). Left undefined, the session falls back to authMethod.
+    let sessionAuthMethod: string | undefined;
+    // A token refresh rotates credentials for an existing session; it is not a fresh login,
+    // so it creates no new session and emits no authentication.*_succeeded event. Genuine
+    // authentications leave this true; refresh_token flips it off and sets refreshSessionId.
+    let isFreshLogin = true;
+    let refreshSessionId: string | null = null;
 
     switch (grantType) {
       case 'authorization_code': {
@@ -168,9 +240,13 @@ export function authRoutes(ctx: RouteContext): void {
         if (!code) throw new WorkOSApiError(400, 'code is required', 'invalid_request');
 
         const authCode = ws.authCodes.findOneBy('code', code);
-        if (!authCode) throw new WorkOSApiError(400, 'Invalid code', 'invalid_code');
+        if (!authCode) failAuth('OAuth', {}, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
         if (isExpired(authCode.expires_at)) {
-          throw new WorkOSApiError(400, 'Code has expired', 'expired_code');
+          failAuth(
+            'OAuth',
+            { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },
+            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+          );
         }
 
         if (authCode.code_challenge) {
@@ -186,7 +262,11 @@ export function authRoutes(ctx: RouteContext): void {
             challenge = codeVerifier;
           }
           if (challenge !== authCode.code_challenge) {
-            throw new WorkOSApiError(400, 'Invalid code_verifier', 'invalid_code_verifier');
+            failAuth(
+              'OAuth',
+              { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },
+              new WorkOSApiError(400, 'Invalid code_verifier', 'invalid_code_verifier'),
+            );
           }
         }
 
@@ -206,9 +286,20 @@ export function authRoutes(ctx: RouteContext): void {
 
         user = ws.users.findOneBy('email', email);
         if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
-          throw new WorkOSApiError(401, 'Invalid credentials', 'invalid_credentials');
+          failAuth(
+            'Password',
+            { email, userId: user?.id },
+            new WorkOSApiError(401, 'Invalid credentials', 'invalid_credentials'),
+          );
         }
         authMethod = 'Password';
+
+        // A user with enrolled factors must clear a second factor before a session is issued:
+        // hand back a pending token (recording 'Password' as the primary method) and a challenge.
+        const passwordFactors = ws.authFactors.findBy('user_id', user.id);
+        if (passwordFactors.length > 0) {
+          return issueMfaChallenge(user, organizationId, 'Password', passwordFactors[0]);
+        }
         break;
       }
 
@@ -223,10 +314,14 @@ export function authRoutes(ctx: RouteContext): void {
 
         const magicAuth = ws.magicAuths.all().find((ma) => ma.code === code && ma.email === email);
         if (!magicAuth) {
-          throw new WorkOSApiError(400, 'Invalid code', 'invalid_code');
+          failAuth('MagicAuth', { email }, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
         }
         if (isExpired(magicAuth.expires_at)) {
-          throw new WorkOSApiError(400, 'Code has expired', 'expired_code');
+          failAuth(
+            'MagicAuth',
+            { email: magicAuth.email, userId: magicAuth.user_id },
+            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+          );
         }
 
         user = ws.users.get(magicAuth.user_id);
@@ -246,10 +341,18 @@ export function authRoutes(ctx: RouteContext): void {
 
         const ev = ws.emailVerifications.findBy('user_id', userId).find((v) => v.code === code);
         if (!ev) {
-          throw new WorkOSApiError(400, 'Invalid code', 'invalid_code');
+          failAuth(
+            'EmailVerification',
+            { userId, email: ws.users.get(userId)?.email },
+            new WorkOSApiError(400, 'Invalid code', 'invalid_code'),
+          );
         }
         if (isExpired(ev.expires_at)) {
-          throw new WorkOSApiError(400, 'Code has expired', 'expired_code');
+          failAuth(
+            'EmailVerification',
+            { email: ev.email, userId: ev.user_id },
+            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+          );
         }
 
         ws.users.update(userId, { email_verified: true });
@@ -278,9 +381,12 @@ export function authRoutes(ctx: RouteContext): void {
         // Allow body.organization_id to switch org context (switchToOrganization)
         organizationId = (body.organization_id as string) ?? refreshToken.organization_id;
 
-        // Rotate: delete old, issue new below
+        // Rotate within the existing session: capture it for reuse, delete the old token,
+        // and issue a new one below — no new session, no authentication event.
+        refreshSessionId = refreshToken.session_id;
         ws.refreshTokens.delete(refreshToken.id);
         authMethod = 'OAuth';
+        isFreshLogin = false;
         break;
       }
 
@@ -308,12 +414,20 @@ export function authRoutes(ctx: RouteContext): void {
         }
         if (isExpired(challenge.expires_at)) {
           ws.authChallenges.delete(challenge.id);
-          throw new WorkOSApiError(400, 'Challenge has expired', 'expired_challenge');
+          failAuth(
+            'MFA',
+            { userId: pending.user_id, email: ws.users.get(pending.user_id)?.email },
+            new WorkOSApiError(400, 'Challenge has expired', 'expired_challenge'),
+          );
         }
 
         // Verify code against the challenge's stored code
         if (challenge.code && code !== challenge.code) {
-          throw new WorkOSApiError(400, 'Invalid one-time code', 'invalid_one_time_code');
+          failAuth(
+            'MFA',
+            { userId: pending.user_id, email: ws.users.get(pending.user_id)?.email },
+            new WorkOSApiError(400, 'Invalid one-time code', 'invalid_one_time_code'),
+          );
         }
 
         ws.authChallenges.delete(challenge.id);
@@ -321,7 +435,10 @@ export function authRoutes(ctx: RouteContext): void {
 
         user = ws.users.get(pending.user_id);
         organizationId = pending.organization_id;
+        // Event is authentication.mfa_succeeded; the session records the primary factor the
+        // pending token was issued for (MFA is a second factor, not a session auth method).
         authMethod = 'MFA';
+        sessionAuthMethod = pending.auth_method;
         break;
       }
 
@@ -383,16 +500,28 @@ export function authRoutes(ctx: RouteContext): void {
 
     if (!user) throw notFound('User');
 
-    ws.users.update(user.id, { last_sign_in_at: new Date().toISOString() });
+    // A fresh login creates a new session (firing session.created); a refresh_token rotation
+    // reuses the existing session, so it emits neither session.created nor an auth event.
+    let session;
+    if (isFreshLogin) {
+      ws.users.update(user.id, { last_sign_in_at: new Date().toISOString() });
+      session = ws.sessions.insert({
+        object: 'session',
+        user_id: user.id,
+        organization_id: organizationId,
+        ip_address: requestIp,
+        user_agent: requestUserAgent,
+        auth_method: AUTH_METHOD_SESSION_VALUES[sessionAuthMethod ?? authMethod] ?? 'unknown',
+        status: 'active',
+        expires_at: expiresIn(30 * 24 * 60), // matches refresh token lifetime
+        ended_at: null,
+      });
+    } else {
+      const existing = refreshSessionId ? ws.sessions.get(refreshSessionId) : undefined;
+      if (!existing) throw new WorkOSApiError(400, 'Invalid refresh token', 'invalid_grant');
+      session = existing;
+    }
     const updatedUser = ws.users.get(user.id)!;
-
-    const session = ws.sessions.insert({
-      object: 'session',
-      user_id: user.id,
-      organization_id: organizationId,
-      ip_address: c.req.header('x-forwarded-for') ?? null,
-      user_agent: c.req.header('user-agent') ?? null,
-    });
 
     // Resolve role + permissions for org-scoped sessions
     let roleSlug: string | undefined;
@@ -448,12 +577,15 @@ export function authRoutes(ctx: RouteContext): void {
       : null;
 
     // Emit authentication event (hybrid Option B for action-specific events)
-    const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
-    if (eventBus) {
-      const authEventType = `authentication.${authMethod.toLowerCase()}_succeeded`;
-      eventBus.emit({
-        event: authEventType,
-        data: { user_id: user.id, email: updatedUser.email, method: authMethod, ip_address: session.ip_address },
+    if (isFreshLogin) {
+      emitAuthenticationEvent({
+        eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+        method: authMethod,
+        status: 'succeeded',
+        userId: user.id,
+        email: updatedUser.email,
+        ipAddress: session.ip_address,
+        userAgent: session.user_agent,
       });
     }
 
