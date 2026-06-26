@@ -29,12 +29,21 @@ export function connectRoutes(ctx: RouteContext): void {
     }
 
     const applicationType = body.application_type === 'm2m' ? 'm2m' : 'oauth';
+    const organizationId = (body.organization_id as string) ?? null;
+    // m2m applications are owned by an organization; reject a null owner so the
+    // emulator never returns an m2m app that can't be tied to one.
+    if (applicationType === 'm2m' && !organizationId) {
+      throw validationError('organization_id is required for m2m applications', [
+        { field: 'organization_id', code: 'required' },
+      ]);
+    }
+
     const application = ws.connectApplications.insert({
       object: 'connect_application',
       name: name.trim(),
       description: (body.description as string) ?? null,
       application_type: applicationType,
-      organization_id: (body.organization_id as string) ?? null,
+      organization_id: organizationId,
       scopes: (body.scopes as string[]) ?? [],
       redirect_uris: (body.redirect_uris as string[]) ?? [],
       client_id: generateClientId(),

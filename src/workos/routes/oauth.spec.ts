@@ -110,6 +110,19 @@ describe('OAuth M2M token routes', () => {
     expect(jwt.verify(body.access_token).scp).toEqual(['invoices:read']);
   });
 
+  it('ignores a caller-supplied organization_id; the token org is the application org', async () => {
+    const res = await form({
+      grant_type: 'client_credentials',
+      client_id: 'client_billing',
+      client_secret: 'secret_billing_value',
+      organization_id: 'org_attacker',
+    });
+    expect(res.status).toBe(200);
+    const claims = jwt.verify((await json(res)).access_token);
+    expect(claims.org_id).not.toBe('org_attacker');
+    expect(claims.org_id).toMatch(/^org_/);
+  });
+
   it('rejects a requested scope the application does not have', async () => {
     const res = await form({
       grant_type: 'client_credentials',

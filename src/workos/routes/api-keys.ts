@@ -22,6 +22,10 @@ export function apiKeyRoutes(ctx: RouteContext): void {
     const record = ws.apiKeyRecords.get(c.req.param('id'));
     if (!record) throw notFound('ApiKey');
     ws.apiKeyRecords.delete(record.id);
+    // Also drop the value from the auth allow-list (the same object the middleware holds
+    // by reference) so a deleted key stops authenticating, not just stops resolving.
+    const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
+    if (apiKeyMap) delete apiKeyMap[record.key];
     return c.body(null, 204);
   });
 

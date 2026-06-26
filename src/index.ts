@@ -73,6 +73,9 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   const seedApiKeys = options.seed?.apiKeys;
   const apiKeys: ApiKeyMap =
     seedApiKeys && !Array.isArray(seedApiKeys) ? seedApiKeys : { sk_test_default: { environment: 'test' } };
+  // The initial allow-list, before array-form keys are seeded into it. reset() restores
+  // the captured `apiKeys` object to this state (see below).
+  const initialApiKeys: ApiKeyMap = { ...apiKeys };
 
   const { app, store, jwt } = createServer(workosPlugin, {
     port,
@@ -164,6 +167,14 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
           'If you need authentication events after reset, create a new emulator instance instead.',
       );
       store.reset();
+      // store.reset() drops the apiKeyMap data entry, but the auth middleware still holds
+      // the original `apiKeys` object by reference. Restore that same object in place (to
+      // its pre-seed state) and re-register it, so re-seeded array-form keys land in the
+      // map the middleware reads — keeping real-request auth and /api_keys/validations in
+      // sync rather than splitting across two divergent maps.
+      for (const key of Object.keys(apiKeys)) delete apiKeys[key];
+      Object.assign(apiKeys, initialApiKeys);
+      store.setData(STORE_KEYS.apiKeyMap, apiKeys);
       seedFn();
       // Note: EventBus is not re-registered after reset because Hono's router
       // cannot be modified after it's built. Route-level authentication events

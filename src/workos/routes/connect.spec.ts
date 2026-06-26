@@ -40,6 +40,25 @@ describe('Connect routes', () => {
     expect(res.status).toBe(422);
   });
 
+  it('rejects an m2m application without an organization_id', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'M2M App', application_type: 'm2m' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('creates an m2m application when an organization_id is given', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'M2M App', application_type: 'm2m', organization_id: 'org_123' }),
+    });
+    expect(res.status).toBe(201);
+    const created = await json(res);
+    expect(created.application_type).toBe('m2m');
+    expect(created.organization_id).toBe('org_123');
+  });
+
   it('gets an application by id', async () => {
     const createRes = await req('/connect/applications', {
       method: 'POST',

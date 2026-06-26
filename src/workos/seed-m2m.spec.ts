@@ -108,6 +108,111 @@ describe('Seeding M2M applications and API keys', () => {
     const res = await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_legacy') });
     expect(res.status).toBe(200);
   });
+
+  it('throws when a seeded m2m application references an unknown organization', async () => {
+    await expect(
+      createEmulator({
+        port: 0,
+        seed: {
+          organizations: [{ name: 'Acme Corp' }],
+          connectApplications: [{ name: 'Typo Svc', type: 'm2m', organization: 'Acme Crop' }],
+        },
+      }),
+    ).rejects.toThrow(/organization not found/i);
+  });
+
+  it('throws when a seeded api key references an unknown organization', async () => {
+    await expect(
+      createEmulator({
+        port: 0,
+        seed: {
+          organizations: [{ name: 'Acme Corp' }],
+          apiKeys: [{ name: 'Bad Key', organization: 'Acme Crop', value: 'sk_test_bad' }],
+        },
+      }),
+    ).rejects.toThrow(/organization not found/i);
+  });
+
+  it('creates an expired seeded api key as a resource but does not let it authenticate', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        apiKeys: [
+          {
+            name: 'Expired Key',
+            organization: 'Acme Corp',
+            value: 'sk_test_expired',
+            expires_at: '2000-01-01T00:00:00.000Z',
+          },
+          { name: 'Live Key', organization: 'Acme Corp', value: 'sk_test_live2' },
+        ],
+      },
+    });
+
+    // The expired key is rejected by the auth middleware...
+    const protectedRes = await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_expired') });
+    expect(protectedRes.status).toBe(401);
+
+    // ...and reported invalid, even though its resource still exists.
+    const validateRes = await fetch(`${emulator.url}/api_keys/validations`, {
+      method: 'POST',
+      headers: auth('sk_test_live2'),
+      body: JSON.stringify({ key: 'sk_test_expired' }),
+    });
+    expect(((await validateRes.json()) as any).valid).toBe(false);
+
+    const listRes = await fetch(`${emulator.url}/organizations/org/api_keys`, { headers: auth('sk_test_live2') });
+    const list = (await listRes.json()) as any;
+    expect(list.data.find((k: any) => k.name === 'Expired Key')).toBeDefined();
+  });
+
+  it('stops authenticating a seeded api key after it is deleted', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        apiKeys: [{ name: 'Doomed Key', organization: 'Acme Corp', value: 'sk_test_doomed' }],
+      },
+    });
+
+    // It authenticates before deletion.
+    expect((await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_doomed') })).status).toBe(200);
+
+    const listRes = await fetch(`${emulator.url}/organizations/org/api_keys`, { headers: auth('sk_test_doomed') });
+    const record = ((await listRes.json()) as any).data.find((k: any) => k.name === 'Doomed Key');
+    const delRes = await fetch(`${emulator.url}/api_keys/${record.id}`, {
+      method: 'DELETE',
+      headers: auth('sk_test_doomed'),
+    });
+    expect(delRes.status).toBe(204);
+
+    // After deletion the value no longer authenticates.
+    expect((await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_doomed') })).status).toBe(401);
+  });
+
+  it('keeps array-form keys authenticating, and in sync with validations, after reset()', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        apiKeys: [{ name: 'CI Key', organization: 'Acme Corp', value: 'sk_test_reset' }],
+      },
+    });
+    expect((await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_reset') })).status).toBe(200);
+
+    emulator.reset();
+
+    // Real-request auth still works (middleware reads the same map that was re-seeded)...
+    expect((await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_reset') })).status).toBe(200);
+    // ...and validations agrees — no split between the two maps.
+    const validateRes = await fetch(`${emulator.url}/api_keys/validations`, {
+      method: 'POST',
+      headers: auth('sk_test_reset'),
+      body: JSON.stringify({ key: 'sk_test_reset' }),
+    });
+    expect(((await validateRes.json()) as any).valid).toBe(true);
+  });
 });
 
 describe('Seed config validation for M2M apps and API keys', () => {

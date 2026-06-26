@@ -62,6 +62,7 @@ import {
   formatApiKeyRecord,
   formatFeatureFlag,
   generateClientId,
+  isExpired,
 } from './helpers.js';
 import type { WorkOSConnectionType, PipeProvider, PipeConnectionStatus, WorkOSApiKeyOwner } from './entities.js';
 
@@ -400,6 +401,13 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
     for (const appConfig of config.connectApplications) {
       const type = appConfig.type ?? 'm2m';
       const org = appConfig.organization ? ws.organizations.findOneBy('name', appConfig.organization) : undefined;
+      // An m2m application must be tied to a real organization; a name that does not
+      // resolve would otherwise produce an app with a null owner (invalid m2m shape).
+      if (type === 'm2m' && !org) {
+        throw new Error(
+          `workos seed config: connectApplications[].organization not found: ${JSON.stringify(appConfig.organization)}`,
+        );
+      }
 
       const application = ws.connectApplications.insert({
         object: 'connect_application',
@@ -432,11 +440,20 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       const value = keyConfig.value ?? `sk_test_${generateVerificationToken()}`;
       const environment = keyConfig.environment ?? (value.startsWith('sk_live_') ? 'production' : 'test');
       const org = keyConfig.organization ? ws.organizations.findOneBy('name', keyConfig.organization) : undefined;
+      // The owner organization must resolve; otherwise the key would be created with an
+      // empty owner id yet still authenticate requests (config validation guarantees the
+      // `organization` field is present for both org- and user-owned keys).
+      if (keyConfig.organization && !org) {
+        throw new Error(
+          `workos seed config: apiKeys[].organization not found: ${JSON.stringify(keyConfig.organization)}`,
+        );
+      }
 
       const owner: WorkOSApiKeyOwner = keyConfig.user_id
         ? { type: 'user', id: keyConfig.user_id, organization_id: org?.id ?? '' }
         : { type: 'organization', id: org?.id ?? '' };
 
+      const expiresAt = keyConfig.expires_at ?? null;
       ws.apiKeyRecords.insert({
         object: 'api_key',
         name: keyConfig.name,
@@ -445,12 +462,16 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         owner,
         permissions: keyConfig.permissions ?? [],
         last_used_at: null,
-        expires_at: keyConfig.expires_at ?? null,
+        expires_at: expiresAt,
       });
 
       // Register the value in the shared auth allow-list (the same object the auth
       // middleware holds by reference) so the seeded key authenticates real requests.
-      authMap[value] = { environment };
+      // An already-expired key is created as a resource but not registered, so it does
+      // not authenticate — matching production, where an expired key is rejected.
+      if (!expiresAt || !isExpired(expiresAt)) {
+        authMap[value] = { environment };
+      }
     }
     store.setData(STORE_KEYS.apiKeyMap, authMap);
   }

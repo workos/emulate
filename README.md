@@ -258,6 +258,11 @@ apiKeys:
 curl http://localhost:4100/connect/applications -H "Authorization: Bearer sk_test_ci_key"
 ```
 
+The `organization` (or the org supplied via `user_id`) must reference a seeded organization;
+an unresolved name fails fast at startup. A key seeded with an already-past `expires_at` is still
+created as a resource but does **not** authenticate, and deleting a key via `DELETE /api_keys/:id`
+stops it authenticating immediately — matching production.
+
 `apiKeys` also accepts the legacy auth allow-list map form (`{ sk_xxx: { environment } }`), which
 only registers values for authentication without creating resources.
 

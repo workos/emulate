@@ -26,7 +26,6 @@ interface TokenParams {
   clientId?: string;
   clientSecret?: string;
   scope?: string;
-  organizationId?: string;
 }
 
 /** RFC 6749 §5.2 error body. */
@@ -76,7 +75,6 @@ async function readTokenParams(c: Context): Promise<TokenParams> {
     clientId,
     clientSecret,
     scope: str(raw.scope),
-    organizationId: str(raw.organization_id),
   };
 }
 
@@ -85,7 +83,7 @@ export function oauthRoutes(ctx: RouteContext): void {
   const ws = getWorkOSStore(store);
 
   app.post('/oauth2/token', async (c) => {
-    const { grantType, clientId, clientSecret, scope, organizationId } = await readTokenParams(c);
+    const { grantType, clientId, clientSecret, scope } = await readTokenParams(c);
 
     if (grantType !== 'client_credentials') {
       return oauthError(c, 400, 'unsupported_grant_type', `The grant type is not supported: ${grantType ?? '(none)'}`);
@@ -128,11 +126,13 @@ export function oauthRoutes(ctx: RouteContext): void {
       granted = requested;
     }
 
+    // The token's tenant is always the application's stored organization — never
+    // caller-supplied — so a client can't mint a token for an org it isn't tied to.
     const accessToken = jwt.sign(
       {
         sub: clientId,
         aud: clientId,
-        org_id: application.organization_id ?? organizationId ?? undefined,
+        org_id: application.organization_id ?? undefined,
         scp: granted,
       },
       { expiresIn: TOKEN_TTL_SECONDS },
