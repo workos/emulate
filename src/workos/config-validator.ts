@@ -297,6 +297,21 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           });
         }
       });
+
+      // A client_id identifies exactly one application; duplicates make token exchange
+      // ambiguous (the lookup would resolve only the first match), so reject them.
+      const seenClientIds = new Set<string>();
+      config.connectApplications.forEach((appConfig, index) => {
+        if (!appConfig.client_id) return;
+        if (seenClientIds.has(appConfig.client_id)) {
+          errors.push({
+            path: `connectApplications[${index}].client_id`,
+            message: 'client_id must be unique across connectApplications',
+            value: appConfig.client_id,
+          });
+        }
+        seenClientIds.add(appConfig.client_id);
+      });
     }
   }
 

@@ -138,6 +138,26 @@ describe('Seeding M2M applications and API keys', () => {
     expect(names).not.toContain('B Key');
   });
 
+  it('includes user-owned keys in their organization listing', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        apiKeys: [
+          { name: 'Org Key', organization: 'Acme Corp', value: 'sk_test_orgk' },
+          // A user-owned key stores the org under owner.organization_id, not owner.id.
+          { name: 'User Key', organization: 'Acme Corp', user_id: 'user_svc', value: 'sk_test_userk' },
+        ],
+      },
+    });
+
+    const oid = await firstOrgId('sk_test_orgk');
+    const listRes = await fetch(`${emulator.url}/organizations/${oid}/api_keys`, { headers: auth('sk_test_orgk') });
+    const names = ((await listRes.json()) as any).data.map((k: any) => k.name);
+    expect(names).toContain('Org Key');
+    expect(names).toContain('User Key');
+  });
+
   it('does not leave the well-known default key authorized when array-form keys are seeded', async () => {
     emulator = await createEmulator({
       port: 0,
@@ -283,6 +303,20 @@ describe('Seed config validation for M2M apps and API keys', () => {
       findError(
         { connectApplications: [{ name: 'Bad', type: 'saml' as never, organization: 'Acme' }] },
         'connectApplications[0].type',
+      ),
+    ).toBeDefined();
+  });
+
+  it('rejects two connect applications pinning the same client_id', () => {
+    expect(
+      findError(
+        {
+          connectApplications: [
+            { name: 'A', organization: 'Acme', client_id: 'client_dup' },
+            { name: 'B', organization: 'Acme', client_id: 'client_dup' },
+          ],
+        },
+        'connectApplications[1].client_id',
       ),
     ).toBeDefined();
   });

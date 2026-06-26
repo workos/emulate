@@ -33,12 +33,16 @@ export function apiKeyRoutes(ctx: RouteContext): void {
   });
 
   // List API keys for an organization — scoped to the path organization so one org's
-  // keys never leak into another org's listing.
+  // keys never leak into another org's listing. A key belongs to the org when it is
+  // org-owned (owner.id) or user-owned within that org (owner.organization_id).
   app.get('/organizations/:orgId/api_keys', (c) => {
     const orgId = c.req.param('orgId');
     const url = new URL(c.req.url);
     const params = parseListParams(url);
-    const result = ws.apiKeyRecords.list({ ...params, filter: (k) => k.owner.id === orgId });
+    const result = ws.apiKeyRecords.list({
+      ...params,
+      filter: (k) => (k.owner.type === 'organization' ? k.owner.id : k.owner.organization_id) === orgId,
+    });
     return c.json(formatListResponse(result, formatApiKeyRecord));
   });
 }
