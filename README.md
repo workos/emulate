@@ -196,9 +196,45 @@ Each seeded application is provisioned with a client secret. Pin `client_secret`
 value into a service's environment; otherwise one is generated. The application is then available
 via `GET /connect/applications`.
 
-> The runtime `client_credentials` token exchange (swap `client_id` + secret for a scoped access
-> token, then validate it) is not yet emulated — see [issue #7](https://github.com/workos/emulate/issues/7).
-> This seeds the M2M application resource; minting and validating tokens is tracked separately.
+#### Token exchange (`client_credentials`)
+
+A service swaps its seeded `client_id` + `client_secret` for a scoped access token at
+`POST /oauth2/token`, exactly as in production:
+
+```bash
+curl -s http://localhost:4100/oauth2/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d grant_type=client_credentials \
+  -d client_id=client_local_backend \
+  -d client_secret=secret_local_backend
+# (client credentials may also be sent via HTTP Basic auth)
+```
+
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "posts:read posts:write"
+}
+```
+
+The `access_token` is an RS256 JWT signed with the same key the emulator publishes at
+`GET /sso/jwks/:client_id` (and `GET /oauth2/jwks`), so a consumer validating with JWKS — e.g.
+`jose` — verifies it with no emulator-specific shims. Its claims:
+
+| Claim    | Value                                                |
+| -------- | ---------------------------------------------------- |
+| `iss`    | the emulator base URL (e.g. `http://localhost:4100`) |
+| `aud`    | the requesting `client_id`                           |
+| `sub`    | the requesting `client_id`                           |
+| `scp`    | granted scopes (array)                               |
+| `org_id` | the application's owning organization                |
+
+A request may narrow to a subset of the application's scopes via `-d scope="posts:read"`;
+requesting a scope the application does not have returns `400 invalid_scope`, so scope-based
+authorization can be exercised locally. Unknown credentials return `401 invalid_client`, and an
+`oauth`-type application returns `400 unauthorized_client`.
 
 ### API Keys
 

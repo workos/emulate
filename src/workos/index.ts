@@ -30,6 +30,7 @@ import { legacyMfaRoutes } from './routes/legacy-mfa.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { radarRoutes } from './routes/radar.js';
 import { connectRoutes } from './routes/connect.js';
+import { oauthRoutes } from './routes/oauth.js';
 import { directoryRoutes } from './routes/directories.js';
 import { auditLogRoutes } from './routes/audit-logs.js';
 import { featureFlagRoutes } from './routes/feature-flags.js';
@@ -486,6 +487,7 @@ export const workosPlugin: ServicePlugin = {
     apiKeyRoutes(ctx);
     radarRoutes(ctx);
     connectRoutes(ctx);
+    oauthRoutes(ctx);
     directoryRoutes(ctx);
     auditLogRoutes(ctx);
     featureFlagRoutes(ctx);
