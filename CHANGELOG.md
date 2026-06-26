@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/workos/emulate/compare/v0.1.0...v0.2.0) (2026-06-26)
+
+
+### Features
+
+* add response-shape conformance codegen and test ([#9](https://github.com/workos/emulate/issues/9)) ([358773b](https://github.com/workos/emulate/commit/358773b8626b35f0191653e3a4341ebd652b37fe))
+* provide an end-to-end login flow story with spec-accurate webhooks ([#2](https://github.com/workos/emulate/issues/2)) ([fa39dfe](https://github.com/workos/emulate/commit/fa39dfe3b798b2916cffb339d44001b8926d7a13))
+
 ## [0.1.0](https://github.com/workos/emulate/compare/v0.0.1...v0.1.0) (2026-06-01)
 
 
