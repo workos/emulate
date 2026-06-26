@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin, seedFromConfig } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 import type { Store } from '../../core/index.js';
 import type { JWTManager } from '../../core/jwt.js';
 
@@ -202,5 +203,79 @@ describe('OAuth M2M token routes', () => {
     expect(Array.isArray(body.keys)).toBe(true);
     expect(body.keys[0].kid).toBeDefined();
     expect(body.keys[0].use).toBe('sig');
+  });
+
+  it('handles a client secret containing a percent sign via Basic auth without erroring', async () => {
+    const ws = getWorkOSStore(store);
+    const org = ws.organizations.findOneBy('name', 'Acme')!;
+    const appRec = ws.connectApplications.insert({
+      object: 'connect_application',
+      name: 'Percent Svc',
+      description: null,
+      application_type: 'm2m',
+      organization_id: org.id,
+      scopes: ['x:read'],
+      redirect_uris: [],
+      client_id: 'client_percent',
+      logo_url: null,
+    });
+    ws.clientSecrets.insert({
+      object: 'client_secret',
+      application_id: appRec.id,
+      value: 'secret_%_local',
+      last_four: 'ocal',
+    });
+
+    const basic = Buffer.from('client_percent:secret_%_local').toString('base64');
+    const res = await app.request('/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basic}` },
+      body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+    });
+    // The literal `%` must not crash the decode; valid creds yield a token.
+    expect(res.status).toBe(200);
+    expect((await json(res)).access_token).toBeDefined();
+  });
+
+  it('does not crash or substring-match when stored scopes are a malformed non-array', async () => {
+    const ws = getWorkOSStore(store);
+    const org = ws.organizations.findOneBy('name', 'Acme')!;
+    const appRec = ws.connectApplications.insert({
+      object: 'connect_application',
+      name: 'Malformed Scopes',
+      description: null,
+      application_type: 'm2m',
+      organization_id: org.id,
+      // Simulate a value persisted through an unguarded path.
+      scopes: 'admin:all' as unknown as string[],
+      redirect_uris: [],
+      client_id: 'client_malformed',
+      logo_url: null,
+    });
+    ws.clientSecrets.insert({
+      object: 'client_secret',
+      application_id: appRec.id,
+      value: 'secret_malformed',
+      last_four: 'med',
+    });
+
+    // No scope requested: must not throw on a non-array (no .join on a string).
+    const noScope = await form({
+      grant_type: 'client_credentials',
+      client_id: 'client_malformed',
+      client_secret: 'secret_malformed',
+    });
+    expect(noScope.status).toBe(200);
+    expect((await json(noScope)).scope).toBe('');
+
+    // A scope must not be accepted by substring-matching the stored string.
+    const scoped = await form({
+      grant_type: 'client_credentials',
+      client_id: 'client_malformed',
+      client_secret: 'secret_malformed',
+      scope: 'admin',
+    });
+    expect(scoped.status).toBe(400);
+    expect((await json(scoped)).error).toBe('invalid_scope');
   });
 });

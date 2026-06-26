@@ -18,6 +18,12 @@ describe('Seeding M2M applications and API keys', () => {
 
   const auth = (apiKey: string) => ({ Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' });
 
+  /** Resolve the first seeded organization's id, authenticating with the given key. */
+  const firstOrgId = async (apiKey: string) => {
+    const res = await fetch(`${emulator!.url}/organizations`, { headers: auth(apiKey) });
+    return ((await res.json()) as any).data[0].id as string;
+  };
+
   it('seeds an m2m connect application with a pinned client_id', async () => {
     emulator = await createEmulator({
       port: 0,
@@ -86,7 +92,8 @@ describe('Seeding M2M applications and API keys', () => {
     expect(((await validateRes.json()) as any).valid).toBe(true);
 
     // And it appears as a spec-aligned api_key resource.
-    const listRes = await fetch(`${emulator.url}/organizations/org/api_keys`, { headers: auth('sk_test_ci') });
+    const oid = await firstOrgId('sk_test_ci');
+    const listRes = await fetch(`${emulator.url}/organizations/${oid}/api_keys`, { headers: auth('sk_test_ci') });
     const list = (await listRes.json()) as any;
     const key = list.data.find((k: any) => k.name === 'CI Key');
     expect(key).toBeDefined();
@@ -107,6 +114,47 @@ describe('Seeding M2M applications and API keys', () => {
     expect(emulator.apiKey).toBe('sk_test_legacy');
     const res = await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_legacy') });
     expect(res.status).toBe(200);
+  });
+
+  it('scopes the organization api_keys listing to the path organization', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Org A' }, { name: 'Org B' }],
+        apiKeys: [
+          { name: 'A Key', organization: 'Org A', value: 'sk_test_a' },
+          { name: 'B Key', organization: 'Org B', value: 'sk_test_b' },
+        ],
+      },
+    });
+
+    const orgs = (await (await fetch(`${emulator.url}/organizations`, { headers: auth('sk_test_a') })).json()) as any;
+    const orgA = orgs.data.find((o: any) => o.name === 'Org A');
+
+    const listRes = await fetch(`${emulator.url}/organizations/${orgA.id}/api_keys`, { headers: auth('sk_test_a') });
+    const list = (await listRes.json()) as any;
+    const names = list.data.map((k: any) => k.name);
+    expect(names).toContain('A Key');
+    expect(names).not.toContain('B Key');
+  });
+
+  it('does not leave the well-known default key authorized when array-form keys are seeded', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        apiKeys: [{ name: 'Only Key', organization: 'Acme Corp', value: 'sk_test_only' }],
+      },
+    });
+
+    // The seeded key is the primary, not sk_test_default.
+    expect(emulator.apiKey).toBe('sk_test_only');
+    // The well-known default does not authenticate.
+    expect((await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_default') })).status).toBe(
+      401,
+    );
+    // The seeded key does.
+    expect((await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_only') })).status).toBe(200);
   });
 
   it('throws when a seeded m2m application references an unknown organization', async () => {
@@ -162,7 +210,8 @@ describe('Seeding M2M applications and API keys', () => {
     });
     expect(((await validateRes.json()) as any).valid).toBe(false);
 
-    const listRes = await fetch(`${emulator.url}/organizations/org/api_keys`, { headers: auth('sk_test_live2') });
+    const oid = await firstOrgId('sk_test_live2');
+    const listRes = await fetch(`${emulator.url}/organizations/${oid}/api_keys`, { headers: auth('sk_test_live2') });
     const list = (await listRes.json()) as any;
     expect(list.data.find((k: any) => k.name === 'Expired Key')).toBeDefined();
   });
@@ -179,7 +228,8 @@ describe('Seeding M2M applications and API keys', () => {
     // It authenticates before deletion.
     expect((await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_doomed') })).status).toBe(200);
 
-    const listRes = await fetch(`${emulator.url}/organizations/org/api_keys`, { headers: auth('sk_test_doomed') });
+    const oid = await firstOrgId('sk_test_doomed');
+    const listRes = await fetch(`${emulator.url}/organizations/${oid}/api_keys`, { headers: auth('sk_test_doomed') });
     const record = ((await listRes.json()) as any).data.find((k: any) => k.name === 'Doomed Key');
     const delRes = await fetch(`${emulator.url}/api_keys/${record.id}`, {
       method: 'DELETE',

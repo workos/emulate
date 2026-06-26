@@ -42,6 +42,37 @@ describe('API Keys routes', () => {
     expect((await json(res)).valid).toBe(false);
   });
 
+  it('enforces allow-list key expiry for both auth and validation', async () => {
+    const expiredApp = createServer(workosPlugin, {
+      port: 0,
+      baseUrl: 'http://localhost:0',
+      apiKeys: {
+        sk_test_expired: { environment: 'test', expiresAt: '2000-01-01T00:00:00.000Z' },
+        sk_test_future: { environment: 'test', expiresAt: '2999-01-01T00:00:00.000Z' },
+      },
+    }).app;
+
+    const hdr = (k: string) => ({ Authorization: `Bearer ${k}`, 'Content-Type': 'application/json' });
+
+    // Auth middleware rejects the expired key but allows the not-yet-expired one.
+    expect((await expiredApp.request('/connect/applications', { headers: hdr('sk_test_expired') })).status).toBe(401);
+    expect((await expiredApp.request('/connect/applications', { headers: hdr('sk_test_future') })).status).toBe(200);
+
+    // Validation agrees with auth.
+    const v = async (k: string) =>
+      (
+        (await (
+          await expiredApp.request('/api_keys/validations', {
+            method: 'POST',
+            headers: hdr('sk_test_future'),
+            body: JSON.stringify({ key: k }),
+          })
+        ).json()) as any
+      ).valid;
+    expect(await v('sk_test_expired')).toBe(false);
+    expect(await v('sk_test_future')).toBe(true);
+  });
+
   const insertKey = (ws: ReturnType<typeof getWorkOSStore>, name: string, key: string) =>
     ws.apiKeyRecords.insert({
       object: 'api_key',

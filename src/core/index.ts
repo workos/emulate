@@ -27,7 +27,14 @@ export {
   forbidden,
   parseJsonBody,
 } from './middleware/error-handler.js';
-export { authMiddleware, type WorkOSAppEnv, type WorkOSAuthContext, type ApiKeyMap } from './middleware/auth.js';
+export {
+  authMiddleware,
+  isApiKeyEntryExpired,
+  type WorkOSAppEnv,
+  type WorkOSAuthContext,
+  type ApiKeyMap,
+  type ApiKeyEntry,
+} from './middleware/auth.js';
 export {
   type ErrorHook,
   type ErrorHookInput,

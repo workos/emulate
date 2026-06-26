@@ -34,6 +34,20 @@ function oauthError(c: Context, status: 400 | 401, error: string, description: s
 }
 
 /**
+ * Decode a Basic-auth credential component. RFC 6749 §2.3.1 form-urlencodes the
+ * client_id/secret before base64, but many clients send them literally; a literal `%`
+ * makes decodeURIComponent throw. Decode when valid, otherwise use the raw value so a
+ * pinned secret containing `%` yields invalid_client rather than a 500.
+ */
+function formDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
  * Read client credentials and grant params from the request. Supports both the
  * form-encoded body services typically send and a JSON body, plus HTTP Basic auth
  * for the client credentials (RFC 6749 §2.3.1) as a fallback when they are not in
@@ -65,8 +79,8 @@ async function readTokenParams(c: Context): Promise<TokenParams> {
     const decoded = Buffer.from(authHeader.replace(/^basic\s+/i, '').trim(), 'base64').toString('utf-8');
     const sep = decoded.indexOf(':');
     if (sep >= 0) {
-      clientId = clientId || decodeURIComponent(decoded.slice(0, sep));
-      clientSecret = clientSecret || decodeURIComponent(decoded.slice(sep + 1));
+      clientId = clientId || formDecode(decoded.slice(0, sep));
+      clientSecret = clientSecret || formDecode(decoded.slice(sep + 1));
     }
   }
 
@@ -110,7 +124,9 @@ export function oauthRoutes(ctx: RouteContext): void {
     // Grant the requested scopes, defaulting to all of the application's scopes. A
     // request may narrow to a subset (space-delimited, per RFC 6749 §3.3); requesting
     // a scope the application does not have is rejected so authz logic can be tested.
-    const appScopes = application.scopes ?? [];
+    // Guard against a malformed (non-array) stored scopes value so a request never
+    // substring-matches a scope string or hits a .join on a non-array.
+    const appScopes = Array.isArray(application.scopes) ? application.scopes : [];
     let granted = appScopes;
     if (scope && scope.trim().length > 0) {
       const requested = scope.trim().split(/\s+/);

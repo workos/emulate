@@ -62,7 +62,6 @@ import {
   formatApiKeyRecord,
   formatFeatureFlag,
   generateClientId,
-  isExpired,
 } from './helpers.js';
 import type { WorkOSConnectionType, PipeProvider, PipeConnectionStatus, WorkOSApiKeyOwner } from './entities.js';
 
@@ -467,11 +466,10 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
 
       // Register the value in the shared auth allow-list (the same object the auth
       // middleware holds by reference) so the seeded key authenticates real requests.
-      // An already-expired key is created as a resource but not registered, so it does
-      // not authenticate — matching production, where an expired key is rejected.
-      if (!expiresAt || !isExpired(expiresAt)) {
-        authMap[value] = { environment };
-      }
+      // The expiry travels with the entry; the middleware (and validations) reject the
+      // key once it is past, so both an already-expired key and one that lapses later
+      // stop authenticating — matching production.
+      authMap[value] = { environment, expiresAt };
     }
     store.setData(STORE_KEYS.apiKeyMap, authMap);
   }

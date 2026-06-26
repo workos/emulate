@@ -68,11 +68,15 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   const baseUrl = `http://localhost:${port}`;
 
   // `apiKeys` may be the legacy auth allow-list map or an array of API key resources.
-  // The array form is seeded into the allow-list later (see seedFromConfig), so here we
-  // only honor the map form and otherwise fall back to the default key.
+  // - map form: use it as the allow-list.
+  // - array form: start empty; seedFromConfig adds those keys into this same map. We must
+  //   NOT seed the well-known `sk_test_default` here, or it would authenticate protected
+  //   routes (and surface as `emulator.apiKey`) even when the user pinned their own keys.
+  // - neither: fall back to the default convenience key.
   const seedApiKeys = options.seed?.apiKeys;
-  const apiKeys: ApiKeyMap =
-    seedApiKeys && !Array.isArray(seedApiKeys) ? seedApiKeys : { sk_test_default: { environment: 'test' } };
+  const apiKeys: ApiKeyMap = Array.isArray(seedApiKeys)
+    ? {}
+    : (seedApiKeys ?? { sk_test_default: { environment: 'test' } });
   // The initial allow-list, before array-form keys are seeded into it. reset() restores
   // the captured `apiKeys` object to this state (see below).
   const initialApiKeys: ApiKeyMap = { ...apiKeys };

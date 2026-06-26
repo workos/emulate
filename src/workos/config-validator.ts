@@ -289,6 +289,13 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: appConfig.organization,
           });
         }
+        if (appConfig.scopes !== undefined && !Array.isArray(appConfig.scopes)) {
+          errors.push({
+            path: `connectApplications[${index}].scopes`,
+            message: 'scopes must be an array of strings if provided',
+            value: appConfig.scopes,
+          });
+        }
       });
     }
   }

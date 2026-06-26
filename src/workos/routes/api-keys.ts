@@ -1,4 +1,4 @@
-import { type RouteContext, notFound, parseJsonBody, parseListParams } from '../../core/index.js';
+import { type RouteContext, notFound, parseJsonBody, parseListParams, isApiKeyEntryExpired } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatApiKeyRecord, formatListResponse } from '../helpers.js';
 import type { ApiKeyMap } from '../../core/index.js';
@@ -13,7 +13,10 @@ export function apiKeyRoutes(ctx: RouteContext): void {
     const body = await parseJsonBody(c);
     const key = body.key as string | undefined;
     const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {};
-    const valid = !!key && key in apiKeyMap;
+    const entry = key ? apiKeyMap[key] : undefined;
+    // A key is valid only if it is in the allow-list and not past its expiry — the same
+    // test the auth middleware applies, so validation and real-request auth agree.
+    const valid = !!entry && !isApiKeyEntryExpired(entry);
     return c.json({ valid });
   });
 
@@ -29,11 +32,13 @@ export function apiKeyRoutes(ctx: RouteContext): void {
     return c.body(null, 204);
   });
 
-  // List API keys for an organization
+  // List API keys for an organization — scoped to the path organization so one org's
+  // keys never leak into another org's listing.
   app.get('/organizations/:orgId/api_keys', (c) => {
+    const orgId = c.req.param('orgId');
     const url = new URL(c.req.url);
     const params = parseListParams(url);
-    const result = ws.apiKeyRecords.list({ ...params });
+    const result = ws.apiKeyRecords.list({ ...params, filter: (k) => k.owner.id === orgId });
     return c.json(formatListResponse(result, formatApiKeyRecord));
   });
 }
