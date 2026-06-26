@@ -155,6 +155,12 @@ export interface WorkOSSeedConnectApplication {
   description?: string;
   /** OAuth scopes granted to the application. */
   scopes?: string[];
+  /**
+   * The `aud` claim minted into this app's m2m tokens. Defaults to the client_id.
+   * Pin it to match what your real WorkOS environment emits, so a JWKS consumer that
+   * validates `aud` accepts emulator tokens unchanged.
+   */
+  audience?: string;
   /** Pinned client_id. Generated (`client_...`) if omitted. */
   client_id?: string;
   /**
@@ -415,6 +421,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         application_type: type,
         organization_id: org?.id ?? null,
         scopes: appConfig.scopes ?? [],
+        audience: appConfig.audience ?? null,
         redirect_uris: appConfig.redirect_uris ?? [],
         client_id: appConfig.client_id ?? generateClientId(),
         logo_url: null,

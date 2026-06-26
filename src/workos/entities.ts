@@ -357,6 +357,8 @@ export interface WorkOSConnectApplication extends Entity {
   /** Required for m2m applications; the organization the app belongs to. */
   organization_id: string | null;
   scopes: string[];
+  /** The `aud` claim minted into m2m tokens. Falls back to client_id when null. */
+  audience: string | null;
   redirect_uris: string[];
   client_id: string;
   logo_url: string | null;

@@ -142,12 +142,13 @@ export function oauthRoutes(ctx: RouteContext): void {
       granted = requested;
     }
 
-    // The token's tenant is always the application's stored organization — never
-    // caller-supplied — so a client can't mint a token for an org it isn't tied to.
+    // Both the audience and tenant come from the stored application, never the caller,
+    // so a client can't mint a token for an arbitrary aud or an org it isn't tied to.
+    // aud defaults to the client_id; pin `audience` on the app to match production.
     const accessToken = jwt.sign(
       {
         sub: clientId,
-        aud: clientId,
+        aud: application.audience ?? clientId,
         org_id: application.organization_id ?? undefined,
         scp: granted,
       },

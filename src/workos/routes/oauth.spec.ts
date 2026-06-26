@@ -205,6 +205,33 @@ describe('OAuth M2M token routes', () => {
     expect(body.keys[0].use).toBe('sig');
   });
 
+  it('mints the configured audience as the aud claim when the app pins one', async () => {
+    const ws = getWorkOSStore(store);
+    const org = ws.organizations.findOneBy('name', 'Acme')!;
+    const appRec = ws.connectApplications.insert({
+      object: 'connect_application',
+      name: 'Audience Svc',
+      description: null,
+      application_type: 'm2m',
+      organization_id: org.id,
+      scopes: ['x:read'],
+      audience: 'https://api.acme.test',
+      redirect_uris: [],
+      client_id: 'client_aud',
+      logo_url: null,
+    });
+    ws.clientSecrets.insert({
+      object: 'client_secret',
+      application_id: appRec.id,
+      value: 'secret_aud',
+      last_four: 'aud',
+    });
+
+    const res = await form({ grant_type: 'client_credentials', client_id: 'client_aud', client_secret: 'secret_aud' });
+    expect(res.status).toBe(200);
+    expect(jwt.verify((await json(res)).access_token).aud).toBe('https://api.acme.test');
+  });
+
   it('handles a client secret containing a percent sign via Basic auth without erroring', async () => {
     const ws = getWorkOSStore(store);
     const org = ws.organizations.findOneBy('name', 'Acme')!;
@@ -215,6 +242,7 @@ describe('OAuth M2M token routes', () => {
       application_type: 'm2m',
       organization_id: org.id,
       scopes: ['x:read'],
+      audience: null,
       redirect_uris: [],
       client_id: 'client_percent',
       logo_url: null,
@@ -248,6 +276,7 @@ describe('OAuth M2M token routes', () => {
       organization_id: org.id,
       // Simulate a value persisted through an unguarded path.
       scopes: 'admin:all' as unknown as string[],
+      audience: null,
       redirect_uris: [],
       client_id: 'client_malformed',
       logo_url: null,

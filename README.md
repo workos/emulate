@@ -190,6 +190,7 @@ connectApplications:
     scopes: [posts:read, posts:write]
     client_id: client_local_backend # optional; generated if omitted
     client_secret: secret_local_backend # optional; generated if omitted
+    audience: https://api.acme.example # optional; the token `aud` claim, defaults to client_id
 ```
 
 Each seeded application is provisioned with a client secret. Pin `client_secret` to bake a known
@@ -223,13 +224,16 @@ The `access_token` is an RS256 JWT signed with the same key the emulator publish
 `GET /sso/jwks/:client_id` (and `GET /oauth2/jwks`), so a consumer validating with JWKS — e.g.
 `jose` — verifies it with no emulator-specific shims. Its claims:
 
-| Claim    | Value                                                |
-| -------- | ---------------------------------------------------- |
-| `iss`    | the emulator base URL (e.g. `http://localhost:4100`) |
-| `aud`    | the requesting `client_id`                           |
-| `sub`    | the requesting `client_id`                           |
-| `scp`    | granted scopes (array)                               |
-| `org_id` | the application's owning organization                |
+| Claim    | Value                                                  |
+| -------- | ------------------------------------------------------ |
+| `iss`    | the emulator base URL (e.g. `http://localhost:4100`)   |
+| `aud`    | the app's `audience` if set, otherwise the `client_id` |
+| `sub`    | the requesting `client_id`                             |
+| `scp`    | granted scopes (array)                                 |
+| `org_id` | the application's owning organization                  |
+
+Set `audience` on the seeded application to match what your real WorkOS environment emits, so a
+consumer that validates the `aud` claim accepts emulator tokens unchanged.
 
 A request may narrow to a subset of the application's scopes via `-d scope="posts:read"`;
 requesting a scope the application does not have returns `400 invalid_scope`, so scope-based

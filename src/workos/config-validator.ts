@@ -299,6 +299,13 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: appConfig.scopes,
           });
         }
+        if (appConfig.audience !== undefined && typeof appConfig.audience !== 'string') {
+          errors.push({
+            path: `connectApplications[${index}].audience`,
+            message: 'audience must be a string if provided',
+            value: appConfig.audience,
+          });
+        }
       });
 
       // A client_id identifies exactly one application; duplicates make token exchange

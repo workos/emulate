@@ -60,6 +60,7 @@ export function connectRoutes(ctx: RouteContext): void {
       application_type: applicationType,
       organization_id: organizationId,
       scopes: (body.scopes as string[]) ?? [],
+      audience: (body.audience as string) ?? null,
       redirect_uris: (body.redirect_uris as string[]) ?? [],
       client_id: generateClientId(),
       logo_url: (body.logo_url as string) ?? null,

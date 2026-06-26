@@ -387,7 +387,7 @@ export function formatConnectApplication(a: WorkOSConnectApplication): Record<st
   };
 
   if (a.application_type === 'm2m') {
-    return { ...base, application_type: 'm2m', organization_id: a.organization_id };
+    return { ...base, application_type: 'm2m', organization_id: a.organization_id, audience: a.audience };
   }
 
   return {
