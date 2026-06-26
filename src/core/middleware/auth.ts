@@ -13,7 +13,23 @@ export type WorkOSAppEnv = {
   };
 };
 
-export type ApiKeyMap = Record<string, { environment: string }>;
+export interface ApiKeyEntry {
+  environment: string;
+  /** Expiry timestamp (ISO 8601). Omitted/null means the key never expires. */
+  expiresAt?: string | null;
+}
+
+export type ApiKeyMap = Record<string, ApiKeyEntry>;
+
+/**
+ * A key is expired when it has an expiry timestamp in the past. A malformed timestamp
+ * (NaN) is treated as expired — fail closed, so a bad value can't authenticate forever.
+ */
+export function isApiKeyEntryExpired(entry: ApiKeyEntry): boolean {
+  if (!entry.expiresAt) return false;
+  const expiresAt = new Date(entry.expiresAt).getTime();
+  return Number.isNaN(expiresAt) || expiresAt < Date.now();
+}
 
 export function authMiddleware(apiKeys: ApiKeyMap) {
   return async (c: Context, next: Next) => {
@@ -24,7 +40,9 @@ export function authMiddleware(apiKeys: ApiKeyMap) {
     if (!token.startsWith('sk_')) throw unauthorized();
 
     const keyInfo = apiKeys[token];
-    if (!keyInfo) throw unauthorized();
+    // Reject unknown keys and keys whose expiry has passed (checked live, so a key that
+    // expires after seeding stops authenticating once its timestamp elapses).
+    if (!keyInfo || isApiKeyEntryExpired(keyInfo)) throw unauthorized();
 
     c.set('auth', { environment: keyInfo.environment, apiKey: token } satisfies WorkOSAuthContext);
     await next();

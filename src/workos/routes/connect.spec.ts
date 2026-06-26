@@ -40,6 +40,52 @@ describe('Connect routes', () => {
     expect(res.status).toBe(422);
   });
 
+  it('rejects a non-array scopes value', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Bad Scopes', scopes: 'admin:all' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects scopes whose elements are not strings', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Bad Scope Els', scopes: [123, {}] }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects an m2m application without an organization_id', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'M2M App', application_type: 'm2m' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects an m2m application whose organization_id does not exist', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'M2M App', application_type: 'm2m', organization_id: 'org_does_not_exist' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('creates an m2m application for an existing organization', async () => {
+    const orgRes = await req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'M2M Org' }) });
+    const org = await json(orgRes);
+
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'M2M App', application_type: 'm2m', organization_id: org.id }),
+    });
+    expect(res.status).toBe(201);
+    const created = await json(res);
+    expect(created.application_type).toBe('m2m');
+    expect(created.organization_id).toBe(org.id);
+  });
+
   it('gets an application by id', async () => {
     const createRes = await req('/connect/applications', {
       method: 'POST',

@@ -6,6 +6,8 @@ export interface JWTPayload {
   org_id?: string;
   role?: string;
   permissions?: string[];
+  /** OAuth scopes granted to an M2M (client_credentials) token. */
+  scp?: string[];
   iss: string;
   aud: string;
   exp: number;

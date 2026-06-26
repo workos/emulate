@@ -173,6 +173,103 @@ permissions:
     name: Write Posts
 ```
 
+### Machine-to-Machine (M2M) Applications
+
+Seed M2M Connect Applications so a service has a known `client_id` / client secret pair on
+startup — ideal for `docker compose up` style local development where credentials must exist
+before any dashboard interaction.
+
+```yaml
+organizations:
+  - name: Acme Corp
+
+connectApplications:
+  - name: Backend Service
+    type: m2m # default; use `oauth` for an OAuth app
+    organization: Acme Corp # required for m2m; owning org, by name
+    scopes: [posts:read, posts:write]
+    client_id: client_local_backend # optional; generated if omitted
+    client_secret: secret_local_backend # optional; generated if omitted
+    audience: https://api.acme.example # optional; the token `aud` claim, defaults to client_id
+```
+
+Each seeded application is provisioned with a client secret. Pin `client_secret` to bake a known
+value into a service's environment; otherwise one is generated. The application is then available
+via `GET /connect/applications`.
+
+#### Token exchange (`client_credentials`)
+
+A service swaps its seeded `client_id` + `client_secret` for a scoped access token at
+`POST /oauth2/token`, exactly as in production:
+
+```bash
+curl -s http://localhost:4100/oauth2/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d grant_type=client_credentials \
+  -d client_id=client_local_backend \
+  -d client_secret=secret_local_backend
+# (client credentials may also be sent via HTTP Basic auth)
+```
+
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "posts:read posts:write"
+}
+```
+
+The `access_token` is an RS256 JWT signed with the same key the emulator publishes at
+`GET /sso/jwks/:client_id` (and `GET /oauth2/jwks`), so a consumer validating with JWKS — e.g.
+`jose` — verifies it with no emulator-specific shims. Its claims:
+
+| Claim    | Value                                                  |
+| -------- | ------------------------------------------------------ |
+| `iss`    | the emulator base URL (e.g. `http://localhost:4100`)   |
+| `aud`    | the app's `audience` if set, otherwise the `client_id` |
+| `sub`    | the requesting `client_id`                             |
+| `scp`    | granted scopes (array)                                 |
+| `org_id` | the application's owning organization                  |
+
+Set `audience` on the seeded application to match what your real WorkOS environment emits, so a
+consumer that validates the `aud` claim accepts emulator tokens unchanged.
+
+A request may narrow to a subset of the application's scopes via `-d scope="posts:read"`;
+requesting a scope the application does not have returns `400 invalid_scope`, so scope-based
+authorization can be exercised locally. Unknown credentials return `401 invalid_client`, and an
+`oauth`-type application returns `400 unauthorized_client`.
+
+### API Keys
+
+Seed organization- or user-owned API keys. Each seeded key is created as an `api_key` resource
+**and** registered in the auth allow-list, so the value authenticates requests to the emulator.
+
+```yaml
+organizations:
+  - name: Acme Corp
+
+apiKeys:
+  - name: CI Key
+    organization: Acme Corp # owner org, by name (or use `user_id`)
+    value: sk_test_ci_key # optional; must start with `sk_`; generated if omitted
+    permissions: [posts:read, posts:write]
+    # expires_at: 2030-01-01T00:00:00.000Z   # optional; never expires if omitted
+```
+
+```bash
+# The seeded value authenticates requests:
+curl http://localhost:4100/connect/applications -H "Authorization: Bearer sk_test_ci_key"
+```
+
+The `organization` (or the org supplied via `user_id`) must reference a seeded organization;
+an unresolved name fails fast at startup. A key seeded with an already-past `expires_at` is still
+created as a resource but does **not** authenticate, and deleting a key via `DELETE /api_keys/:id`
+stops it authenticating immediately — matching production.
+
+`apiKeys` also accepts the legacy auth allow-list map form (`{ sk_xxx: { environment } }`), which
+only registers values for authentication without creating resources.
+
 ## Testing Your Login Flow End-to-End
 
 The emulator implements the full [workos.com/docs](https://workos.com/docs) login story: every resource creation and authentication outcome fires a signed webhook, with event names and payload shapes generated from the WorkOS OpenAPI spec. You can run your app's entire login flow — hosted authorize, callback, token exchange, webhook handling — against the emulator without touching the real API.
