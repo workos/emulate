@@ -21,9 +21,14 @@ export interface ApiKeyEntry {
 
 export type ApiKeyMap = Record<string, ApiKeyEntry>;
 
-/** A key is expired when it has an expiry timestamp in the past. */
+/**
+ * A key is expired when it has an expiry timestamp in the past. A malformed timestamp
+ * (NaN) is treated as expired — fail closed, so a bad value can't authenticate forever.
+ */
 export function isApiKeyEntryExpired(entry: ApiKeyEntry): boolean {
-  return !!entry.expiresAt && new Date(entry.expiresAt).getTime() < Date.now();
+  if (!entry.expiresAt) return false;
+  const expiresAt = new Date(entry.expiresAt).getTime();
+  return Number.isNaN(expiresAt) || expiresAt < Date.now();
 }
 
 export function authMiddleware(apiKeys: ApiKeyMap) {

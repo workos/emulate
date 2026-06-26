@@ -48,6 +48,14 @@ describe('Connect routes', () => {
     expect(res.status).toBe(422);
   });
 
+  it('rejects scopes whose elements are not strings', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Bad Scope Els', scopes: [123, {}] }),
+    });
+    expect(res.status).toBe(422);
+  });
+
   it('rejects an m2m application without an organization_id', async () => {
     const res = await req('/connect/applications', {
       method: 'POST',

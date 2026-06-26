@@ -28,7 +28,10 @@ export function connectRoutes(ctx: RouteContext): void {
       throw validationError('name is required', [{ field: 'name', code: 'required' }]);
     }
 
-    if (body.scopes !== undefined && !Array.isArray(body.scopes)) {
+    if (
+      body.scopes !== undefined &&
+      (!Array.isArray(body.scopes) || !body.scopes.every((s) => typeof s === 'string'))
+    ) {
       throw validationError('scopes must be an array of strings', [{ field: 'scopes', code: 'invalid' }]);
     }
 

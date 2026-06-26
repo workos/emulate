@@ -73,6 +73,17 @@ describe('API Keys routes', () => {
     expect(await v('sk_test_future')).toBe(true);
   });
 
+  it('fails closed on a malformed expiry timestamp', async () => {
+    const badExpiryApp = createServer(workosPlugin, {
+      port: 0,
+      baseUrl: 'http://localhost:0',
+      apiKeys: { sk_test_badexp: { environment: 'test', expiresAt: '2024-13-99' } },
+    }).app;
+    const hdr = { Authorization: 'Bearer sk_test_badexp', 'Content-Type': 'application/json' };
+    // A NaN timestamp must be treated as expired, not as "never expires".
+    expect((await badExpiryApp.request('/connect/applications', { headers: hdr })).status).toBe(401);
+  });
+
   const insertKey = (ws: ReturnType<typeof getWorkOSStore>, name: string, key: string) =>
     ws.apiKeyRecords.insert({
       object: 'api_key',
