@@ -193,17 +193,20 @@ const KNOWN_EXTRA_FIELDS: Record<string, readonly string[]> = {
   role: ['is_default_role', 'organization_id', 'priority'],
 };
 
-/** Internal fields that must never appear in an API response, for any resource. */
-const SECRET_FIELDS = new Set<string>([
-  'password_hash',
-  'code',
-  'code_challenge',
-  'code_challenge_method',
-  'token',
-  'secret',
-  'value',
-  'key',
-]);
+/**
+ * Internal fields that must never appear in a response for the catalog
+ * resources (CASES) — these mirror the `INTERNAL_FIELDS` the format* helpers
+ * strip, so this guard proves the stripping actually happens.
+ *
+ * Scope note: this set deliberately omits auth-code/token field names
+ * (`code`, `token`, ...). Those belong to flow resources — email verification,
+ * magic auth, password reset, client secrets, API keys — whose formatters
+ * intentionally surface the value so a test harness can complete the flow
+ * without an out-of-band channel. The real API hides them; an emulator must
+ * not, which is exactly why those formatters are not in this catalog. Listing
+ * those names here would imply a coverage this loop does not provide.
+ */
+const SECRET_FIELDS = new Set<string>(['password_hash', 'code_challenge', 'code_challenge_method']);
 
 describe('response shape conformance (format* helpers vs OpenAPI spec)', () => {
   it('covers exactly the resources in the generated requirements catalog', () => {

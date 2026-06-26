@@ -58,7 +58,11 @@ function getSchemas(spec: EventSchemaNode): Record<string, EventSchemaNode> {
 /**
  * Resolve a schema node to a plain object schema: follows $ref and merges allOf
  * members (properties unioned, required concatenated). oneOf/anyOf cannot be
- * resolved to a single shape and are left as-is. `seen` guards ref cycles.
+ * resolved to a single shape and are left as-is at the top level (extractShape
+ * then fails loudly on the resulting empty property set). An allOf member that
+ * resolves to a oneOf/anyOf is rejected here rather than silently contributing
+ * no fields — otherwise the generated catalog would understate the spec shape.
+ * `seen` guards ref cycles.
  */
 export function resolveSchema(
   node: EventSchemaNode,
@@ -80,6 +84,11 @@ export function resolveSchema(
     const merged: EventSchemaNode = { type: 'object', properties: {}, required: [] };
     for (const sub of allOf) {
       const resolved = resolveSchema(sub, spec, seen);
+      if (resolved.oneOf || resolved.anyOf) {
+        throw new Error(
+          'gen-shapes: allOf member resolved to a oneOf/anyOf — cannot merge into a single object shape without dropping fields',
+        );
+      }
       Object.assign(merged.properties!, resolved.properties ?? {});
       if (resolved.required) merged.required!.push(...resolved.required);
     }

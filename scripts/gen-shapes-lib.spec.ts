@@ -44,6 +44,21 @@ describe('resolveSchema', () => {
     const s = spec({ Cycle: { $ref: '#/components/schemas/Cycle' } });
     expect(() => resolveSchema(schema(s, 'Cycle'), s)).not.toThrow();
   });
+
+  it('throws when an allOf member resolves to a oneOf/anyOf instead of silently dropping its fields', () => {
+    const s = spec({
+      Variant: {
+        oneOf: [
+          { type: 'object', properties: { a: { type: 'string' } } },
+          { type: 'object', properties: { b: { type: 'string' } } },
+        ],
+      } as unknown as EventSchemaNode,
+      Thing: {
+        allOf: [{ type: 'object', properties: { id: { type: 'string' } } }, { $ref: '#/components/schemas/Variant' }],
+      } as unknown as EventSchemaNode,
+    });
+    expect(() => resolveSchema(schema(s, 'Thing'), s)).toThrow(/oneOf\/anyOf/);
+  });
 });
 
 describe('extractShape', () => {
