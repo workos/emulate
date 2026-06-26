@@ -45,6 +45,13 @@ async function main(): Promise<void> {
   const dryRun = flags.includes('--dry-run');
   const outIdx = args.indexOf('--out');
   const outFile = outIdx !== -1 ? args[outIdx + 1] : 'src/workos/generated/response-shapes.ts';
+  // A bare `--out` (no value, or followed by another flag) would otherwise write
+  // to a file literally named after the next flag — fail instead of silently
+  // leaving the committed generated file stale.
+  if (outIdx !== -1 && (!outFile || outFile.startsWith('--'))) {
+    console.error('Missing output file after --out');
+    process.exit(1);
+  }
 
   const resolvedSpec = resolve(specPath);
   if (!existsSync(resolvedSpec)) {
