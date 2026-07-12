@@ -44,7 +44,15 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
     '/user_management/sessions/logout',
   ]);
 
-  const PUBLIC_PATH_PREFIXES = ['/sso/', '/user_management/sessions/jwks/', '/data-integrations/', '/_emulate/'];
+  // /oauth2/* is the M2M authorization server: the token endpoint authenticates by
+  // client credentials and the JWKS is public, so neither needs an API key.
+  const PUBLIC_PATH_PREFIXES = [
+    '/sso/',
+    '/oauth2/',
+    '/user_management/sessions/jwks/',
+    '/data-integrations/',
+    '/_emulate/',
+  ];
 
   app.use('*', async (c, next) => {
     const path = new URL(c.req.url).pathname;

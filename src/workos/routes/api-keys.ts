@@ -1,4 +1,4 @@
-import { type RouteContext, notFound, parseJsonBody, parseListParams } from '../../core/index.js';
+import { type RouteContext, notFound, parseJsonBody, parseListParams, isApiKeyEntryExpired } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatApiKeyRecord, formatListResponse } from '../helpers.js';
 import type { ApiKeyMap } from '../../core/index.js';
@@ -13,7 +13,10 @@ export function apiKeyRoutes(ctx: RouteContext): void {
     const body = await parseJsonBody(c);
     const key = body.key as string | undefined;
     const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {};
-    const valid = !!key && key in apiKeyMap;
+    const entry = key ? apiKeyMap[key] : undefined;
+    // A key is valid only if it is in the allow-list and not past its expiry — the same
+    // test the auth middleware applies, so validation and real-request auth agree.
+    const valid = !!entry && !isApiKeyEntryExpired(entry);
     return c.json({ valid });
   });
 
@@ -22,14 +25,24 @@ export function apiKeyRoutes(ctx: RouteContext): void {
     const record = ws.apiKeyRecords.get(c.req.param('id'));
     if (!record) throw notFound('ApiKey');
     ws.apiKeyRecords.delete(record.id);
+    // Also drop the value from the auth allow-list (the same object the middleware holds
+    // by reference) so a deleted key stops authenticating, not just stops resolving.
+    const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
+    if (apiKeyMap) delete apiKeyMap[record.key];
     return c.body(null, 204);
   });
 
-  // List API keys for an organization
+  // List API keys for an organization — scoped to the path organization so one org's
+  // keys never leak into another org's listing. A key belongs to the org when it is
+  // org-owned (owner.id) or user-owned within that org (owner.organization_id).
   app.get('/organizations/:orgId/api_keys', (c) => {
+    const orgId = c.req.param('orgId');
     const url = new URL(c.req.url);
     const params = parseListParams(url);
-    const result = ws.apiKeyRecords.list({ ...params });
+    const result = ws.apiKeyRecords.list({
+      ...params,
+      filter: (k) => (k.owner.type === 'organization' ? k.owner.id : k.owner.organization_id) === orgId,
+    });
     return c.json(formatListResponse(result, formatApiKeyRecord));
   });
 }

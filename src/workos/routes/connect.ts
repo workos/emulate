@@ -1,9 +1,9 @@
 import { type RouteContext, notFound, parseJsonBody, validationError, parseListParams } from '../../core/index.js';
-import { generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatConnectApplication,
   formatClientSecret,
+  generateClientId,
   generateVerificationToken,
   formatListResponse,
 } from '../helpers.js';
@@ -28,11 +28,41 @@ export function connectRoutes(ctx: RouteContext): void {
       throw validationError('name is required', [{ field: 'name', code: 'required' }]);
     }
 
+    if (
+      body.scopes !== undefined &&
+      (!Array.isArray(body.scopes) || !body.scopes.every((s) => typeof s === 'string'))
+    ) {
+      throw validationError('scopes must be an array of strings', [{ field: 'scopes', code: 'invalid' }]);
+    }
+
+    const applicationType = body.application_type === 'm2m' ? 'm2m' : 'oauth';
+    const organizationId = (body.organization_id as string) ?? null;
+    // m2m applications are owned by an organization; reject a null or dangling owner so
+    // the emulator never returns an m2m app (or later signs a token) for an org that
+    // doesn't exist.
+    if (applicationType === 'm2m') {
+      if (!organizationId) {
+        throw validationError('organization_id is required for m2m applications', [
+          { field: 'organization_id', code: 'required' },
+        ]);
+      }
+      if (!ws.organizations.get(organizationId)) {
+        throw validationError('organization_id must reference an existing organization', [
+          { field: 'organization_id', code: 'invalid' },
+        ]);
+      }
+    }
+
     const application = ws.connectApplications.insert({
       object: 'connect_application',
       name: name.trim(),
+      description: (body.description as string) ?? null,
+      application_type: applicationType,
+      organization_id: organizationId,
+      scopes: (body.scopes as string[]) ?? [],
+      audience: (body.audience as string) ?? null,
       redirect_uris: (body.redirect_uris as string[]) ?? [],
-      client_id: `client_${generateId('connect')}`,
+      client_id: generateClientId(),
       logo_url: (body.logo_url as string) ?? null,
     });
 
