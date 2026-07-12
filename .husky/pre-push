@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+
+# Mirror the CI lint workflow so a push never fails checks it could have caught locally.
+npm run lint
+npm run fmt:check
