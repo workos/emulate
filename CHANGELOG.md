@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0](https://github.com/workos/emulate/compare/v0.1.0...v0.2.0) (2026-07-12)
+
+
+### Features
+
+* add response-shape conformance codegen and test ([#9](https://github.com/workos/emulate/issues/9)) ([358773b](https://github.com/workos/emulate/commit/358773b8626b35f0191653e3a4341ebd652b37fe))
+* provide an end-to-end login flow story with spec-accurate webhooks ([#2](https://github.com/workos/emulate/issues/2)) ([fa39dfe](https://github.com/workos/emulate/commit/fa39dfe3b798b2916cffb339d44001b8926d7a13))
+* seed M2M apps and API keys ([#10](https://github.com/workos/emulate/issues/10)) ([f761419](https://github.com/workos/emulate/commit/f76141957c88ab64f138d44d87c1b204a262c921))
+
 ## [0.1.0](https://github.com/workos/emulate/compare/v0.0.1...v0.1.0) (2026-06-01)
 
 
