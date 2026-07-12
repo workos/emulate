@@ -75,6 +75,7 @@
     "fmt:check": "oxfmt --check",
     "gen:routes": "tsx scripts/gen-routes.ts",
     "gen:events": "tsx scripts/gen-events.ts",
+    "gen:shapes": "tsx scripts/gen-shapes.ts",
     "check:coverage": "tsx scripts/check-coverage.ts",
     "prepare": "husky"
   },
