@@ -321,6 +321,12 @@ describe('Seed config validation for M2M apps and API keys', () => {
     ).toBeDefined();
   });
 
+  it('rejects two organizations with the same name', () => {
+    expect(
+      findError({ organizations: [{ name: 'Acme' }, { name: 'Acme' }] }, 'organizations[1].name'),
+    ).toBeDefined();
+  });
+
   it('rejects an api key with neither organization nor user_id', () => {
     expect(findError({ apiKeys: [{ name: 'Orphan' }] }, 'apiKeys[0].organization')).toBeDefined();
   });

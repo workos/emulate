@@ -96,6 +96,21 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           }
         }
       });
+
+      // Organization name is the lookup key for connections, connectApplications, and
+      // apiKeys seeds; duplicates would silently bind those to the first match.
+      const seenOrgNames = new Set<string>();
+      config.organizations.forEach((org, index) => {
+        if (!org.name || typeof org.name !== 'string') return;
+        if (seenOrgNames.has(org.name)) {
+          errors.push({
+            path: `organizations[${index}].name`,
+            message: 'name must be unique across organizations',
+            value: org.name,
+          });
+        }
+        seenOrgNames.add(org.name);
+      });
     }
   }
 
