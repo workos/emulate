@@ -165,6 +165,35 @@ export function resolveResponseAuthMethod(
   }
 }
 
+/** Maps a session `auth_method` (snake_case) back to a spec-valid response authentication_method. */
+const SESSION_AUTH_METHOD_RESPONSE_VALUES: Record<string, string> = {
+  password: 'Password',
+  magic_code: 'MagicAuth',
+  sso: 'SSO',
+  passkey: 'Passkey',
+  cross_app_auth: 'CrossAppAuth',
+  external_auth: 'ExternalAuth',
+  impersonation: 'Impersonation',
+  migrated_session: 'MigratedSession',
+};
+
+/**
+ * Resolve the response authentication_method for a refresh_token grant, which reuses an existing
+ * session rather than authenticating fresh. Real WorkOS echoes the session's *original* method, so
+ * we recover it from the reused session's stored `auth_method` (snake_case) instead of the grant's
+ * hard-coded 'OAuth' category — a password login that refreshes truthfully reports 'Password'.
+ *
+ * Generic 'oauth' has no provider recorded on the session, so it falls back to the user's
+ * oauth_provider (else omitted); 'unknown' and any unmapped value are omitted rather than guessed.
+ */
+export function resolveSessionResponseAuthMethod(
+  sessionAuthMethod: string,
+  opts?: { oauthProvider?: string | null },
+): string | undefined {
+  if (sessionAuthMethod === 'oauth') return opts?.oauthProvider ?? undefined;
+  return SESSION_AUTH_METHOD_RESPONSE_VALUES[sessionAuthMethod];
+}
+
 /** authentication.* event names per method, resolved from the spec-generated catalog. */
 export const AUTH_EVENTS: Record<string, { succeeded: WorkOSEventName; failed: WorkOSEventName }> = {
   OAuth: { succeeded: EVENTS.authenticationOauthSucceeded, failed: EVENTS.authenticationOauthFailed },
