@@ -41,6 +41,13 @@ export interface WorkOSUser extends Entity {
   locale: string | null;
   password_hash: string | null;
   impersonator: { email: string; reason: string } | null;
+  /**
+   * The OAuth provider this user authenticates with, as a spec-valid
+   * AuthenticateResponse.authentication_method value (e.g. 'GoogleOAuth', 'MicrosoftOAuth').
+   * Reported as the authentication_method for OAuth-based grants; when unset the emulator omits
+   * the field rather than inventing a provider. Internal-only — excluded from the user response.
+   */
+  oauth_provider?: string | null;
 }
 
 export interface WorkOSSession extends Entity {

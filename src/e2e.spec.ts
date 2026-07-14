@@ -194,7 +194,10 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
     expect(auth.access_token).toBeTruthy();
     expect(auth.refresh_token).toBeTruthy();
     expect(auth.user.email).toBe(email);
-    expect(auth.authentication_method).toBe('OAuth');
+    // The hosted flow carries no provider info and this user has no oauth_provider configured, so
+    // the emulator omits authentication_method rather than inventing one. (The oauth *event* and
+    // session auth_method below still assert the generic 'oauth' — those enums allow it.)
+    expect(auth.authentication_method).toBeUndefined();
 
     // Step 3: webhooks for the new session and the authentication outcome
     const sessionWebhook = await waitForWebhook('session.created', { after: cursor });

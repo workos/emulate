@@ -94,7 +94,7 @@ export function formatMembership(m: WorkOSOrganizationMembership): Record<string
   return formatEntity(m);
 }
 
-const USER_EXCLUDE = new Set([...INTERNAL_FIELDS, 'impersonator']);
+const USER_EXCLUDE = new Set([...INTERNAL_FIELDS, 'impersonator', 'oauth_provider']);
 
 export function formatUser(user: WorkOSUser): Record<string, unknown> {
   return formatEntity(user, { exclude: USER_EXCLUDE });
@@ -132,6 +132,38 @@ export const AUTH_METHOD_SESSION_VALUES: Record<string, string> = {
   MFA: 'unknown',
   EmailVerification: 'unknown',
 };
+
+/**
+ * Resolve a spec-valid AuthenticateResponse.authentication_method from the emulator's internal
+ * method category, or `undefined` to omit the field when no truthful value is available.
+ *
+ * The response enum is PascalCase and provider-specific: it has no bare 'OAuth', no 'MFA', no
+ * 'EmailVerification', and — unlike the session's auth_method — no 'unknown'. So when the
+ * emulator does not actually know the concrete method, it omits the field (which is nullable in
+ * the SDKs) rather than inventing a provider:
+ *   - 'OAuth' resolves to the user's explicitly configured oauth_provider, else omitted. The
+ *     hosted authorize flow carries no provider information, so there is nothing truthful to
+ *     default to — a fixed provider would just be a fabricated guess.
+ *   - 'MFA' and 'EmailVerification' are verification gates, not methods. The real method is
+ *     whatever initiated the flow; callers pass it via the primary method when known (an MFA
+ *     challenge records the primary factor on the pending-auth token). When it isn't known, the
+ *     field is omitted rather than guessed.
+ * Everything already spec-valid (Password, MagicAuth, SSO, Passkey, GoogleOAuth, …) passes through.
+ */
+export function resolveResponseAuthMethod(
+  method: string,
+  opts?: { oauthProvider?: string | null },
+): string | undefined {
+  switch (method) {
+    case 'OAuth':
+      return opts?.oauthProvider ?? undefined;
+    case 'MFA':
+    case 'EmailVerification':
+      return undefined;
+    default:
+      return method;
+  }
+}
 
 /** authentication.* event names per method, resolved from the spec-generated catalog. */
 export const AUTH_EVENTS: Record<string, { succeeded: WorkOSEventName; failed: WorkOSEventName }> = {

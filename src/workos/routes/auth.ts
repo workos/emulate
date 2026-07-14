@@ -10,6 +10,7 @@ import {
   assertLocalRedirectUri,
   sealSession,
   AUTH_METHOD_SESSION_VALUES,
+  resolveResponseAuthMethod,
   emitAuthenticationEvent,
   generateCode,
   formatAuthChallenge,
@@ -594,7 +595,13 @@ export function authRoutes(ctx: RouteContext): void {
       organization_id: organizationId,
       access_token: accessToken,
       refresh_token: newRefreshToken.token,
-      authentication_method: authMethod,
+      // The response enum is PascalCase/provider-specific — the internal 'OAuth'/'MFA'/
+      // 'EmailVerification' categories aren't valid here. Resolve to a spec-valid value, or
+      // undefined (key omitted, like impersonator below) when the concrete method is unknown
+      // rather than inventing a provider. Mirrors the session's sessionAuthMethod precedence.
+      authentication_method: resolveResponseAuthMethod(sessionAuthMethod ?? authMethod, {
+        oauthProvider: updatedUser.oauth_provider,
+      }),
       sealed_session: sealedSession,
       impersonator: updatedUser.impersonator ?? undefined,
     });

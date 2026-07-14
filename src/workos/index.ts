@@ -89,6 +89,13 @@ export interface WorkOSSeedUser {
   external_id?: string;
   metadata?: Record<string, string>;
   impersonator?: { email: string; reason: string };
+  /**
+   * The OAuth provider this user authenticates with, reported as the authentication_method for
+   * OAuth-based grants (authorization_code, refresh_token, device_code). Must be a spec-valid
+   * value such as 'GoogleOAuth' or 'MicrosoftOAuth'. When omitted the emulator leaves
+   * authentication_method off the response rather than guessing a provider.
+   */
+  oauth_provider?: string;
 }
 
 export interface WorkOSSeedConnection {
@@ -237,6 +244,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         locale: null,
         password_hash: userConfig.password ? hashPassword(userConfig.password) : null,
         impersonator: userConfig.impersonator ?? null,
+        oauth_provider: userConfig.oauth_provider ?? null,
       });
     }
   }
