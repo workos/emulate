@@ -241,6 +241,7 @@ describe('Auth routes', () => {
     const authBody = await json(authRes);
     const oldRefresh = authBody.refresh_token;
     expect(oldRefresh).toBeDefined();
+    expect(authBody.authentication_method).toBe('Password');
 
     // Use refresh token
     const refreshRes = await app.request('/user_management/authenticate', {
@@ -253,6 +254,9 @@ describe('Auth routes', () => {
     expect(refreshBody.access_token).toBeDefined();
     expect(refreshBody.refresh_token).toBeDefined();
     expect(refreshBody.refresh_token).not.toBe(oldRefresh);
+    // A refresh reuses the session, so it echoes the original method ('Password') rather than the
+    // grant's internal 'OAuth' category — which would otherwise drop the field for this user.
+    expect(refreshBody.authentication_method).toBe('Password');
 
     // Old refresh token should be invalidated (rotation)
     const retryRes = await app.request('/user_management/authenticate', {
