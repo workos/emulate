@@ -173,6 +173,19 @@ permissions:
     name: Write Posts
 ```
 
+For OAuth-based logins (`authorization_code`, `refresh_token`, `device_code`), the authenticate
+response omits `authentication_method` by default: the hosted authorize flow carries no provider
+information, and the spec's `authentication_method` enum has no generic `OAuth` value — only
+provider-specific ones like `GoogleOAuth`. Set `oauth_provider` on a seeded user to have the
+response report a concrete, spec-valid provider. (Password, Magic Auth, and SSO logins already
+report their own method and need no configuration.)
+
+```yaml
+users:
+  - email: alice@acme.com
+    oauth_provider: GoogleOAuth # reported as authentication_method for this user's OAuth logins
+```
+
 ### Machine-to-Machine (M2M) Applications
 
 Seed M2M Connect Applications so a service has a known `client_id` / client secret pair on

@@ -125,7 +125,46 @@ describe('Auth routes', () => {
     expect(tokenRes.status).toBe(200);
     const body = await json(tokenRes);
     expect(body.access_token).toBeDefined();
-    expect(body.authentication_method).toBe('OAuth');
+    // authorization_code is an OAuth grant. The hosted flow carries no provider info, so with no
+    // oauth_provider configured on the user the emulator omits authentication_method rather than
+    // emitting the (non-spec) internal 'OAuth' category or inventing a provider.
+    expect(body.authentication_method).toBeUndefined();
+  });
+
+  it('authorization_code grant reports the user configured oauth_provider', async () => {
+    const ws = getWorkOSStore(store);
+    ws.users.insert({
+      object: 'user',
+      email: 'msft@test.com',
+      first_name: null,
+      last_name: null,
+      email_verified: true,
+      profile_picture_url: null,
+      last_sign_in_at: null,
+      external_id: null,
+      metadata: {},
+      locale: null,
+      password_hash: null,
+      impersonator: null,
+      oauth_provider: 'MicrosoftOAuth',
+    });
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=msft@test.com',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    // A spec-valid provider was explicitly configured, so it flows through verbatim.
+    expect(body.authentication_method).toBe('MicrosoftOAuth');
+    // ...and the internal field never leaks into the user object.
+    expect(body.user.oauth_provider).toBeUndefined();
   });
 
   it('authorize rejects non-localhost redirect_uri', async () => {
@@ -411,12 +450,13 @@ describe('Auth routes', () => {
       code: '123456',
     });
 
-    // Create pending auth
+    // Create pending auth. MFA is a second factor; the pending token records the *primary*
+    // method (here 'Password') so the completed session and response report that, not 'MFA'.
     const pendingToken = 'pending_mfa_token';
     store.setData(`pending_auth:${pendingToken}`, {
       user_id: user.id,
       organization_id: null,
-      auth_method: 'MFA',
+      auth_method: 'Password',
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -432,7 +472,8 @@ describe('Auth routes', () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.access_token).toBeDefined();
-    expect(body.authentication_method).toBe('MFA');
+    // The response reports the primary method the MFA challenge was issued over, not 'MFA'.
+    expect(body.authentication_method).toBe('Password');
   });
 
   it('mfa-totp grant with invalid code returns error', async () => {
