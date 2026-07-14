@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/workos/emulate/compare/v0.2.0...v0.2.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **auth:** Echo original session method on refresh_token ([#14](https://github.com/workos/emulate/issues/14)) ([97fb951](https://github.com/workos/emulate/commit/97fb95195d7829973df8b5b29ed9efd1365a6cae))
+* **auth:** Emit spec-valid authentication_method ([#12](https://github.com/workos/emulate/issues/12)) ([3066f71](https://github.com/workos/emulate/commit/3066f71f80fef087b176350b5b25bcbadcda1182))
+
 ## [0.2.0](https://github.com/workos/emulate/compare/v0.1.0...v0.2.0) (2026-07-12)
 
 
