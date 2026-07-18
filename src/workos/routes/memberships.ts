@@ -47,7 +47,7 @@ export function membershipRoutes(ctx: RouteContext): void {
       metadata: (body.metadata as Record<string, string>) ?? {},
     });
 
-    return c.json(formatMembership(membership), 201);
+    return c.json(formatMembership(membership, ws), 201);
   });
 
   app.get('/user_management/organization_memberships', (c) => {
@@ -67,13 +67,13 @@ export function membershipRoutes(ctx: RouteContext): void {
       },
     });
 
-    return c.json(formatListResponse(result, formatMembership));
+    return c.json(formatListResponse(result, (m) => formatMembership(m, ws)));
   });
 
   app.get('/user_management/organization_memberships/:id', (c) => {
     const m = ws.organizationMemberships.get(c.req.param('id'));
     if (!m) throw notFound('Organization Membership');
-    return c.json(formatMembership(m));
+    return c.json(formatMembership(m, ws));
   });
 
   app.put('/user_management/organization_memberships/:id', async (c) => {
@@ -94,7 +94,7 @@ export function membershipRoutes(ctx: RouteContext): void {
     }
 
     const updated = ws.organizationMemberships.update(m.id, updates);
-    return c.json(formatMembership(updated!));
+    return c.json(formatMembership(updated!, ws));
   });
 
   app.delete('/user_management/organization_memberships/:id', (c) => {
@@ -113,7 +113,7 @@ export function membershipRoutes(ctx: RouteContext): void {
     const updated = ws.organizationMemberships.update(m.id, {
       status: 'inactive',
     });
-    return c.json(formatMembership(updated!));
+    return c.json(formatMembership(updated!, ws));
   });
 
   app.put('/user_management/organization_memberships/:id/reactivate', (c) => {
@@ -125,6 +125,6 @@ export function membershipRoutes(ctx: RouteContext): void {
     const updated = ws.organizationMemberships.update(m.id, {
       status: 'active',
     });
-    return c.json(formatMembership(updated!));
+    return c.json(formatMembership(updated!, ws));
   });
 }

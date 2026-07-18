@@ -562,9 +562,9 @@ export const workosPlugin: ServicePlugin = {
       onDelete: (d) => eventBus.emit({ event: EVENTS.organizationDomainDeleted, data: formatDomain(d) }),
     });
     ws.organizationMemberships.setHooks({
-      onInsert: (m) => eventBus.emit({ event: EVENTS.organizationMembershipCreated, data: formatMembership(m) }),
-      onUpdate: (m) => eventBus.emit({ event: EVENTS.organizationMembershipUpdated, data: formatMembership(m) }),
-      onDelete: (m) => eventBus.emit({ event: EVENTS.organizationMembershipDeleted, data: formatMembership(m) }),
+      onInsert: (m) => eventBus.emit({ event: EVENTS.organizationMembershipCreated, data: formatMembership(m, ws) }),
+      onUpdate: (m) => eventBus.emit({ event: EVENTS.organizationMembershipUpdated, data: formatMembership(m, ws) }),
+      onDelete: (m) => eventBus.emit({ event: EVENTS.organizationMembershipDeleted, data: formatMembership(m, ws) }),
     });
     ws.connections.setHooks({
       // The spec has no connection.created/updated — only activation state transitions

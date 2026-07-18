@@ -90,7 +90,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const memberships = ws.organizationMemberships.findBy('organization_id', resource.organization_id);
     return c.json({
       object: 'list',
-      data: memberships.map(formatMembership),
+      data: memberships.map((m) => formatMembership(m, ws)),
       list_metadata: { before: null, after: null },
     });
   });
@@ -122,7 +122,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const memberships = ws.organizationMemberships.findBy('organization_id', resource.organization_id);
     return c.json({
       object: 'list',
-      data: memberships.map(formatMembership),
+      data: memberships.map((m) => formatMembership(m, ws)),
       list_metadata: { before: null, after: null },
     });
   });

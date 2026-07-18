@@ -111,4 +111,55 @@ describe('Membership routes', () => {
     );
     expect(reactivated.status).toBe('active');
   });
+
+  it('serializes directory_managed, roles, and the embedded user (WorkOS SDK contract)', async () => {
+    const org = await createOrg('Contract Org');
+    const user = await createUser('contract@test.com');
+
+    const m = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slug: 'admin' }),
+      }),
+    );
+
+    // Fields real WorkOS always returns; required by strict SDK deserializers.
+    expect(m.directory_managed).toBe(false);
+    expect(m.roles).toEqual([{ slug: 'admin' }]);
+    expect(m.user).toMatchObject({ object: 'user', id: user.id, email: 'contract@test.com' });
+    // The embedded user must be the full SDK User shape (every key present).
+    for (const k of [
+      'object',
+      'id',
+      'email',
+      'email_verified',
+      'first_name',
+      'last_name',
+      'profile_picture_url',
+      'last_sign_in_at',
+      'created_at',
+      'updated_at',
+    ]) {
+      expect(m.user).toHaveProperty(k);
+    }
+  });
+
+  it('includes the SDK-contract fields on GET and list responses', async () => {
+    const org = await createOrg('GetList Org');
+    const user = await createUser('getlist@test.com');
+    const created = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: user.id }),
+      }),
+    );
+
+    const got = await json(await req(`/user_management/organization_memberships/${created.id}`));
+    expect(got.directory_managed).toBe(false);
+    expect(got.user.id).toBe(user.id);
+
+    const list = await json(await req(`/user_management/organization_memberships?organization_id=${org.id}`));
+    expect(list.data[0].directory_managed).toBe(false);
+    expect(list.data[0].user.id).toBe(user.id);
+  });
 });

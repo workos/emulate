@@ -90,8 +90,21 @@ export function formatDomain(domain: WorkOSOrganizationDomain): Record<string, u
   return formatEntity(domain);
 }
 
-export function formatMembership(m: WorkOSOrganizationMembership): Record<string, unknown> {
-  return formatEntity(m);
+export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStore): Record<string, unknown> {
+  // Real WorkOS `organization_membership` responses always carry `directory_managed`,
+  // `roles`, and an embedded `user`. The emulator previously omitted all three, which
+  // breaks strict SDK deserializers (e.g. the WorkOS Python SDK's
+  // `OrganizationMembership.from_dict`, whose required-key lookup raises on the first
+  // missing field). The data is already available: `directory_managed` is `false` for
+  // any API-created membership (no directory-sync surface), `roles` is the single
+  // primary role, and the `user` is resolvable from `user_id`.
+  const user = ws.users.get(m.user_id);
+  return {
+    ...formatEntity(m),
+    directory_managed: false,
+    roles: [m.role],
+    user: user ? formatUser(user) : null,
+  };
 }
 
 const USER_EXCLUDE = new Set([...INTERNAL_FIELDS, 'impersonator', 'oauth_provider']);
