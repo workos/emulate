@@ -28,6 +28,11 @@ export function membershipRoutes(ctx: RouteContext): void {
     const org = ws.organizations.get(organizationId);
     if (!org) throw notFound('Organization');
 
+    // Real WorkOS 404s an unknown user; validating here also guarantees the embedded
+    // `user` in the response (and every later read) is always resolvable, never null.
+    const user = ws.users.get(userId);
+    if (!user) throw notFound('User');
+
     const existing = ws.organizationMemberships
       .findBy('organization_id', organizationId)
       .find((m) => m.user_id === userId && m.status !== 'inactive');

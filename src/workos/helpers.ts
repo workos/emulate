@@ -91,19 +91,33 @@ export function formatDomain(domain: WorkOSOrganizationDomain): Record<string, u
 }
 
 export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStore): Record<string, unknown> {
-  // Real WorkOS `organization_membership` responses always carry `directory_managed`,
-  // `roles`, and an embedded `user`. The emulator previously omitted all three, which
-  // breaks strict SDK deserializers (e.g. the WorkOS Python SDK's
+  // Real WorkOS `organization_membership` REST responses always carry `directory_managed`,
+  // `custom_attributes`, `roles`, and an embedded `user`. The emulator previously omitted
+  // them, which breaks strict SDK deserializers (e.g. the WorkOS Python SDK's
   // `OrganizationMembership.from_dict`, whose required-key lookup raises on the first
-  // missing field). The data is already available: `directory_managed` is `false` for
-  // any API-created membership (no directory-sync surface), `roles` is the single
-  // primary role, and the `user` is resolvable from `user_id`.
+  // missing field). `directory_managed` is `false` for any API-created membership (no
+  // directory-sync surface), `custom_attributes` defaults to `{}`, `roles` is the single
+  // primary role, and the `user` is resolved from `user_id` — guaranteed present, since
+  // the create route rejects an unknown user and user deletion cascades its memberships.
   const user = ws.users.get(m.user_id);
   return {
     ...formatEntity(m),
     directory_managed: false,
+    custom_attributes: {},
     roles: [m.role],
     user: user ? formatUser(user) : null,
+  };
+}
+
+// Webhook events carry a slimmer membership than the REST responses: the real WorkOS
+// `organization_membership.*` event payload requires `directory_managed` and
+// `custom_attributes`, but NOT `roles` or an embedded `user` (see EVENT_DATA_REQUIREMENTS).
+// Keep the event shape spec-accurate instead of reusing the REST serializer.
+export function formatMembershipEvent(m: WorkOSOrganizationMembership): Record<string, unknown> {
+  return {
+    ...formatEntity(m),
+    directory_managed: false,
+    custom_attributes: {},
   };
 }
 

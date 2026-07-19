@@ -56,6 +56,32 @@ describe('Membership routes', () => {
     expect(m.status).toBe('active');
   });
 
+  it('404s when creating a membership for an unknown user', async () => {
+    const org = await createOrg('No User Org');
+    const res = await req('/user_management/organization_memberships', {
+      method: 'POST',
+      body: JSON.stringify({ organization_id: org.id, user_id: 'user_does_not_exist' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('cascades user deletion to memberships (no orphan -> embedded user is never null)', async () => {
+    const org = await createOrg('Cascade Org');
+    const user = await createUser('cascade@test.com');
+    const m = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: user.id }),
+      }),
+    );
+
+    await req(`/user_management/users/${user.id}`, { method: 'DELETE' });
+
+    // Membership is gone, so no read can surface a null embedded user.
+    const got = await req(`/user_management/organization_memberships/${m.id}`);
+    expect(got.status).toBe(404);
+  });
+
   it('rejects duplicate active membership', async () => {
     const org = await createOrg('Dup Org');
     const user = await createUser('dup@test.com');
@@ -125,6 +151,7 @@ describe('Membership routes', () => {
 
     // Fields real WorkOS always returns; required by strict SDK deserializers.
     expect(m.directory_managed).toBe(false);
+    expect(m.custom_attributes).toEqual({});
     expect(m.roles).toEqual([{ slug: 'admin' }]);
     expect(m.user).toMatchObject({ object: 'user', id: user.id, email: 'contract@test.com' });
     // The embedded user must be the full SDK User shape (every key present).
