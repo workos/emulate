@@ -22,13 +22,13 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
   connection: {
     schema: 'Connection',
     properties: [
+      'callback_endpoint',
       'connection_type',
       'created_at',
       'domains',
       'id',
       'name',
       'object',
-      'options',
       'organization_id',
       'state',
       'status',
