@@ -536,10 +536,12 @@ organizations:
       - domain: acme.com
         state: verified
     memberships:
-      - user_id: user_admin_id # Replace with actual user ID after creation
+      # Reference users by the email declared in `users` above — user ids are
+      # generated at startup, so memberships are joined by email.
+      - user_id: admin@acme.com
         role: admin
         status: active
-      - user_id: user_employee_id # Replace with actual user ID
+      - user_id: employee@acme.com
         role: member
         status: active
 

@@ -17,6 +17,14 @@ export interface ConfigValidationResult {
 export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationResult {
   const errors: ConfigValidationError[] = [];
 
+  // Seeded user ids are generated at insert time, so org memberships reference users
+  // by email — collect the emails defined in this config for cross-referencing.
+  const userEmails = new Set(
+    Array.isArray(config.users)
+      ? config.users.map((u) => u.email).filter((e): e is string => typeof e === 'string')
+      : [],
+  );
+
   // Validate users
   if (config.users) {
     if (!Array.isArray(config.users)) {
@@ -48,6 +56,21 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: user.email_verified,
           });
         }
+      });
+
+      // Email is the lookup key org memberships join on; duplicates would silently
+      // bind a membership to the first match.
+      const seenEmails = new Set<string>();
+      config.users.forEach((user, index) => {
+        if (!user.email || typeof user.email !== 'string') return;
+        if (seenEmails.has(user.email)) {
+          errors.push({
+            path: `users[${index}].email`,
+            message: 'email must be unique across users',
+            value: user.email,
+          });
+        }
+        seenEmails.add(user.email);
       });
     }
   }
@@ -90,6 +113,41 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
                   path: `organizations[${index}].domains[${dIndex}].state`,
                   message: 'state must be "verified" or "pending" if provided',
                   value: domain.state,
+                });
+              }
+            });
+          }
+        }
+        if (org.memberships) {
+          if (!Array.isArray(org.memberships)) {
+            errors.push({
+              path: `organizations[${index}].memberships`,
+              message: 'memberships must be an array if provided',
+              value: org.memberships,
+            });
+          } else {
+            org.memberships.forEach((membership, mIndex) => {
+              if (!membership.user_id || typeof membership.user_id !== 'string') {
+                errors.push({
+                  path: `organizations[${index}].memberships[${mIndex}].user_id`,
+                  message: 'user_id is required and must be a string',
+                  value: membership.user_id,
+                });
+              } else if (!userEmails.has(membership.user_id)) {
+                // A dangling reference would seed a membership whose embedded `user`
+                // serializes as null, which strict SDK deserializers reject.
+                errors.push({
+                  path: `organizations[${index}].memberships[${mIndex}].user_id`,
+                  message:
+                    'user_id must match the email of a user defined in users (seeded user ids are generated at startup, so memberships are joined by email)',
+                  value: membership.user_id,
+                });
+              }
+              if (membership.status && !['active', 'inactive', 'pending'].includes(membership.status)) {
+                errors.push({
+                  path: `organizations[${index}].memberships[${mIndex}].status`,
+                  message: 'status must be "active", "inactive", or "pending" if provided',
+                  value: membership.status,
                 });
               }
             });
