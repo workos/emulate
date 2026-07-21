@@ -42,6 +42,13 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: user.email,
           });
         }
+        if (user.id !== undefined && (typeof user.id !== 'string' || user.id.length === 0)) {
+          errors.push({
+            path: `users[${index}].id`,
+            message: 'id must be a non-empty string if provided',
+            value: user.id,
+          });
+        }
         if (user.password && typeof user.password !== 'string') {
           errors.push({
             path: `users[${index}].password`,
@@ -72,6 +79,21 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
         }
         seenEmails.add(user.email);
       });
+
+      // A pinned user id is the primary key in the store; two users sharing one would
+      // silently overwrite each other on insert.
+      const seenUserIds = new Set<string>();
+      config.users.forEach((user, index) => {
+        if (typeof user.id !== 'string' || user.id.length === 0) return;
+        if (seenUserIds.has(user.id)) {
+          errors.push({
+            path: `users[${index}].id`,
+            message: 'id must be unique across users',
+            value: user.id,
+          });
+        }
+        seenUserIds.add(user.id);
+      });
     }
   }
 
@@ -90,6 +112,13 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             path: `organizations[${index}].name`,
             message: 'name is required and must be a string',
             value: org.name,
+          });
+        }
+        if (org.id !== undefined && (typeof org.id !== 'string' || org.id.length === 0)) {
+          errors.push({
+            path: `organizations[${index}].id`,
+            message: 'id must be a non-empty string if provided',
+            value: org.id,
           });
         }
         if (org.domains) {
@@ -179,6 +208,21 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           });
         }
         seenOrgNames.add(org.name);
+      });
+
+      // A pinned organization id is the primary key in the store; two orgs sharing one
+      // would silently overwrite each other on insert.
+      const seenOrgIds = new Set<string>();
+      config.organizations.forEach((org, index) => {
+        if (typeof org.id !== 'string' || org.id.length === 0) return;
+        if (seenOrgIds.has(org.id)) {
+          errors.push({
+            path: `organizations[${index}].id`,
+            message: 'id must be unique across organizations',
+            value: org.id,
+          });
+        }
+        seenOrgIds.add(org.id);
       });
     }
   }

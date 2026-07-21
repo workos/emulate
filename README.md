@@ -173,6 +173,28 @@ permissions:
     name: Write Posts
 ```
 
+### Pinning organization and user ids
+
+Both `organizations` and `users` accept an optional `id`. Pin it to match what your real
+WorkOS environment emits, so a backend whose database already references a real org or user id
+lines up with the emulator — and stays stable across restarts, which otherwise mint a fresh id
+each time the seed re-runs. Omit it and an id is generated as before.
+
+```yaml
+organizations:
+  - id: org_01ABC... # optional; generated if omitted
+    name: Acme Corp
+
+users:
+  - id: user_01XYZ... # optional; generated if omitted
+    email: alice@acme.com
+    password: test123
+```
+
+A pinned id must be a non-empty string, and ids must be unique within `organizations` and
+within `users` (a duplicate would silently overwrite the earlier record in the store). The
+pinned id is what the API, login tokens, and webhooks report for that resource.
+
 For OAuth-based logins (`authorization_code`, `refresh_token`, `device_code`), the authenticate
 response omits `authentication_method` by default: the hosted authorize flow carries no provider
 information, and the spec's `authentication_method` enum has no generic `OAuth` value — only
