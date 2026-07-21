@@ -74,7 +74,11 @@ export interface WorkOSSeedOrganization {
   metadata?: Record<string, string>;
   domains?: Array<{ domain: string; state?: 'verified' | 'pending' }>;
   memberships?: Array<{
-    user_id: string;
+    /**
+     * Email of a user defined in `users`. Seeded user ids are generated at startup,
+     * so memberships are joined by email — an id literal could never resolve.
+     */
+    email: string;
     role?: string;
     status?: 'active' | 'inactive' | 'pending';
   }>;
@@ -275,10 +279,19 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
 
       if (orgConfig.memberships) {
         for (const mm of orgConfig.memberships) {
+          // Memberships reference seeded users by email: user ids are generated at
+          // insert time, so an id literal in a config could never resolve, and a
+          // dangling membership would break membership serialization (which requires
+          // a resolvable embedded user). validateSeedConfig guarantees the reference
+          // matches a seeded user.
+          const memberUser = ws.users.findOneBy('email', mm.email);
+          if (!memberUser) {
+            throw new Error(`Seed membership references unknown user '${mm.email}' (organization '${orgConfig.name}')`);
+          }
           ws.organizationMemberships.insert({
             object: 'organization_membership',
             organization_id: org.id,
-            user_id: mm.user_id,
+            user_id: memberUser.id,
             role: { slug: mm.role ?? 'member' },
             status: mm.status ?? 'active',
             external_id: null,

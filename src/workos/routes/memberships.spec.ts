@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { formatMembership } from '../helpers.js';
+import type { WorkOSStore } from '../store.js';
 
 const apiKeys: ApiKeyMap = { sk_test_mem: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_mem', 'Content-Type': 'application/json' };
@@ -188,5 +190,27 @@ describe('Membership routes', () => {
     const list = await json(await req(`/user_management/organization_memberships?organization_id=${org.id}`));
     expect(list.data[0].directory_managed).toBe(false);
     expect(list.data[0].user.id).toBe(user.id);
+  });
+});
+
+describe('formatMembership invariant', () => {
+  it('throws loudly on a dangling user reference instead of emitting user: null', () => {
+    // Every insertion path validates the user and deletion cascades memberships, so a
+    // miss is an emulator bug — a silent `user: null` would reproduce the strict-SDK
+    // deserialization failure the serializer exists to prevent.
+    const ws = { users: { get: () => undefined } } as unknown as WorkOSStore;
+    const dangling = {
+      object: 'organization_membership',
+      id: 'om_dangling',
+      organization_id: 'org_x',
+      user_id: 'user_missing',
+      role: { slug: 'member' },
+      status: 'active',
+      external_id: null,
+      metadata: {},
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    };
+    expect(() => formatMembership(dangling as never, ws)).toThrow(/No user 'user_missing'/);
   });
 });

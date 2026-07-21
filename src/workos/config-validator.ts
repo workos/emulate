@@ -17,6 +17,14 @@ export interface ConfigValidationResult {
 export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationResult {
   const errors: ConfigValidationError[] = [];
 
+  // Seeded user ids are generated at insert time, so org memberships reference users
+  // by email — collect the emails defined in this config for cross-referencing.
+  const userEmails = new Set(
+    Array.isArray(config.users)
+      ? config.users.map((u) => u.email).filter((e): e is string => typeof e === 'string')
+      : [],
+  );
+
   // Validate users
   if (config.users) {
     if (!Array.isArray(config.users)) {
@@ -48,6 +56,21 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: user.email_verified,
           });
         }
+      });
+
+      // Email is the lookup key org memberships join on; duplicates would silently
+      // bind a membership to the first match.
+      const seenEmails = new Set<string>();
+      config.users.forEach((user, index) => {
+        if (!user.email || typeof user.email !== 'string') return;
+        if (seenEmails.has(user.email)) {
+          errors.push({
+            path: `users[${index}].email`,
+            message: 'email must be unique across users',
+            value: user.email,
+          });
+        }
+        seenEmails.add(user.email);
       });
     }
   }
@@ -90,6 +113,52 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
                   path: `organizations[${index}].domains[${dIndex}].state`,
                   message: 'state must be "verified" or "pending" if provided',
                   value: domain.state,
+                });
+              }
+            });
+          }
+        }
+        if (org.memberships) {
+          if (!Array.isArray(org.memberships)) {
+            errors.push({
+              path: `organizations[${index}].memberships`,
+              message: 'memberships must be an array if provided',
+              value: org.memberships,
+            });
+          } else {
+            org.memberships.forEach((membership, mIndex) => {
+              // The pre-rename key: it read as "pass a user_... id", which can never
+              // resolve (ids are generated at startup) — point at `email` instead.
+              const legacyUserId = (membership as { user_id?: unknown }).user_id;
+              if (!membership.email || typeof membership.email !== 'string') {
+                if (legacyUserId !== undefined) {
+                  errors.push({
+                    path: `organizations[${index}].memberships[${mIndex}].user_id`,
+                    message:
+                      'memberships reference seeded users by email — use `email` (seeded user ids are generated at startup, so a user_id literal can never resolve)',
+                    value: legacyUserId,
+                  });
+                } else {
+                  errors.push({
+                    path: `organizations[${index}].memberships[${mIndex}].email`,
+                    message: 'email is required and must be the email of a user defined in users',
+                    value: membership.email,
+                  });
+                }
+              } else if (!userEmails.has(membership.email)) {
+                // A dangling reference would seed a membership whose embedded user
+                // cannot resolve, which membership serialization rejects.
+                errors.push({
+                  path: `organizations[${index}].memberships[${mIndex}].email`,
+                  message: 'email must match a user defined in users',
+                  value: membership.email,
+                });
+              }
+              if (membership.status && !['active', 'inactive', 'pending'].includes(membership.status)) {
+                errors.push({
+                  path: `organizations[${index}].memberships[${mIndex}].status`,
+                  message: 'status must be "active", "inactive", or "pending" if provided',
+                  value: membership.status,
                 });
               }
             });
