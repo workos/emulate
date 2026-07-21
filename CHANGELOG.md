@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/workos/emulate/compare/v0.2.2...v0.3.0) (2026-07-21)
+
+
+### Features
+
+* **seed:** pin organization and user ids ([#19](https://github.com/workos/emulate/issues/19)) ([7736e10](https://github.com/workos/emulate/commit/7736e1062fa188ec055345726bc72de0d83930e6))
+
 ## [0.2.2](https://github.com/workos/emulate/compare/v0.2.1...v0.2.2) (2026-07-21)
 
 
