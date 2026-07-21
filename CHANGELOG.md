@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/workos/emulate/compare/v0.2.1...v0.2.2) (2026-07-21)
+
+
+### Bug Fixes
+
+* **memberships:** Emit directory_managed, roles, and user on organization_membership ([#15](https://github.com/workos/emulate/issues/15)) ([8dbc218](https://github.com/workos/emulate/commit/8dbc218a056e8a4174082aaea768ec54e0ce6df4))
+* **seed:** join org memberships to users by email + validate references ([#16](https://github.com/workos/emulate/issues/16)) ([2d89866](https://github.com/workos/emulate/commit/2d89866aa613f09829375a77e84d03447fceb97d))
+
 ## [0.2.1](https://github.com/workos/emulate/compare/v0.2.0...v0.2.1) (2026-07-14)
 
 
