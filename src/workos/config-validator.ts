@@ -3,6 +3,15 @@
  */
 import type { WorkOSSeedConfig } from './index.js';
 
+/**
+ * A pinned id is addressed as a single path segment (`/organizations/:id`,
+ * `/user_management/users/:id`), so it must be URL-safe — a delimiter like `/` would
+ * make the seeded resource unreachable by its documented id route. This charset accepts
+ * every real WorkOS id (`org_01…`, `user_01…`) and every emulator-generated id
+ * (`prefix_<Crockford-Base32>`) while rejecting anything that would split or need encoding.
+ */
+const PINNED_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 export interface ConfigValidationError {
   path: string;
   message: string;
@@ -42,10 +51,10 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: user.email,
           });
         }
-        if (user.id !== undefined && (typeof user.id !== 'string' || user.id.length === 0)) {
+        if (user.id !== undefined && (typeof user.id !== 'string' || !PINNED_ID_PATTERN.test(user.id))) {
           errors.push({
             path: `users[${index}].id`,
-            message: 'id must be a non-empty string if provided',
+            message: 'id must be a non-empty, URL-safe string (letters, digits, "_" or "-") if provided',
             value: user.id,
           });
         }
@@ -114,10 +123,10 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: org.name,
           });
         }
-        if (org.id !== undefined && (typeof org.id !== 'string' || org.id.length === 0)) {
+        if (org.id !== undefined && (typeof org.id !== 'string' || !PINNED_ID_PATTERN.test(org.id))) {
           errors.push({
             path: `organizations[${index}].id`,
-            message: 'id must be a non-empty string if provided',
+            message: 'id must be a non-empty, URL-safe string (letters, digits, "_" or "-") if provided',
             value: org.id,
           });
         }

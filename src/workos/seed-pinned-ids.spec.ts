@@ -52,6 +52,23 @@ function decodeJwt(token: string): Record<string, any> {
   return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf-8'));
 }
 
+/**
+ * Poll until a predicate over received webhooks holds, or a timeout elapses. Webhook
+ * delivery is fire-and-forget, so a fixed sleep races delivery on a slow runner; wait for
+ * the events to actually arrive instead.
+ */
+async function waitForWebhooks(
+  receiver: WebhookReceiver,
+  predicate: (received: ReceivedWebhook[]) => boolean,
+  timeoutMs = 2000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate(receiver.received)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 describe('Seeding pinned organization and user ids', () => {
   let emulator: Emulator | undefined;
   let receiver: WebhookReceiver | undefined;
@@ -166,7 +183,11 @@ describe('Seeding pinned organization and user ids', () => {
       body: JSON.stringify({ first_name: 'Operator' }),
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await waitForWebhooks(
+      receiver,
+      (received) =>
+        received.some((w) => w.event === 'organization.updated') && received.some((w) => w.event === 'user.updated'),
+    );
 
     const orgEvent = receiver.received.find((w) => w.event === 'organization.updated');
     expect(orgEvent?.data.id).toBe(PINNED_ORG_ID);
@@ -209,14 +230,21 @@ describe('Seeding pinned organization and user ids', () => {
       expect(error.message).toContain('unique');
     });
 
-    it('rejects a non-empty-string organization id', () => {
+    it('rejects an empty-string organization id', () => {
       const error = findError({ organizations: [{ id: '', name: 'Org A' }] }, 'organizations[0].id');
-      expect(error.message).toContain('non-empty string');
+      expect(error.message).toContain('URL-safe');
     });
 
     it('rejects a non-string user id', () => {
       const error = findError({ users: [{ id: 123 as never, email: 'a@acme.com' }] }, 'users[0].id');
-      expect(error.message).toContain('non-empty string');
+      expect(error.message).toContain('URL-safe');
+    });
+
+    it('rejects a pinned id with a path delimiter (unreachable via the :id route)', () => {
+      const orgErr = findError({ organizations: [{ id: 'org/custom', name: 'Org A' }] }, 'organizations[0].id');
+      expect(orgErr.message).toContain('URL-safe');
+      const userErr = findError({ users: [{ id: 'user/custom', email: 'a@acme.com' }] }, 'users[0].id');
+      expect(userErr.message).toContain('URL-safe');
     });
 
     it('accepts distinct pinned ids on organizations and users', () => {
