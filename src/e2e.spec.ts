@@ -160,6 +160,10 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
     expect(membershipWebhook.data.user_id).toBe(userId);
     expect(membershipWebhook.data.organization_id).toBe(org.id);
     verifySignature(membershipWebhook);
+    expectSpecShape(membershipWebhook);
+    // The event payload stays slim: no REST-only `roles` / `user` embed (matches real WorkOS).
+    expect(membershipWebhook.data).not.toHaveProperty('roles');
+    expect(membershipWebhook.data).not.toHaveProperty('user');
   });
 
   it('completes the hosted authorize → authenticate flow with session and oauth webhooks', async () => {
