@@ -69,6 +69,12 @@ export { getWorkOSStore, type WorkOSStore } from './store.js';
 export * from './entities.js';
 
 export interface WorkOSSeedOrganization {
+  /**
+   * Pinned organization id (e.g. `org_01ABC…`). Generated if omitted. Pin it to match
+   * what your real WorkOS environment emits, so a backend whose database already
+   * references a real org id lines up with the emulator across restarts.
+   */
+  id?: string;
   name: string;
   external_id?: string;
   metadata?: Record<string, string>;
@@ -85,6 +91,12 @@ export interface WorkOSSeedOrganization {
 }
 
 export interface WorkOSSeedUser {
+  /**
+   * Pinned user id (e.g. `user_01ABC…`). Generated if omitted. Pin it to match what your
+   * real WorkOS environment emits, so the identity stays stable across emulator restarts
+   * and can line up with an existing operator in a copied application database.
+   */
+  id?: string;
   email: string;
   first_name?: string;
   last_name?: string;
@@ -237,6 +249,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
     for (const userConfig of config.users) {
       ws.users.insert({
         object: 'user',
+        id: userConfig.id,
         email: userConfig.email,
         first_name: userConfig.first_name ?? null,
         last_name: userConfig.last_name ?? null,
@@ -257,6 +270,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
     for (const orgConfig of config.organizations) {
       const org = ws.organizations.insert({
         object: 'organization',
+        id: orgConfig.id,
         name: orgConfig.name,
         external_id: orgConfig.external_id ?? null,
         metadata: orgConfig.metadata ?? {},
