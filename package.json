@@ -48,7 +48,7 @@
   "devDependencies": {
     "@types/node": "~22.19.7",
     "@vitest/coverage-v8": "^4.0.18",
-    "@workos/openapi-spec": "^0.6.0",
+    "@workos/openapi-spec": "^0.41.0",
     "husky": "^9.1.7",
     "oxfmt": "^0.54.0",
     "oxlint": "^1.69.0",

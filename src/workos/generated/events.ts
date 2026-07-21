@@ -8,6 +8,14 @@
 export const EVENTS = {
   actionAuthenticationDenied: 'action.authentication.denied',
   actionUserRegistrationDenied: 'action.user_registration.denied',
+  agentRegistrationClaimAttemptCreated: 'agent.registration.claim.attempt.created',
+  agentRegistrationClaimCompleted: 'agent.registration.claim.completed',
+  agentRegistrationCreated: 'agent.registration.created',
+  agentRegistrationCredentialIssued: 'agent.registration.credential.issued',
+  agentRegistrationDeleted: 'agent.registration.deleted',
+  agentRegistrationExpired: 'agent.registration.expired',
+  agentRegistrationOrganizationSwitched: 'agent.registration.organization.switched',
+  agentRegistrationRevoked: 'agent.registration.revoked',
   apiKeyCreated: 'api_key.created',
   apiKeyRevoked: 'api_key.revoked',
   apiKeyUpdated: 'api_key.updated',
@@ -24,6 +32,7 @@ export const EVENTS = {
   authenticationPasswordFailed: 'authentication.password_failed',
   authenticationPasswordSucceeded: 'authentication.password_succeeded',
   authenticationRadarRiskDetected: 'authentication.radar_risk_detected',
+  authenticationReauthenticationSucceeded: 'authentication.reauthentication_succeeded',
   authenticationSsoFailed: 'authentication.sso_failed',
   authenticationSsoStarted: 'authentication.sso_started',
   authenticationSsoSucceeded: 'authentication.sso_succeeded',
@@ -80,8 +89,10 @@ export const EVENTS = {
   permissionDeleted: 'permission.deleted',
   permissionUpdated: 'permission.updated',
   pipesConnectedAccountConnected: 'pipes.connected_account.connected',
+  pipesConnectedAccountConnectionFailed: 'pipes.connected_account.connection_failed',
   pipesConnectedAccountDisconnected: 'pipes.connected_account.disconnected',
   pipesConnectedAccountReauthorizationNeeded: 'pipes.connected_account.reauthorization_needed',
+  radarChallengeCreated: 'radar.challenge_created',
   roleCreated: 'role.created',
   roleDeleted: 'role.deleted',
   roleUpdated: 'role.updated',
@@ -99,6 +110,7 @@ export const EVENTS = {
   vaultDekDecrypted: 'vault.dek.decrypted',
   vaultDekRead: 'vault.dek.read',
   vaultKekCreated: 'vault.kek.created',
+  vaultKekDeleted: 'vault.kek.deleted',
   vaultMetadataRead: 'vault.metadata.read',
   vaultNamesListed: 'vault.names.listed',
   waitlistUserApproved: 'waitlist_user.approved',
@@ -110,6 +122,14 @@ export type WorkOSEventName = (typeof EVENTS)[keyof typeof EVENTS];
 
 /** Event names subscribable via webhook endpoints (CreateWebhookEndpointDto). */
 export const SUBSCRIBABLE_EVENTS: readonly WorkOSEventName[] = [
+  'agent.registration.claim.attempt.created',
+  'agent.registration.claim.completed',
+  'agent.registration.created',
+  'agent.registration.credential.issued',
+  'agent.registration.deleted',
+  'agent.registration.expired',
+  'agent.registration.organization.switched',
+  'agent.registration.revoked',
   'api_key.created',
   'api_key.revoked',
   'api_key.updated',
@@ -124,6 +144,7 @@ export const SUBSCRIBABLE_EVENTS: readonly WorkOSEventName[] = [
   'authentication.password_failed',
   'authentication.password_succeeded',
   'authentication.radar_risk_detected',
+  'authentication.reauthentication_succeeded',
   'authentication.sso_failed',
   'authentication.sso_started',
   'authentication.sso_succeeded',
@@ -178,8 +199,10 @@ export const SUBSCRIBABLE_EVENTS: readonly WorkOSEventName[] = [
   'permission.deleted',
   'permission.updated',
   'pipes.connected_account.connected',
+  'pipes.connected_account.connection_failed',
   'pipes.connected_account.disconnected',
   'pipes.connected_account.reauthorization_needed',
+  'radar.challenge_created',
   'role.created',
   'role.deleted',
   'role.updated',
@@ -195,7 +218,7 @@ export const SUBSCRIBABLE_EVENTS: readonly WorkOSEventName[] = [
 
 /** Payload shape shared by authentication.*_succeeded / *_failed events. */
 export interface AuthenticationEventData {
-  type: 'email_verification' | 'magic_auth' | 'mfa' | 'oauth' | 'passkey' | 'password' | 'sso';
+  type: 'email_verification' | 'magic_auth' | 'mfa' | 'oauth' | 'passkey' | 'password' | 'reauthentication' | 'sso';
   status: 'failed' | 'succeeded';
   ip_address: string | null;
   user_agent: string | null;
@@ -235,6 +258,52 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
         'user_agent',
       ],
     },
+    'agent.registration.claim.attempt.created': {
+      required: [
+        'object',
+        'id',
+        'agent_registration_id',
+        'agent_registration_claim_id',
+        'login_hint',
+        'expires_at',
+        'created_at',
+        'updated_at',
+      ],
+    },
+    'agent.registration.claim.completed': {
+      required: [
+        'object',
+        'id',
+        'agent_registration_id',
+        'completed_by_attempt_id',
+        'claimed_by',
+        'completed_at',
+        'created_at',
+        'updated_at',
+      ],
+    },
+    'agent.registration.created': {
+      required: [
+        'object',
+        'id',
+        'agent_identity',
+        'organization_id',
+        'status',
+        'kind',
+        'method',
+        'created_at',
+        'updated_at',
+      ],
+    },
+    'agent.registration.credential.issued': {
+      required: ['object', 'id', 'agent_registration_id', 'detail', 'created_at', 'updated_at'],
+    },
+    'agent.registration.deleted': { required: ['agent_registration_id'] },
+    'agent.registration.expired': { required: ['agent_registration_id'] },
+    'agent.registration.organization.switched': {
+      required: ['agent_registration_id', 'from_organization_id', 'to_organization_id'],
+    },
+    'agent.registration.revoked': { required: ['agent_registration_id'] },
     'api_key.created': {
       required: [
         'object',
@@ -340,6 +409,11 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
     },
     'authentication.radar_risk_detected': {
       required: ['auth_method', 'action', 'control', 'blocklist_type', 'ip_address', 'user_agent', 'user_id', 'email'],
+    },
+    'authentication.reauthentication_succeeded': {
+      type: 'reauthentication',
+      status: 'succeeded',
+      required: ['type', 'status', 'ip_address', 'user_agent', 'user_id', 'email'],
     },
     'authentication.sso_failed': {
       type: 'sso',
@@ -709,13 +783,43 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
     'password_reset.created': { required: ['object', 'id', 'user_id', 'email', 'expires_at', 'created_at'] },
     'password_reset.succeeded': { required: ['object', 'id', 'user_id', 'email', 'expires_at', 'created_at'] },
     'permission.created': {
-      required: ['object', 'id', 'slug', 'name', 'description', 'system', 'created_at', 'updated_at'],
+      required: [
+        'object',
+        'id',
+        'slug',
+        'name',
+        'description',
+        'system',
+        'resource_type_slug',
+        'created_at',
+        'updated_at',
+      ],
     },
     'permission.deleted': {
-      required: ['object', 'id', 'slug', 'name', 'description', 'system', 'created_at', 'updated_at'],
+      required: [
+        'object',
+        'id',
+        'slug',
+        'name',
+        'description',
+        'system',
+        'resource_type_slug',
+        'created_at',
+        'updated_at',
+      ],
     },
     'permission.updated': {
-      required: ['object', 'id', 'slug', 'name', 'description', 'system', 'created_at', 'updated_at'],
+      required: [
+        'object',
+        'id',
+        'slug',
+        'name',
+        'description',
+        'system',
+        'resource_type_slug',
+        'created_at',
+        'updated_at',
+      ],
     },
     'pipes.connected_account.connected': {
       required: [
@@ -729,6 +833,20 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
         'state',
         'created_at',
         'updated_at',
+      ],
+    },
+    'pipes.connected_account.connection_failed': {
+      required: [
+        'object',
+        'data_integration_id',
+        'provider_slug',
+        'user_id',
+        'organization_id',
+        'error_code',
+        'error_reason',
+        'provider_error',
+        'provider_error_description',
+        'created_at',
       ],
     },
     'pipes.connected_account.disconnected': {
@@ -759,6 +877,7 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
         'updated_at',
       ],
     },
+    'radar.challenge_created': { type: 'email', required: ['type', 'radar_challenge_id', 'user_id', 'email'] },
     'role.created': { required: ['object', 'slug', 'resource_type_slug', 'created_at', 'updated_at'] },
     'role.deleted': { required: ['object', 'slug', 'resource_type_slug', 'created_at', 'updated_at'] },
     'role.updated': { required: ['object', 'slug', 'resource_type_slug', 'created_at', 'updated_at'] },
@@ -846,6 +965,7 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
     'vault.dek.decrypted': { required: ['actor_id', 'actor_source', 'actor_name', 'key_id'] },
     'vault.dek.read': { required: ['actor_id', 'actor_source', 'actor_name', 'key_ids', 'key_context'] },
     'vault.kek.created': { required: ['actor_id', 'actor_source', 'actor_name', 'key_name', 'key_id'] },
+    'vault.kek.deleted': { required: ['actor_id', 'actor_source', 'actor_name', 'key_name', 'key_id'] },
     'vault.metadata.read': { required: ['actor_id', 'actor_source', 'actor_name', 'kv_name'] },
     'vault.names.listed': { required: ['actor_id', 'actor_source', 'actor_name'] },
     'waitlist_user.approved': {
