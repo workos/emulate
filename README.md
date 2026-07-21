@@ -538,10 +538,10 @@ organizations:
     memberships:
       # Reference users by the email declared in `users` above — user ids are
       # generated at startup, so memberships are joined by email.
-      - user_id: admin@acme.com
+      - email: admin@acme.com
         role: admin
         status: active
-      - user_id: employee@acme.com
+      - email: employee@acme.com
         role: member
         status: active
 

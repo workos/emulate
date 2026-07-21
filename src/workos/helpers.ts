@@ -97,15 +97,24 @@ export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStor
   // `OrganizationMembership.from_dict`, whose required-key lookup raises on the first
   // missing field). `directory_managed` is `false` for any API-created membership (no
   // directory-sync surface), `custom_attributes` defaults to `{}`, `roles` is the single
-  // primary role, and the `user` is resolved from `user_id` — guaranteed present, since
-  // the create route rejects an unknown user and user deletion cascades its memberships.
+  // primary role, and the `user` is resolved from `user_id`.
   const user = ws.users.get(m.user_id);
+  if (!user) {
+    // Every insertion path guarantees a live user (the create route 404s an unknown
+    // user, invitation acceptance resolves by email, seeding validates references) and
+    // user deletion cascades memberships — a miss here is an emulator bug. Fail loudly
+    // rather than emit `user: null`, the exact strict-SDK deserialization break this
+    // serializer exists to prevent.
+    throw new Error(
+      `No user '${m.user_id}' for membership '${m.id}': the user was deleted without cascading, or the membership was inserted without validation`,
+    );
+  }
   return {
     ...formatEntity(m),
     directory_managed: false,
     custom_attributes: {},
     roles: [m.role],
-    user: user ? formatUser(user) : null,
+    user: formatUser(user),
   };
 }
 

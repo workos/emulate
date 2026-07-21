@@ -1,8 +1,8 @@
 /**
  * Seeding organization memberships. Seeded user ids are generated at startup, so
  * memberships reference users by email; validateSeedConfig rejects references that
- * don't resolve to a seeded user — a dangling membership would serialize
- * `user: null`, which strict SDK deserializers reject.
+ * don't resolve to a seeded user — a dangling membership could not serialize (the
+ * membership serializer requires a resolvable embedded user).
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { createEmulator, type Emulator } from '../index.js';
@@ -26,7 +26,7 @@ describe('Seeding organization memberships', () => {
         organizations: [
           {
             name: 'Acme Corp',
-            memberships: [{ user_id: 'admin@acme.com', role: 'admin', status: 'active' }],
+            memberships: [{ email: 'admin@acme.com', role: 'admin', status: 'active' }],
           },
         ],
       },
@@ -55,10 +55,10 @@ describe('Seeding organization memberships', () => {
         port: 0,
         seed: {
           users: [{ email: 'admin@acme.com' }],
-          organizations: [{ name: 'Acme Corp', memberships: [{ user_id: 'ghost@acme.com', role: 'member' }] }],
+          organizations: [{ name: 'Acme Corp', memberships: [{ email: 'ghost@acme.com', role: 'member' }] }],
         },
       }),
-    ).rejects.toThrow(/user_id must match the email of a user defined in users/);
+    ).rejects.toThrow(/email must match a user defined in users/);
   });
 
   describe('seed config validation', () => {
@@ -70,36 +70,47 @@ describe('Seeding organization memberships', () => {
       return error!;
     };
 
-    it('rejects a membership user_id that matches no seeded user email', () => {
+    it('rejects a membership email that matches no seeded user', () => {
       const error = findError(
         {
           users: [{ email: 'admin@acme.com' }],
-          organizations: [{ name: 'Acme', memberships: [{ user_id: 'user_01H_LITERAL_ID' }] }],
+          organizations: [{ name: 'Acme', memberships: [{ email: 'ghost@acme.com' }] }],
         },
-        'organizations[0].memberships[0].user_id',
+        'organizations[0].memberships[0].email',
       );
-      expect(error.message).toContain('joined by email');
+      expect(error.message).toContain('must match a user defined in users');
     });
 
     it('rejects a membership when no users are defined at all', () => {
       findError(
-        { organizations: [{ name: 'Acme', memberships: [{ user_id: 'admin@acme.com' }] }] },
-        'organizations[0].memberships[0].user_id',
+        { organizations: [{ name: 'Acme', memberships: [{ email: 'admin@acme.com' }] }] },
+        'organizations[0].memberships[0].email',
       );
     });
 
-    it('rejects a membership with a missing user_id', () => {
+    it('rejects a membership with a missing email', () => {
       findError(
-        { organizations: [{ name: 'Acme', memberships: [{ user_id: '' }] }] },
+        { organizations: [{ name: 'Acme', memberships: [{ email: '' }] }] },
+        'organizations[0].memberships[0].email',
+      );
+    });
+
+    it('points the pre-rename user_id key at email', () => {
+      const error = findError(
+        {
+          users: [{ email: 'admin@acme.com' }],
+          organizations: [{ name: 'Acme', memberships: [{ user_id: 'user_01H_LITERAL_ID' } as never] }],
+        },
         'organizations[0].memberships[0].user_id',
       );
+      expect(error.message).toContain('use `email`');
     });
 
     it('rejects an invalid membership status', () => {
       const error = findError(
         {
           users: [{ email: 'admin@acme.com' }],
-          organizations: [{ name: 'Acme', memberships: [{ user_id: 'admin@acme.com', status: 'suspended' as never }] }],
+          organizations: [{ name: 'Acme', memberships: [{ email: 'admin@acme.com', status: 'suspended' as never }] }],
         },
         'organizations[0].memberships[0].status',
       );
@@ -114,9 +125,7 @@ describe('Seeding organization memberships', () => {
     it('accepts a membership referencing a seeded user by email', () => {
       const result = validateSeedConfig({
         users: [{ email: 'admin@acme.com' }],
-        organizations: [
-          { name: 'Acme', memberships: [{ user_id: 'admin@acme.com', role: 'admin', status: 'active' }] },
-        ],
+        organizations: [{ name: 'Acme', memberships: [{ email: 'admin@acme.com', role: 'admin', status: 'active' }] }],
       });
       expect(result.errors).toEqual([]);
       expect(result.valid).toBe(true);

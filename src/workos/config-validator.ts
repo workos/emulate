@@ -127,20 +127,31 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             });
           } else {
             org.memberships.forEach((membership, mIndex) => {
-              if (!membership.user_id || typeof membership.user_id !== 'string') {
+              // The pre-rename key: it read as "pass a user_... id", which can never
+              // resolve (ids are generated at startup) — point at `email` instead.
+              const legacyUserId = (membership as { user_id?: unknown }).user_id;
+              if (!membership.email || typeof membership.email !== 'string') {
+                if (legacyUserId !== undefined) {
+                  errors.push({
+                    path: `organizations[${index}].memberships[${mIndex}].user_id`,
+                    message:
+                      'memberships reference seeded users by email — use `email` (seeded user ids are generated at startup, so a user_id literal can never resolve)',
+                    value: legacyUserId,
+                  });
+                } else {
+                  errors.push({
+                    path: `organizations[${index}].memberships[${mIndex}].email`,
+                    message: 'email is required and must be the email of a user defined in users',
+                    value: membership.email,
+                  });
+                }
+              } else if (!userEmails.has(membership.email)) {
+                // A dangling reference would seed a membership whose embedded user
+                // cannot resolve, which membership serialization rejects.
                 errors.push({
-                  path: `organizations[${index}].memberships[${mIndex}].user_id`,
-                  message: 'user_id is required and must be a string',
-                  value: membership.user_id,
-                });
-              } else if (!userEmails.has(membership.user_id)) {
-                // A dangling reference would seed a membership whose embedded `user`
-                // serializes as null, which strict SDK deserializers reject.
-                errors.push({
-                  path: `organizations[${index}].memberships[${mIndex}].user_id`,
-                  message:
-                    'user_id must match the email of a user defined in users (seeded user ids are generated at startup, so memberships are joined by email)',
-                  value: membership.user_id,
+                  path: `organizations[${index}].memberships[${mIndex}].email`,
+                  message: 'email must match a user defined in users',
+                  value: membership.email,
                 });
               }
               if (membership.status && !['active', 'inactive', 'pending'].includes(membership.status)) {
