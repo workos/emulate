@@ -72,7 +72,9 @@ export interface Emulator {
 
 export async function createEmulator(options: EmulatorOptions = {}): Promise<Emulator> {
   const port = options.port ?? 4100;
-  const hostname = options.hostname ?? '127.0.0.1';
+  // Falsy (including an empty string) falls back to the loopback default rather than
+  // binding all interfaces, so a stray `--host=` can't silently re-expose the server.
+  const hostname = options.hostname || '127.0.0.1';
   const baseUrl = `http://localhost:${port}`;
 
   // `apiKeys` may be the legacy auth allow-list map or an array of API key resources.
@@ -177,9 +179,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   // without exposing the server beyond loopback. Best-effort: ignore failures (e.g. no
   // IPv6 support, or the port already taken on `::1`).
   const secondaryServer =
-    options.hostname === undefined && hostname === '127.0.0.1'
-      ? await listen('::1', actualPort).catch(() => undefined)
-      : undefined;
+    !options.hostname && hostname === '127.0.0.1' ? await listen('::1', actualPort).catch(() => undefined) : undefined;
 
   // Update JWT issuer to reflect the actual bound URL (matters when port: 0)
   jwt.issuer = url;

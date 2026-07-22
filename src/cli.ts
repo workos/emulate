@@ -84,7 +84,9 @@ function parseArgs(argv: string[]): CliArgs {
     }
 
     if (arg.startsWith('--host=')) {
-      parsed.host = arg.slice('--host='.length);
+      const value = arg.slice('--host='.length);
+      if (!value) throw new Error('--host requires a value');
+      parsed.host = value;
       continue;
     }
 

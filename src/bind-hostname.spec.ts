@@ -19,6 +19,15 @@ function firstNonLoopbackIPv4(): string | undefined {
   return undefined;
 }
 
+function hasIPv6Loopback(): boolean {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const addr of addrs ?? []) {
+      if (addr.family === 'IPv6' && addr.internal) return true;
+    }
+  }
+  return false;
+}
+
 async function isReachable(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
@@ -33,23 +42,24 @@ async function isReachable(url: string): Promise<boolean> {
 }
 
 const externalIp = firstNonLoopbackIPv4();
+const ipv6Loopback = hasIPv6Loopback();
 
 describe('server bind address', () => {
   it('is reachable on loopback with the default hostname', async () => {
     const emulator = await createEmulator({ port: 0 });
     try {
       expect(await isReachable(`${emulator.url}/health`)).toBe(true);
+      expect(await isReachable(`http://127.0.0.1:${emulator.port}/health`)).toBe(true);
     } finally {
       await emulator.close();
     }
   });
 
   // The advertised `localhost` URL may resolve to either family on dual-stack hosts,
-  // so the default bind must answer on both IPv4 and IPv6 loopback.
-  it('is reachable on both IPv4 and IPv6 loopback with the default hostname', async () => {
+  // so the default bind must also answer on IPv6 loopback where it's available.
+  it.skipIf(!ipv6Loopback)('is reachable on IPv6 loopback with the default hostname', async () => {
     const emulator = await createEmulator({ port: 0 });
     try {
-      expect(await isReachable(`http://127.0.0.1:${emulator.port}/health`)).toBe(true);
       expect(await isReachable(`http://[::1]:${emulator.port}/health`)).toBe(true);
     } finally {
       await emulator.close();
