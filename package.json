@@ -37,7 +37,8 @@
     "./workos": {
       "import": "./dist/workos/index.js",
       "types": "./dist/workos/index.d.ts"
-    }
+    },
+    "./bundle": "./dist/bundle.js"
   },
   "dependencies": {
     "@hono/node-server": "^1",
@@ -63,7 +64,8 @@
     "clean": "rm -rf ./dist",
     "prebuild": "npm run clean",
     "build": "tsc",
-    "postbuild": "chmod +x ./dist/cli.js",
+    "postbuild": "chmod +x ./dist/cli.js && npm run build:bundle",
+    "build:bundle": "bun build --target=bun --format=esm src/index.ts --outfile dist/bundle.js",
     "start": "node ./dist/cli.js",
     "test": "vitest run",
     "test:watch": "vitest",
