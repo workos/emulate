@@ -44,6 +44,18 @@ describe('server bind address', () => {
     }
   });
 
+  // The advertised `localhost` URL may resolve to either family on dual-stack hosts,
+  // so the default bind must answer on both IPv4 and IPv6 loopback.
+  it('is reachable on both IPv4 and IPv6 loopback with the default hostname', async () => {
+    const emulator = await createEmulator({ port: 0 });
+    try {
+      expect(await isReachable(`http://127.0.0.1:${emulator.port}/health`)).toBe(true);
+      expect(await isReachable(`http://[::1]:${emulator.port}/health`)).toBe(true);
+    } finally {
+      await emulator.close();
+    }
+  });
+
   it.skipIf(!externalIp)('does not listen on non-loopback interfaces by default', async () => {
     const emulator = await createEmulator({ port: 0 });
     try {
