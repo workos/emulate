@@ -40,6 +40,13 @@ export interface EmulatorSeedConfig {
 
 export interface EmulatorOptions {
   port?: number;
+  /**
+   * Network interface to bind to. Defaults to `localhost`, which keeps the
+   * emulator's unauthenticated endpoints reachable only from the local
+   * machine. Set to `0.0.0.0` (or a specific interface) to intentionally
+   * expose the emulator to other hosts on the network.
+   */
+  hostname?: string;
   seed?: EmulatorSeedConfig;
   interactiveAuth?: boolean;
   webhookRetryConfig?: {
@@ -65,6 +72,7 @@ export interface Emulator {
 
 export async function createEmulator(options: EmulatorOptions = {}): Promise<Emulator> {
   const port = options.port ?? 4100;
+  const hostname = options.hostname ?? '127.0.0.1';
   const baseUrl = `http://localhost:${port}`;
 
   // `apiKeys` may be the legacy auth allow-list map or an array of API key resources.
@@ -147,7 +155,11 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
 
   seedFn();
 
-  const httpServer = serve({ fetch: app.fetch, port });
+  // Passing an explicit `hostname` makes `listen()` asynchronous, so wait for the
+  // server to be bound before reading its address (important for port: 0).
+  const httpServer = await new Promise<ReturnType<typeof serve>>((resolve) => {
+    const server = serve({ fetch: app.fetch, port, hostname }, () => resolve(server));
+  });
 
   // Resolve actual port (important for port: 0)
   const addr = httpServer.address();
