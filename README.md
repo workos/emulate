@@ -700,3 +700,7 @@ The WorkOS Emulator is designed for testing and development environments. When u
 - **Use environment variables**: Store sensitive configuration (API keys, secrets) in environment variables.
 - **Regular updates**: Keep the emulator updated to get security fixes and improvements.
 - **Network isolation**: Run the emulator in an isolated network environment when possible.
+
+## Development
+
+Building from source requires [Bun](https://bun.sh) in addition to Node.js: `npm run build` compiles with `tsc`, then uses `bun build` to emit the self-contained `dist/bundle.js`. If `npm run build` fails with `bun: command not found`, install Bun first.
