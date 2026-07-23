@@ -8,6 +8,7 @@ import { validateSeedConfig, formatValidationErrors } from './workos/config-vali
 
 interface CliArgs {
   port: number;
+  host?: string;
   seed?: string;
   json: boolean;
   help: boolean;
@@ -25,6 +26,8 @@ Start a local WorkOS API emulator.
 
 Options:
   --port, -p <port>   Port to listen on (default: ${DEFAULT_PORT})
+  --host <hostname>   Interface to bind to (default: localhost). Use 0.0.0.0 to
+                      intentionally expose the emulator to other hosts.
   --seed, -s <path>   Path to seed config file (YAML or JSON)
   --interactive, -i   Show login pages for SSO/AuthKit (for E2E browser testing)
   --validate-config   Validate seed config file without starting server
@@ -70,6 +73,20 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg.startsWith('--port=')) {
       parsed.port = parsePort(arg.slice('--port='.length));
+      continue;
+    }
+
+    if (arg === '--host') {
+      const value = argv[++i];
+      if (!value) throw new Error(`${arg} requires a value`);
+      parsed.host = value;
+      continue;
+    }
+
+    if (arg.startsWith('--host=')) {
+      const value = arg.slice('--host='.length);
+      if (!value) throw new Error('--host requires a value');
+      parsed.host = value;
       continue;
     }
 
@@ -161,6 +178,7 @@ async function main(): Promise<void> {
 
   const emulator = await createEmulator({
     port: argv.port,
+    hostname: argv.host,
     seed: seedConfig,
     interactiveAuth: argv.interactive,
   });

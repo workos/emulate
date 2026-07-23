@@ -40,6 +40,13 @@ export interface EmulatorSeedConfig {
 
 export interface EmulatorOptions {
   port?: number;
+  /**
+   * Network interface to bind to. Defaults to `localhost`, which keeps the
+   * emulator's unauthenticated endpoints reachable only from the local
+   * machine. Set to `0.0.0.0` (or a specific interface) to intentionally
+   * expose the emulator to other hosts on the network.
+   */
+  hostname?: string;
   seed?: EmulatorSeedConfig;
   interactiveAuth?: boolean;
   webhookRetryConfig?: {
@@ -65,6 +72,9 @@ export interface Emulator {
 
 export async function createEmulator(options: EmulatorOptions = {}): Promise<Emulator> {
   const port = options.port ?? 4100;
+  // Falsy (including an empty string) falls back to the loopback default rather than
+  // binding all interfaces, so a stray `--host=` can't silently re-expose the server.
+  const hostname = options.hostname || '127.0.0.1';
   const baseUrl = `http://localhost:${port}`;
 
   // `apiKeys` may be the legacy auth allow-list map or an array of API key resources.
@@ -147,12 +157,29 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
 
   seedFn();
 
-  const httpServer = serve({ fetch: app.fetch, port });
+  // Passing an explicit `hostname` makes `listen()` asynchronous, so we await the
+  // listening callback (important for port: 0) and reject if the bind fails.
+  const listen = (hn: string, p: number): Promise<ReturnType<typeof serve>> =>
+    new Promise((resolve, reject) => {
+      const server = serve({ fetch: app.fetch, port: p, hostname: hn }, () => resolve(server));
+      server.once('error', reject);
+    });
+
+  const httpServer = await listen(hostname, port);
 
   // Resolve actual port (important for port: 0)
   const addr = httpServer.address();
   const actualPort = typeof addr === 'object' && addr ? addr.port : port;
   const url = `http://localhost:${actualPort}`;
+
+  // The advertised URL is `localhost`, which dual-stack hosts may resolve to either
+  // `127.0.0.1` or `::1`. Binding a single loopback family would leave the URL
+  // unreachable on the other. When using the default loopback (no explicit hostname),
+  // also listen on IPv6 loopback so `localhost` works regardless of resolution order,
+  // without exposing the server beyond loopback. Best-effort: ignore failures (e.g. no
+  // IPv6 support, or the port already taken on `::1`).
+  const secondaryServer =
+    !options.hostname && hostname === '127.0.0.1' ? await listen('::1', actualPort).catch(() => undefined) : undefined;
 
   // Update JWT issuer to reflect the actual bound URL (matters when port: 0)
   jwt.issuer = url;
@@ -186,9 +213,12 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
       // reset is primarily used, but not for production use.
     },
     close(): Promise<void> {
-      return new Promise((resolve, reject) => {
-        httpServer.close((err) => (err ? reject(err) : resolve()));
-      });
+      const closeOne = (server: ReturnType<typeof serve>) =>
+        new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      const servers = secondaryServer ? [httpServer, secondaryServer] : [httpServer];
+      return Promise.all(servers.map(closeOne)).then(() => undefined);
     },
     addErrorHook(hook: ErrorHookInput): ErrorHook {
       return addErrorHook(store, hook);

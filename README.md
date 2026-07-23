@@ -688,7 +688,7 @@ The WorkOS Emulator is designed for testing and development environments. When u
 
 ### Network Security
 
-- **Bind to localhost**: By default, the emulator binds to `localhost`. If you need to expose it, use a firewall or VPN.
+- **Bind to localhost**: By default, the emulator binds to `localhost`, so its unauthenticated endpoints are only reachable from the local machine. To intentionally expose it to other hosts, pass `--host 0.0.0.0` (CLI) or `hostname: '0.0.0.0'` (`createEmulator`), and protect it with a firewall or VPN.
 - **No CORS restrictions**: The emulator doesn't enforce CORS. Configure CORS in your application if needed.
 - **No TLS/SSL**: The emulator doesn't provide HTTPS. Use a reverse proxy (nginx, Caddy) for TLS termination in production.
 
