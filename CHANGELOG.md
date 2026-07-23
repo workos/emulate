@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/workos/emulate/compare/v0.3.0...v0.3.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* bind emulator server to localhost by default ([#21](https://github.com/workos/emulate/issues/21)) ([5a0fd1b](https://github.com/workos/emulate/commit/5a0fd1bffdd698384059249e76800b5b3982ea27))
+
 ## [0.3.0](https://github.com/workos/emulate/compare/v0.2.2...v0.3.0) (2026-07-21)
 
 
