@@ -60,6 +60,7 @@
   "scripts": {
     "clean": "rm -rf ./dist",
     "build": "rm -rf ./dist && tsc && chmod +x ./dist/cli.js",
+    "build:binary": "bun build --compile ./src/cli.ts --outfile ./dist/workos-emulate",
     "start": "bun ./dist/cli.js",
     "dev": "bun src/cli.ts",
     "test": "bun test",
