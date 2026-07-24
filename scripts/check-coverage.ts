@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 /**
  * Coverage checker: compares the WorkOS OpenAPI spec against the emulator's
  * registered routes to find missing or extra endpoints.
