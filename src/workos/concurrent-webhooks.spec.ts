@@ -1,7 +1,7 @@
 /**
  * Tests for concurrent webhook delivery scenarios
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer, type Server } from 'node:http';
 import { createEmulator, type Emulator } from '../index.js';
 

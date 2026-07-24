@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, setSystemTime, afterEach } from 'bun:test';
 import { JWTManager } from './jwt.js';
 
 describe('JWTManager', () => {
@@ -9,7 +9,7 @@ describe('JWTManager', () => {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    setSystemTime();
   });
 
   it('signs a token and verifies it', () => {
@@ -52,12 +52,11 @@ describe('JWTManager', () => {
   });
 
   it('throws on expired token', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2020-01-01T00:00:00Z'));
+    setSystemTime(new Date('2020-01-01T00:00:00Z'));
 
     const token = jwt.sign({ sub: 'user_01ABC', aud: 'client_01XYZ' }, { expiresIn: 60 });
 
-    vi.setSystemTime(new Date('2020-01-01T00:02:00Z'));
+    setSystemTime(new Date('2020-01-01T00:02:00Z'));
     expect(() => jwt.verify(token)).toThrow('Token has expired');
   });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin, seedFromConfig } from '../index.js';
 import { getWorkOSStore } from '../store.js';

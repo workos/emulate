@@ -1,7 +1,7 @@
 /**
  * Integration tests for error hooks with actual API failures
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { createEmulator, type Emulator } from '../index.js';
 
 describe('Error Hooks Integration Tests', () => {

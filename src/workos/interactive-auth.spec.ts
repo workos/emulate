@@ -1,7 +1,7 @@
 /**
  * Tests for interactive auth mode (HTML login pages)
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { createEmulator, type Emulator } from '../index.js';
 
 describe('Interactive Auth Mode', () => {

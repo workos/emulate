@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from './index.js';
 import { workosPlugin } from '../workos/index.js';
 import { addErrorHook, getErrorHooks, removeErrorHook } from './error-hooks.js';

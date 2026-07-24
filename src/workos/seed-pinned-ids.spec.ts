@@ -5,7 +5,7 @@
  * the restart-minted id churns duplicate rows. These tests prove a pinned id is what the
  * API returns, what a login token carries, and what a webhook delivers.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'bun:test';
 import { createServer, type Server } from 'node:http';
 import { createEmulator, type Emulator } from '../index.js';
 import { validateSeedConfig } from './config-validator.js';

@@ -7,7 +7,7 @@
  * operator explicitly opts in via `hostname`.
  */
 import { networkInterfaces } from 'node:os';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { createEmulator } from './index.js';
 
 function firstNonLoopbackIPv4(): string | undefined {

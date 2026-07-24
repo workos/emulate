@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import { generateId, resetIdState, ID_PREFIXES } from './id.js';
 
 beforeEach(() => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { Collection, Store, type Entity } from './store.js';
 
 interface User extends Entity {
@@ -31,12 +31,11 @@ describe('Collection', () => {
     });
 
     it('update merges data and updates updated_at; delete removes item', () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
+      setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
       const inserted = col.insert({ name: 'bob' });
       const createdAt = inserted.created_at;
 
-      vi.setSystemTime(new Date('2020-01-02T00:00:00.000Z'));
+      setSystemTime(new Date('2020-01-02T00:00:00.000Z'));
       const updated = col.update(inserted.id, { name: 'robert', status: 'active' });
       expect(updated).toBeDefined();
       expect(updated!.name).toBe('robert');
@@ -47,7 +46,7 @@ describe('Collection', () => {
 
       expect(col.delete(inserted.id)).toBe(true);
       expect(col.get(inserted.id)).toBeUndefined();
-      vi.useRealTimers();
+      setSystemTime();
     });
 
     it('update returns undefined for nonexistent ID', () => {
@@ -210,5 +209,5 @@ describe('Store', () => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
+  setSystemTime();
 });

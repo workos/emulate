@@ -4,7 +4,7 @@
  * pinned client_id/secret) and API keys in seed config so a dockerized local
  * dev environment has usable credentials on startup.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'bun:test';
 import { createEmulator, type Emulator } from '../index.js';
 import { validateSeedConfig } from './config-validator.js';
 

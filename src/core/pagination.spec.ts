@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { cursorPaginate, type Entity } from './pagination.js';
 
 interface TestItem extends Entity {

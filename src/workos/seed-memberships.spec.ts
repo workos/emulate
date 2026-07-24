@@ -4,7 +4,7 @@
  * don't resolve to a seeded user — a dangling membership could not serialize (the
  * membership serializer requires a resolvable embedded user).
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'bun:test';
 import { createEmulator, type Emulator } from '../index.js';
 import { validateSeedConfig } from './config-validator.js';
 

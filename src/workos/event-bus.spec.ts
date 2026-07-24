@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, spyOn, type Mock } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import { Store } from '../core/store.js';
 import { getWorkOSStore } from './store.js';
@@ -7,10 +7,18 @@ import { EventBus } from './event-bus.js';
 describe('EventBus', () => {
   let store: Store;
   let bus: EventBus;
+  let fetchSpy: Mock<typeof fetch> | undefined;
 
   beforeEach(() => {
     store = new Store();
     bus = new EventBus(store);
+  });
+
+  // bun test runs every file in one process: restore here so a failing
+  // assertion can never leak a mocked fetch into later spec files.
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    fetchSpy = undefined;
   });
 
   it('stores events on emit', () => {
@@ -84,7 +92,7 @@ describe('EventBus', () => {
     let receivedSignature: string | undefined;
 
     // Mock fetch to capture the delivery
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('ok'));
+    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('ok'));
 
     ws.webhookEndpoints.insert({
       object: 'webhook_endpoint',
@@ -101,7 +109,7 @@ describe('EventBus', () => {
     // Wait for async delivery
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [, init] = fetchSpy.mock.calls[0];
     receivedBody = init!.body as string;
     receivedSignature = (init!.headers as Record<string, string>)['WorkOS-Signature'];
@@ -114,17 +122,16 @@ describe('EventBus', () => {
     const [, timestamp, hash] = match;
     const expectedHash = createHmac('sha256', secret).update(`${timestamp}.${receivedBody}`).digest('hex');
     expect(hash).toBe(expectedHash);
-
-    fetchSpy.mockRestore();
   });
 
   it('does not block when webhook delivery times out', async () => {
     const ws = getWorkOSStore(store);
 
     // Mock fetch to simulate a slow endpoint
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(new Response('ok')), 10000)));
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
+      // Cast: Bun types `fetch` with a `preconnect` property the mock closure doesn't need.
+      (() => new Promise((resolve) => setTimeout(() => resolve(new Response('ok')), 10000))) as unknown as typeof fetch,
+    );
 
     ws.webhookEndpoints.insert({
       object: 'webhook_endpoint',
@@ -144,7 +151,5 @@ describe('EventBus', () => {
     // Should complete in under 100ms (not waiting for 10s fetch)
     expect(elapsed).toBeLessThan(100);
     expect(ws.events.all()).toHaveLength(1);
-
-    fetchSpy.mockRestore();
   });
 });

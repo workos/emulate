@@ -15,7 +15,7 @@
  * exact sets. Closing a divergence (emit the field) forces deleting its ledger
  * entry, and any *new* divergence fails the build — drift can't accrue silently.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { Store } from '../core/index.js';
 import { getWorkOSStore } from './store.js';
 import {

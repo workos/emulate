@@ -6,11 +6,25 @@
  * creation and authentication outcome delivers a signed webhook whose name and
  * payload match the OpenAPI spec (via the generated EVENT_DATA_REQUIREMENTS).
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer, type Server } from 'node:http';
 import { createHmac, randomBytes } from 'node:crypto';
 import { createEmulator, type Emulator } from './index.js';
 import { EVENT_DATA_REQUIREMENTS } from './workos/generated/events.js';
+
+/** Poll `fn` until it stops throwing or the timeout elapses (bun:test has no vi.waitFor). */
+async function waitFor<T>(fn: () => T | Promise<T>, opts: { timeout?: number; interval?: number } = {}): Promise<T> {
+  const { timeout = 5000, interval = 50 } = opts;
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (Date.now() >= deadline) throw err;
+    }
+    await new Promise((r) => setTimeout(r, interval));
+  }
+}
 
 let webhookSecret = '';
 
@@ -71,7 +85,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
 
   /** Deliveries are fire-and-forget — poll until the named webhook arrives past the cursor. */
   function waitForWebhook(event: string, opts?: { after?: number; timeout?: number }): Promise<ReceivedWebhook> {
-    return vi.waitFor(
+    return waitFor(
       () => {
         const hit = receiver.received.slice(opts?.after ?? 0).find((w) => w.event === event);
         if (!hit) {
