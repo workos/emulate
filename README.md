@@ -2,6 +2,54 @@
 
 Local WorkOS API emulator for tests and development.
 
+## Installation
+
+### Homebrew (macOS and Linux)
+
+```bash
+brew install workos/tap/workos-emulate
+```
+
+### Direct binary download
+
+Self-contained executables for every platform are attached to each
+[GitHub release](https://github.com/workos/emulate/releases) — no Node, npm, or Bun required.
+
+```bash
+# macOS (Apple Silicon)
+curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-darwin-arm64
+chmod +x workos-emulate
+
+# macOS (Intel)
+curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-darwin-x64
+chmod +x workos-emulate
+
+# Linux (x64)
+curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-linux-x64
+chmod +x workos-emulate
+
+# Linux (arm64)
+curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-linux-arm64
+chmod +x workos-emulate
+```
+
+On Windows, download `workos-emulate-windows-x64.exe` from the
+[latest release](https://github.com/workos/emulate/releases/latest) and run it directly
+(there is no Homebrew path for Windows).
+
+Each release also ships a `checksums.txt` with the SHA-256 of every binary.
+
+### npm
+
+For JavaScript projects (or one-off runs via npx):
+
+```bash
+npm install --save-dev @workos/emulate
+
+# or run without installing
+npx @workos/emulate
+```
+
 ## CLI
 
 ```bash

@@ -28,3 +28,7 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
+    secrets:
+      # Reusable workflows do not inherit caller secrets; the homebrew job
+      # needs this to push formula bumps to workos/homebrew-tap.
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
