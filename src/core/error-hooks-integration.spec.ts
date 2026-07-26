@@ -37,7 +37,7 @@ describe('Error Hooks Integration Tests', () => {
     });
 
     expect(res.status).toBe(422);
-    const data = await res.json();
+    const data = (await res.json()) as any;
     expect(data.message).toBe('Validation failed');
     expect(data.code).toBe('unprocessable_entity');
     expect(data.errors).toHaveLength(1);
@@ -58,7 +58,7 @@ describe('Error Hooks Integration Tests', () => {
     });
 
     expect(res.status).toBe(500);
-    const data = await res.json();
+    const data = (await res.json()) as any;
     expect(data.message).toBe('Internal Server Error');
     expect(data.code).toBe('server_error');
 
@@ -226,7 +226,7 @@ describe('Error Hooks Integration Tests', () => {
       body: JSON.stringify({ name: 'Test Org 4' }),
     });
     expect(res4.status).toBe(429);
-    const data = await res4.json();
+    const data = (await res4.json()) as any;
     expect(data.code).toBe('rate_limit_exceeded');
     expect(data.retry_after).toBeGreaterThan(0);
 

@@ -142,7 +142,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       body: JSON.stringify({ email, password: 'correct horse battery staple', first_name: 'Alice' }),
     });
     expect(res.status).toBe(201);
-    userId = (await res.json()).id;
+    userId = ((await res.json()) as any).id;
 
     const webhook = await waitForWebhook('user.created', { after: cursor });
     expect(webhook.data.email).toBe(email);
@@ -158,7 +158,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       method: 'POST',
       body: JSON.stringify({ name: 'E2E Story Org' }),
     });
-    const org = await orgRes.json();
+    const org = (await orgRes.json()) as any;
 
     await api('/user_management/organization_memberships', {
       method: 'POST',
@@ -208,7 +208,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'client_e2e' }),
     });
     expect(authRes.status).toBe(200);
-    const auth = await authRes.json();
+    const auth = (await authRes.json()) as any;
     expect(auth.access_token).toBeTruthy();
     expect(auth.refresh_token).toBeTruthy();
     expect(auth.user.email).toBe(email);
@@ -335,7 +335,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       }),
     });
     expect(factorRes.status).toBe(201);
-    const factor = await factorRes.json();
+    const factor = (await factorRes.json()) as any;
 
     // Step 2: Authenticate with password - should trigger MFA challenge
     const passwordRes = await fetch(`${emulator.url}/user_management/authenticate`, {
@@ -344,7 +344,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       body: JSON.stringify({ grant_type: 'password', email, password: 'an even better passphrase' }),
     });
     expect(passwordRes.status).toBe(403);
-    const passwordChallenge = await passwordRes.json();
+    const passwordChallenge = (await passwordRes.json()) as any;
     expect(passwordChallenge.code).toBe('mfa_challenge');
     expect(passwordChallenge.pending_authentication_token).toBeTruthy();
     expect(passwordChallenge.authentication_challenge).toBeTruthy();
@@ -374,7 +374,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       }),
     });
     expect(factorRes.status).toBe(201);
-    const factor = await factorRes.json();
+    const factor = (await factorRes.json()) as any;
 
     // Step 2: Authenticate with password to trigger MFA challenge
     const passwordRes = await fetch(`${emulator.url}/user_management/authenticate`, {
@@ -383,7 +383,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       body: JSON.stringify({ grant_type: 'password', email, password: 'an even better passphrase' }),
     });
     expect(passwordRes.status).toBe(403);
-    const passwordChallenge = await passwordRes.json();
+    const passwordChallenge = (await passwordRes.json()) as any;
     const pendingToken = passwordChallenge.pending_authentication_token as string;
     const challengeId = passwordChallenge.authentication_challenge.id as string;
 
@@ -411,7 +411,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       }),
     });
     expect(mfaRes.status).toBe(200);
-    const mfaAuth = await mfaRes.json();
+    const mfaAuth = (await mfaRes.json()) as any;
     expect(mfaAuth.access_token).toBeTruthy();
     expect(mfaAuth.refresh_token).toBeTruthy();
 

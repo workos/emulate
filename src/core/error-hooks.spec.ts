@@ -37,7 +37,7 @@ describe('Error hooks middleware', () => {
     });
 
     expect(res.status).toBe(422);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.message).toBe('Validation failed');
     expect(body.code).toBe('unprocessable_entity');
   });
@@ -51,7 +51,7 @@ describe('Error hooks middleware', () => {
 
     const res = await req('/user_management/users');
     expect(res.status).toBe(500);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.message).toBe('Internal Server Error');
     expect(body.code).toBe('server_error');
   });
@@ -183,7 +183,7 @@ describe('Error hooks middleware', () => {
       method: 'POST',
       body: JSON.stringify({ email: 'bad' }),
     });
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.errors).toHaveLength(1);
     expect(body.errors[0].field).toBe('email');
   });

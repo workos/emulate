@@ -197,7 +197,7 @@ describe('Concurrent Webhook Delivery', () => {
           password: 'password123',
         }),
       });
-      const user = await res.json();
+      const user = (await res.json()) as any;
       createdUserIds.push(user.id);
     }
 
