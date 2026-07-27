@@ -11,6 +11,15 @@ function createTestApp() {
   return createServer(workosPlugin, { port: 0, baseUrl: 'http://localhost:0', apiKeys });
 }
 
+/**
+ * A server with its own allow-list object. The map is passed to the auth middleware by
+ * reference, so tests that register keys at runtime need a copy of their own rather than
+ * the shared `apiKeys` const, which would leak mutations into every other test.
+ */
+function createAppWithKeys(keys: ApiKeyMap) {
+  return createServer(workosPlugin, { port: 0, baseUrl: 'http://localhost:0', apiKeys: { ...keys } });
+}
+
 describe('API Keys routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
   let store: Store;
@@ -24,33 +33,60 @@ describe('API Keys routes', () => {
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
   const json = (res: Response) => res.json() as Promise<any>;
 
-  it('validates a known API key', async () => {
-    const res = await req('/api_keys/validations', {
+  it('returns the whole api_key object, permissions included, for a valid key', async () => {
+    const server = createAppWithKeys({ sk_test_full: { environment: 'test' } });
+    const record = insertKey(getWorkOSStore(server.store), 'CI Key', 'sk_test_full', ['posts:read', 'posts:write']);
+
+    const res = await server.app.request('/api_keys/validations', {
       method: 'POST',
-      body: JSON.stringify({ key: 'sk_test_org' }),
+      headers: { Authorization: 'Bearer sk_test_full', 'Content-Type': 'application/json' },
+      // The spec's ValidateApiKeyDto field is `value`.
+      body: JSON.stringify({ value: 'sk_test_full' }),
     });
     expect(res.status).toBe(200);
-    expect((await json(res)).valid).toBe(true);
+    const body = await json(res);
+    expect(body.api_key.id).toBe(record.id);
+    expect(body.api_key.object).toBe('api_key');
+    expect(body.api_key.name).toBe('CI Key');
+    // The reason a caller validates at all: the key's privileges.
+    expect(body.api_key.permissions).toEqual(['posts:read', 'posts:write']);
+    // Validation must not leak the secret it was handed back to the caller.
+    expect(body.api_key.obfuscated_value).toBe('sk_...full');
+    expect(body.api_key.key).toBeUndefined();
   });
 
-  it('rejects an unknown API key', async () => {
+  it('returns api_key: null for an unknown API key', async () => {
     const res = await req('/api_keys/validations', {
       method: 'POST',
-      body: JSON.stringify({ key: 'sk_unknown' }),
+      body: JSON.stringify({ value: 'sk_unknown' }),
+    });
+    // An invalid key is a 200 with an explicit null, not an error.
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual({ api_key: null });
+  });
+
+  it('returns api_key: null for an allow-list key with no resource behind it', async () => {
+    // The map form registers a value for authentication without creating a resource.
+    // There is no ApiKey to return, and synthesizing an owner or permission set would
+    // report privileges the emulator does not hold.
+    const res = await req('/api_keys/validations', {
+      method: 'POST',
+      body: JSON.stringify({ value: 'sk_test_org' }),
     });
     expect(res.status).toBe(200);
-    expect((await json(res)).valid).toBe(false);
+    expect(await json(res)).toEqual({ api_key: null });
   });
 
   it('enforces allow-list key expiry for both auth and validation', async () => {
-    const expiredApp = createServer(workosPlugin, {
-      port: 0,
-      baseUrl: 'http://localhost:0',
-      apiKeys: {
-        sk_test_expired: { environment: 'test', expiresAt: '2000-01-01T00:00:00.000Z' },
-        sk_test_future: { environment: 'test', expiresAt: '2999-01-01T00:00:00.000Z' },
-      },
-    }).app;
+    const server = createAppWithKeys({
+      sk_test_expired: { environment: 'test', expiresAt: '2000-01-01T00:00:00.000Z' },
+      sk_test_future: { environment: 'test', expiresAt: '2999-01-01T00:00:00.000Z' },
+    });
+    const expiredApp = server.app;
+    // Both keys resolve to a resource, so expiry is the only thing under test.
+    const ws = getWorkOSStore(server.store);
+    insertKey(ws, 'expired', 'sk_test_expired');
+    insertKey(ws, 'future', 'sk_test_future');
 
     const hdr = (k: string) => ({ Authorization: `Bearer ${k}`, 'Content-Type': 'application/json' });
 
@@ -65,12 +101,12 @@ describe('API Keys routes', () => {
           await expiredApp.request('/api_keys/validations', {
             method: 'POST',
             headers: hdr('sk_test_future'),
-            body: JSON.stringify({ key: k }),
+            body: JSON.stringify({ value: k }),
           })
         ).json()) as any
-      ).valid;
-    expect(await v('sk_test_expired')).toBe(false);
-    expect(await v('sk_test_future')).toBe(true);
+      ).api_key;
+    expect(await v('sk_test_expired')).toBeNull();
+    expect(await v('sk_test_future')).not.toBeNull();
   });
 
   it('fails closed on a malformed expiry timestamp', async () => {
@@ -84,14 +120,14 @@ describe('API Keys routes', () => {
     expect((await badExpiryApp.request('/connect/applications', { headers: hdr })).status).toBe(401);
   });
 
-  const insertKey = (ws: ReturnType<typeof getWorkOSStore>, name: string, key: string) =>
+  const insertKey = (ws: ReturnType<typeof getWorkOSStore>, name: string, key: string, permissions: string[] = []) =>
     ws.apiKeyRecords.insert({
       object: 'api_key',
       name,
       key,
       environment: 'test',
       owner: { type: 'organization', id: 'org_123' },
-      permissions: [],
+      permissions,
       last_used_at: null,
       expires_at: null,
     });

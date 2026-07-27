@@ -8,16 +8,24 @@ export function apiKeyRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
   const ws = getWorkOSStore(store);
 
-  // Validate an API key
+  // Validate an API key. Request and response both follow the spec exactly
+  // (`ValidateApiKeyDto` in, `ApiKeyValidationResponse` out): the caller sends `value`,
+  // and a valid key returns the whole `api_key` object — including its `permissions`, so
+  // permission-based authorization can be exercised locally. An invalid key is an
+  // explicit `api_key: null`, not an error, matching production and what the SDKs read.
   app.post('/api_keys/validations', async (c) => {
     const body = await parseJsonBody(c);
-    const key = body.key as string | undefined;
+    const value = body.value as string | undefined;
     const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {};
-    const entry = key ? apiKeyMap[key] : undefined;
-    // A key is valid only if it is in the allow-list and not past its expiry — the same
+    const entry = value ? apiKeyMap[value] : undefined;
+    // A key validates only if it is in the allow-list and not past its expiry — the same
     // test the auth middleware applies, so validation and real-request auth agree.
-    const valid = !!entry && !isApiKeyEntryExpired(entry);
-    return c.json({ valid });
+    const authorized = !!entry && !isApiKeyEntryExpired(entry);
+    // The allow-list map form registers a value for authentication without creating a
+    // resource; there is no ApiKey object to return for one, and inventing an owner or
+    // permission set would report privileges the emulator does not actually hold.
+    const record = authorized && value ? ws.apiKeyRecords.findOneBy('key', value) : undefined;
+    return c.json({ api_key: record ? formatApiKeyRecord(record) : null });
   });
 
   // Delete an API key record

@@ -369,13 +369,45 @@ apiKeys:
 curl http://localhost:4100/connect/applications -H "Authorization: Bearer sk_test_ci_key"
 ```
 
+Validate a key the way the SDKs do — `POST /api_keys/validations` with the key in `value`:
+
+```bash
+curl -X POST http://localhost:4100/api_keys/validations \
+  -H "Authorization: Bearer sk_test_ci_key" -H "Content-Type: application/json" \
+  -d '{"value":"sk_test_ci_key"}'
+```
+
+```json
+{
+  "api_key": {
+    "object": "api_key",
+    "id": "api_key_01K...",
+    "name": "CI Key",
+    "owner": { "type": "organization", "id": "org_01K..." },
+    "obfuscated_value": "sk_..._key",
+    "permissions": ["posts:read", "posts:write"],
+    "last_used_at": null,
+    "expires_at": null,
+    "created_at": "2026-01-15T12:00:00.000Z",
+    "updated_at": "2026-01-15T12:00:00.000Z"
+  }
+}
+```
+
+A valid key returns the whole `api_key` object — `permissions` included, so permission-based
+authorization can be exercised locally. An invalid, expired, or unknown key is `200` with
+`{"api_key": null}`, not an error — matching production and what the SDKs read. The raw value is
+never echoed back; only `obfuscated_value`.
+
 The `organization` (or the org supplied via `user_id`) must reference a seeded organization;
 an unresolved name fails fast at startup. A key seeded with an already-past `expires_at` is still
 created as a resource but does **not** authenticate, and deleting a key via `DELETE /api_keys/:id`
 stops it authenticating immediately — matching production.
 
 `apiKeys` also accepts the legacy auth allow-list map form (`{ sk_xxx: { environment } }`), which
-only registers values for authentication without creating resources.
+only registers values for authentication without creating resources. A map-form value authenticates
+requests but has no `api_key` resource behind it, so validating one returns `{"api_key": null}` —
+use the array form for keys your code validates.
 
 ## Testing Your Login Flow End-to-End
 
