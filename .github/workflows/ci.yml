@@ -33,8 +33,8 @@ jobs:
       - name: Test
         run: bun test
 
-      - name: Verify npm pack contents match baseline
-        run: diff <(LC_ALL=C sort scripts/pack-baseline.txt) <(npm pack --dry-run --json | jq -r '.[0].files[].path' | LC_ALL=C sort)
+      - name: Verify packed npm package
+        run: node scripts/check-package.mjs
 
       - name: Binary smoke test
         run: scripts/smoke-binary.sh

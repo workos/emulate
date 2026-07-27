@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import chalk from 'chalk';
 import { parse as parseYaml } from 'yaml';
 import { createEmulator, type EmulatorSeedConfig } from './index.js';
+import { checkForUpdates, shouldCheckForUpdates } from './version-check.js';
+import { VERSION } from './version.js';
 import { validateSeedConfig, formatValidationErrors } from './workos/config-validator.js';
 
 interface CliArgs {
@@ -12,6 +14,7 @@ interface CliArgs {
   seed?: string;
   json: boolean;
   help: boolean;
+  version: boolean;
   interactive: boolean;
   validateConfig: boolean;
 }
@@ -32,12 +35,24 @@ Options:
   --interactive, -i   Show login pages for SSO/AuthKit (for E2E browser testing)
   --validate-config   Validate seed config file without starting server
   --json              Print startup details as JSON
+  --version, -v       Print the installed version
   --help, -h          Show this help message
+
+Environment:
+  NO_UPDATE_NOTIFIER=1                  Disable update checks
+  WORKOS_EMULATE_DISABLE_UPDATE_CHECK=1 Disable update checks
 `);
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const parsed: CliArgs = { port: DEFAULT_PORT, json: false, help: false, interactive: false, validateConfig: false };
+  const parsed: CliArgs = {
+    port: DEFAULT_PORT,
+    json: false,
+    help: false,
+    version: false,
+    interactive: false,
+    validateConfig: false,
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -51,6 +66,11 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg === '--json') {
       parsed.json = true;
+      continue;
+    }
+
+    if (arg === '--version' || arg === '-v') {
+      parsed.version = true;
       continue;
     }
 
@@ -155,6 +175,10 @@ async function main(): Promise<void> {
     printHelp();
     return;
   }
+  if (argv.version) {
+    console.log(VERSION);
+    return;
+  }
 
   const seedConfig = argv.seed ? loadSeedFile(argv.seed) : autoDetectSeedFile();
 
@@ -194,6 +218,15 @@ async function main(): Promise<void> {
     );
   } else {
     printBanner(emulator);
+  }
+
+  if (shouldCheckForUpdates({ json: argv.json })) {
+    void checkForUpdates().then((update) => {
+      if (!update) return;
+      console.error(chalk.yellow(`Update available: ${update.currentVersion} → ${update.latestVersion}`));
+      console.error(chalk.dim(update.notice));
+      console.error();
+    });
   }
 
   const shutdown = () => {
