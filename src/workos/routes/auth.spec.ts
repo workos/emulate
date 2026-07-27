@@ -46,16 +46,34 @@ describe('Auth routes', () => {
     });
   }
 
-  /** Create an organization and join `userId` to it, defaulting to an active membership. */
-  function joinOrg(userId: string, name: string, opts?: { status?: 'active' | 'inactive' | 'pending'; role?: string }) {
-    const ws = getWorkOSStore(store);
-    const org = ws.organizations.insert({
+  function createOrg(name: string) {
+    return getWorkOSStore(store).organizations.insert({
       object: 'organization',
       name,
       external_id: null,
       metadata: {},
       stripe_customer_id: null,
     });
+  }
+
+  /** Invite `email` to `orgId`, returning the invitation including the token a client would use. */
+  async function invite(email: string, orgId: string | null, roleSlug?: string) {
+    const res = await req('/user_management/invitations', {
+      method: 'POST',
+      body: JSON.stringify({ email, organization_id: orgId, role_slug: roleSlug }),
+    });
+    return json(res);
+  }
+
+  const readInvitation = async (token: string) => json(await req(`/user_management/invitations/by_token/${token}`));
+
+  const membershipsIn = async (orgId: string) =>
+    (await json(await req(`/user_management/organization_memberships?organization_id=${orgId}`))).data;
+
+  /** Create an organization and join `userId` to it, defaulting to an active membership. */
+  function joinOrg(userId: string, name: string, opts?: { status?: 'active' | 'inactive' | 'pending'; role?: string }) {
+    const ws = getWorkOSStore(store);
+    const org = createOrg(name);
     ws.organizationMemberships.insert({
       object: 'organization_membership',
       organization_id: org.id,
@@ -74,7 +92,7 @@ describe('Auth routes', () => {
   }
 
   /** Mint a magic auth code for `email` and exchange it, as a client signing in would. */
-  async function signInWithMagicAuth(email: string) {
+  async function signInWithMagicAuth(email: string, invitationToken?: string) {
     const magicRes = await req('/user_management/magic_auth', {
       method: 'POST',
       body: JSON.stringify({ email }),
@@ -87,6 +105,7 @@ describe('Auth routes', () => {
         grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
         code,
         email,
+        invitation_token: invitationToken,
       }),
     });
   }
@@ -499,13 +518,13 @@ describe('Auth routes', () => {
     setPending();
     const foreignRes = await select(foreignOrg.id);
     expect(foreignRes.status).toBe(400);
-    expect((await json(foreignRes)).code).toBe('invalid_organization_id');
+    expect((await json(foreignRes)).code).toBe('organization_membership_not_found');
 
     // A rejected selection must not consume the pending token: the client retries with another
     // organization. An unaccepted invitation is not one it can pick.
     const pendingRes = await select(invitedOrg.id);
     expect(pendingRes.status).toBe(400);
-    expect((await json(pendingRes)).code).toBe('invalid_organization_id');
+    expect((await json(pendingRes)).code).toBe('organization_membership_not_found');
   });
 
   // --- Organization resolution on fresh logins ---
@@ -751,6 +770,194 @@ describe('Auth routes', () => {
       }),
     });
     expect((await json(switched)).organization_id).toBe(org.id);
+  });
+
+  // --- invitation_token ---
+
+  it('accepts an invitation_token, joining the org and scoping the session', async () => {
+    await createUser('invited@test.com');
+    const org = createOrg('Invited Corp');
+    const invitation = await invite('invited@test.com', org.id, 'admin');
+
+    const magicRes = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'invited@test.com' }),
+    });
+    const { code } = await json(magicRes);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        code,
+        email: 'invited@test.com',
+        invitation_token: invitation.token,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.organization_id).toBe(org.id);
+
+    const claims = decodeJwt(body.access_token);
+    expect(claims.org_id).toBe(org.id);
+    // The invitation's role_slug becomes the membership role, so the token carries it.
+    expect(claims.role).toBe('admin');
+    expect(claims.roles).toEqual(['admin']);
+
+    expect((await readInvitation(invitation.token)).state).toBe('accepted');
+    const memberships = await membershipsIn(org.id);
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0].status).toBe('active');
+  });
+
+  it('lets an invitation_token settle the organization for a multi-org user', async () => {
+    const user = await createUser('invited-multi@test.com');
+    joinOrg(user.id, 'Existing One');
+    joinOrg(user.id, 'Existing Two');
+    const invitedOrg = createOrg('Third Corp');
+    const invitation = await invite('invited-multi@test.com', invitedOrg.id);
+
+    // Without the invitation this user would get organization_selection_required; the invitation
+    // names an organization, so there is nothing left to choose.
+    const res = await signInWithMagicAuth('invited-multi@test.com', invitation.token);
+    expect(res.status).toBe(200);
+    expect((await json(res)).organization_id).toBe(invitedOrg.id);
+  });
+
+  it('reactivates a deactivated membership on a fresh invitation', async () => {
+    const user = await createUser('returning@test.com');
+    const org = joinOrg(user.id, 'Boomerang Corp', { status: 'inactive' });
+    const invitation = await invite('returning@test.com', org.id, 'admin');
+
+    const res = await signInWithMagicAuth('returning@test.com', invitation.token);
+    expect(res.status).toBe(200);
+    expect((await json(res)).organization_id).toBe(org.id);
+
+    // Reused, not duplicated.
+    const memberships = await membershipsIn(org.id);
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0].status).toBe('active');
+    expect(memberships[0].role.slug).toBe('admin');
+  });
+
+  it('rejects an invitation issued for a different email', async () => {
+    await createUser('recipient@test.com');
+    await createUser('interloper@test.com');
+    const org = createOrg('Not Yours Corp');
+    const invitation = await invite('recipient@test.com', org.id);
+
+    const res = await signInWithMagicAuth('interloper@test.com', invitation.token);
+    expect(res.status).toBe(400);
+    expect((await json(res)).code).toBe('invitation_cannot_be_used_for_email');
+    expect((await readInvitation(invitation.token)).state).toBe('pending');
+    expect(await membershipsIn(org.id)).toHaveLength(0);
+  });
+
+  it('rejects a revoked or unknown invitation without consuming the one-time code', async () => {
+    await createUser('revoked@test.com');
+    const org = createOrg('Revoked Corp');
+    const invitation = await invite('revoked@test.com', org.id);
+    await req(`/user_management/invitations/${invitation.id}/revoke`, { method: 'POST' });
+
+    const magicRes = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'revoked@test.com' }),
+    });
+    const { code } = await json(magicRes);
+
+    const exchange = (invitationToken?: string) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+          code,
+          email: 'revoked@test.com',
+          invitation_token: invitationToken,
+        }),
+      });
+
+    const revokedRes = await exchange(invitation.token);
+    expect(revokedRes.status).toBe(400);
+    expect((await json(revokedRes)).code).toBe('invitation_invalid');
+
+    const unknownRes = await exchange('inv_tok_does_not_exist');
+    expect(unknownRes.status).toBe(400);
+    expect((await json(unknownRes)).code).toBe('invitation_invalid');
+
+    // The invitation is checked before the grant runs, so the magic auth code survives both
+    // rejections and the user can still sign in.
+    const retry = await exchange();
+    expect(retry.status).toBe(200);
+    expect((await json(retry)).organization_id).toBeNull();
+  });
+
+  it('ignores invitation_token on a grant that does not accept one', async () => {
+    await createUser('refresh-invite@test.com');
+    const org = createOrg('Ignored Corp');
+    const invitation = await invite('refresh-invite@test.com', org.id);
+
+    const signIn = await signInWithMagicAuth('refresh-invite@test.com');
+    const { refresh_token } = await json(signIn);
+
+    const refreshed = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token, invitation_token: invitation.token }),
+    });
+    expect(refreshed.status).toBe(200);
+    expect((await json(refreshed)).organization_id).toBeNull();
+    // refresh_token has no invitation_token in its schema, so production would never accept it.
+    expect((await readInvitation(invitation.token)).state).toBe('pending');
+  });
+
+  it('holds an invitation until the second factor clears', async () => {
+    const created = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'mfa-invite@test.com', password: 'pw' }),
+    });
+    const user = await json(created);
+    const org = createOrg('Second Factor Corp');
+    const invitation = await invite('mfa-invite@test.com', org.id);
+
+    const ws = getWorkOSStore(store);
+    ws.authFactors.insert({
+      object: 'authentication_factor',
+      user_id: user.id,
+      type: 'totp',
+      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+    });
+
+    const passwordRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'password',
+        email: 'mfa-invite@test.com',
+        password: 'pw',
+        invitation_token: invitation.token,
+      }),
+    });
+    expect(passwordRes.status).toBe(403);
+    const challengeBody = await json(passwordRes);
+    expect(challengeBody.code).toBe('mfa_challenge');
+    // Nothing is accepted while the login is still unproven.
+    expect((await readInvitation(invitation.token)).state).toBe('pending');
+
+    const mfaRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+        code: ws.authChallenges.get(challengeBody.authentication_challenge.id)!.code,
+        pending_authentication_token: challengeBody.pending_authentication_token,
+        authentication_challenge_id: challengeBody.authentication_challenge.id,
+      }),
+    });
+    expect(mfaRes.status).toBe(200);
+    expect((await json(mfaRes)).organization_id).toBe(org.id);
+    expect((await readInvitation(invitation.token)).state).toBe('accepted');
   });
 
   // --- MFA TOTP grant tests ---

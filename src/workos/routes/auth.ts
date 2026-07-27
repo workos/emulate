@@ -15,8 +15,10 @@ import {
   emitAuthenticationEvent,
   generateCode,
   formatAuthChallenge,
+  acceptInvitation,
 } from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
+import type { WorkOSInvitation } from '../entities.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
 import { renderLoginPage } from '../login-page.js';
 
@@ -24,7 +26,21 @@ interface PendingAuth {
   user_id: string;
   organization_id: string | null;
   auth_method: string;
+  /** Carried across an MFA challenge so the second factor doesn't drop a pending invitation. */
+  invitation_token?: string | null;
 }
+
+/**
+ * The grants whose request schema carries `invitation_token`. Production has nowhere to put one on
+ * any other grant, so it is ignored rather than honored there — accepting it everywhere would let
+ * a call that works against the emulator silently skip the invitation in production.
+ */
+const INVITATION_TOKEN_GRANTS = new Set([
+  'authorization_code',
+  'password',
+  'urn:workos:oauth:grant-type:magic-auth',
+  'urn:workos:oauth:grant-type:magic-auth:code',
+]);
 
 interface AuthorizeParams {
   redirectUri: string;
@@ -167,6 +183,27 @@ export function authRoutes(ctx: RouteContext): void {
     const requestIp = c.req.header('x-forwarded-for') ?? null;
     const requestUserAgent = c.req.header('user-agent') ?? null;
 
+    /** Resolve an invitation token, rejecting one that is unknown, expired or already used. */
+    const resolveInvitation = (token: string): WorkOSInvitation => {
+      const inv = ws.invitations.findOneBy('token', token);
+      if (!inv || inv.state !== 'pending' || isExpired(inv.expires_at)) {
+        throw new WorkOSApiError(
+          400,
+          'The invitation is invalid, expired, or has already been accepted',
+          'invitation_invalid',
+        );
+      }
+      return inv;
+    };
+
+    // Resolved before the grant runs so a bad invitation cannot burn the one-time code or
+    // authorization code the same request carries; the recipient check waits until the grant has
+    // told us who is signing in.
+    let invitation: WorkOSInvitation | null =
+      INVITATION_TOKEN_GRANTS.has(grantType) && body.invitation_token
+        ? resolveInvitation(body.invitation_token as string)
+        : null;
+
     /** Emit the spec's authentication.*_failed event for a credential failure, then throw. */
     const failAuth: (
       method: string,
@@ -204,6 +241,7 @@ export function authRoutes(ctx: RouteContext): void {
         user_id: mfaUser.id,
         organization_id: orgId,
         auth_method: primaryMethod,
+        invitation_token: invitation?.token ?? null,
       });
       const challenge = ws.authChallenges.insert({
         object: 'authentication_challenge',
@@ -437,6 +475,9 @@ export function authRoutes(ctx: RouteContext): void {
 
         user = ws.users.get(pending.user_id);
         organizationId = pending.organization_id;
+        // An invitation supplied to the login that triggered this challenge is only accepted now,
+        // once the second factor has actually proven who is signing in.
+        if (pending.invitation_token) invitation = resolveInvitation(pending.invitation_token);
         // Event is authentication.mfa_succeeded; the session records the primary factor the
         // pending token was issued for (MFA is a second factor, not a session auth method).
         authMethod = 'MFA';
@@ -475,7 +516,7 @@ export function authRoutes(ctx: RouteContext): void {
           throw new WorkOSApiError(
             400,
             'The user is not an active member of the selected organization',
-            'invalid_organization_id',
+            'organization_membership_not_found',
           );
         }
 
@@ -516,6 +557,23 @@ export function authRoutes(ctx: RouteContext): void {
     }
 
     if (!user) throw notFound('User');
+
+    // Accepting an invitation is the one way a caller can name the organization on a grant that
+    // takes no organization_id: the invitation joins the user and scopes the session, so it runs
+    // ahead of the implicit resolution below and wins over anything that grant had chosen.
+    if (invitation) {
+      // Compared case-insensitively: an invitation addressed to Foo@example.com is for the same
+      // person as foo@example.com, and rejecting on letter case alone would be a false negative.
+      if (invitation.email.toLowerCase() !== user.email.toLowerCase()) {
+        throw new WorkOSApiError(
+          400,
+          'The invitation was issued for a different email address',
+          'invitation_cannot_be_used_for_email',
+        );
+      }
+      const invitedOrgId = acceptInvitation(invitation, user, ws, store.getData<EventBus>(STORE_KEYS.eventBus));
+      if (invitedOrgId) organizationId = invitedOrgId;
+    }
 
     // Resolve the organization for any fresh login that hasn't already picked one. Production
     // does this on every grant: a single active membership is selected implicitly, several

@@ -7,7 +7,13 @@ import {
   parseListParams,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatInvitation, generateVerificationToken, expiresIn, formatListResponse } from '../helpers.js';
+import {
+  formatInvitation,
+  generateVerificationToken,
+  expiresIn,
+  formatListResponse,
+  acceptInvitation,
+} from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
 
@@ -76,25 +82,7 @@ export function invitationRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, `Invitation is ${inv.state}`, 'invalid_invitation_state');
     }
 
-    ws.invitations.update(inv.id, { state: 'accepted' });
-    const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
-    eventBus?.emit({ event: EVENTS.invitationAccepted, data: formatInvitation(ws.invitations.get(inv.id)!) });
-
-    // Create org membership if invitation has an organization
-    if (inv.organization_id) {
-      const user = ws.users.findOneBy('email', inv.email);
-      if (user) {
-        ws.organizationMemberships.insert({
-          object: 'organization_membership',
-          organization_id: inv.organization_id,
-          user_id: user.id,
-          role: { slug: inv.role_slug ?? 'member' },
-          status: 'active',
-          external_id: null,
-          metadata: {},
-        });
-      }
-    }
+    acceptInvitation(inv, ws.users.findOneBy('email', inv.email), ws, store.getData<EventBus>(STORE_KEYS.eventBus));
 
     const updated = ws.invitations.get(inv.id)!;
     return c.json(formatInvitation(updated));

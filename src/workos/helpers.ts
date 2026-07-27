@@ -363,6 +363,51 @@ export function formatInvitation(inv: WorkOSInvitation): Record<string, unknown>
   return formatEntity(inv);
 }
 
+/**
+ * Mark an invitation accepted and join its recipient to the organization it names, returning that
+ * organization's id (null if the invitation names none). Shared by the invitations REST route and
+ * the authenticate grants that accept an `invitation_token` so the two cannot drift; validating
+ * the invitation stays with each caller, which report a bad one under different spec error codes.
+ *
+ * An existing membership is reused rather than duplicated, and a deactivated one is reactivated —
+ * a fresh invitation is how a removed member rejoins.
+ */
+export function acceptInvitation(
+  inv: WorkOSInvitation,
+  user: WorkOSUser | undefined,
+  ws: WorkOSStore,
+  eventBus: EventBus | undefined,
+): string | null {
+  ws.invitations.update(inv.id, { state: 'accepted' });
+  eventBus?.emit({ event: EVENTS.invitationAccepted, data: formatInvitation(ws.invitations.get(inv.id)!) });
+
+  if (!inv.organization_id) return null;
+
+  // The REST route resolves the recipient by email and tolerates an invitation for someone who
+  // has not signed up yet: the invitation is still accepted, there is just nobody to enroll.
+  if (user) {
+    const roleSlug = inv.role_slug ?? 'member';
+    const existing = ws.organizationMemberships
+      .findBy('organization_id', inv.organization_id)
+      .find((m) => m.user_id === user.id);
+    if (!existing) {
+      ws.organizationMemberships.insert({
+        object: 'organization_membership',
+        organization_id: inv.organization_id,
+        user_id: user.id,
+        role: { slug: roleSlug },
+        status: 'active',
+        external_id: null,
+        metadata: {},
+      });
+    } else if (existing.status !== 'active') {
+      ws.organizationMemberships.update(existing.id, { status: 'active', role: { slug: roleSlug } });
+    }
+  }
+
+  return inv.organization_id;
+}
+
 export function formatRedirectUri(r: WorkOSRedirectUri): Record<string, unknown> {
   return formatEntity(r);
 }
