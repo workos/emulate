@@ -464,6 +464,21 @@ export function authRoutes(ctx: RouteContext): void {
         const org = ws.organizations.get(orgId);
         if (!org) throw notFound('Organization');
 
+        // Production only scopes a session to an organization the user actually belongs to.
+        // Unvalidated, a client could select any organization id and receive a token whose
+        // org_id claim production would never issue. Checked before the pending token is
+        // consumed, so a client that picks the wrong organization can retry with the right one.
+        const selectable = ws.organizationMemberships
+          .findBy('organization_id', orgId)
+          .find((m) => m.user_id === pending.user_id && m.status === 'active');
+        if (!selectable) {
+          throw new WorkOSApiError(
+            400,
+            'The user is not an active member of the selected organization',
+            'invalid_organization_id',
+          );
+        }
+
         store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, undefined);
 
         user = ws.users.get(pending.user_id);
@@ -501,6 +516,54 @@ export function authRoutes(ctx: RouteContext): void {
     }
 
     if (!user) throw notFound('User');
+
+    // Resolve the organization for any fresh login that hasn't already picked one. Production
+    // does this on every grant: a single active membership is selected implicitly, several
+    // return organization_selection_required so the client can choose. Only three of the grants
+    // above set organizationId themselves, and authorization_code reads it off a code minted
+    // with organization_id: null — so without this step magic-auth, password, email-verification,
+    // device_code and the whole AuthKit hosted flow could each mint only an unscoped session,
+    // and anything authorizing on the org_id claim rejected every token the emulator issued.
+    //
+    // Runs before the session is created so the session records the resolved organization and a
+    // selection-required response leaves behind neither a session nor a sign-in timestamp. A
+    // refresh is excluded: it reuses a session whose scope is already settled, and an explicit
+    // body.organization_id stays the only way to move an existing session between orgs.
+    if (isFreshLogin && !organizationId) {
+      const selectableOrgs: Array<{ id: string; name: string }> = [];
+      for (const m of ws.organizationMemberships.findBy('user_id', user.id)) {
+        // 'pending' is an unaccepted invitation and 'inactive' a deactivated member; neither is
+        // an organization production would scope a session to.
+        if (m.status !== 'active') continue;
+        const org = ws.organizations.get(m.organization_id);
+        if (org) selectableOrgs.push({ id: org.id, name: org.name });
+      }
+
+      if (selectableOrgs.length === 1) {
+        organizationId = selectableOrgs[0].id;
+      } else if (selectableOrgs.length > 1) {
+        // The spec documents the organization_selection_required code but not this response body
+        // (as with mfa_challenge above); the pending token, organization list and user mirror
+        // WorkOS. The pending token carries the method so the session the organization-selection
+        // grant eventually creates reports the original factor rather than 'unknown'.
+        const pendingToken = generateId('pending');
+        store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, {
+          user_id: user.id,
+          organization_id: null,
+          auth_method: sessionAuthMethod ?? authMethod,
+        });
+        return c.json(
+          {
+            code: 'organization_selection_required',
+            message: 'The user must choose an organization to finish their authentication.',
+            pending_authentication_token: pendingToken,
+            organizations: selectableOrgs,
+            user: formatUser(user),
+          },
+          403,
+        );
+      }
+    }
 
     // A fresh login creates a new session (firing session.created); a refresh_token rotation
     // reuses the existing session, so it emits neither session.created nor an auth event.
@@ -552,6 +615,9 @@ export function authRoutes(ctx: RouteContext): void {
       sid: session.id,
       org_id: organizationId ?? undefined,
       role: roleSlug,
+      // Production emits the plural `roles` alongside `role`; the emulator models one role per
+      // membership, so it is that role as a single-element array.
+      roles: roleSlug ? [roleSlug] : undefined,
       permissions: permissionSlugs,
       aud: clientId ?? 'workos-emulate',
     });

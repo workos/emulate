@@ -5,6 +5,13 @@ export interface JWTPayload {
   sid?: string;
   org_id?: string;
   role?: string;
+  /**
+   * Every role the membership grants. Production emits `roles` alongside the singular
+   * `role`, and the WorkOS SDKs read it; a token carrying only `role` passes locally and
+   * loses the claim in production. The emulator models one role per membership, matching
+   * what the `organization_membership` serializer already does.
+   */
+  roles?: string[];
   permissions?: string[];
   /**
    * OAuth scopes granted to an M2M (client_credentials) token: space-delimited,

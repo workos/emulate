@@ -46,6 +46,51 @@ describe('Auth routes', () => {
     });
   }
 
+  /** Create an organization and join `userId` to it, defaulting to an active membership. */
+  function joinOrg(userId: string, name: string, opts?: { status?: 'active' | 'inactive' | 'pending'; role?: string }) {
+    const ws = getWorkOSStore(store);
+    const org = ws.organizations.insert({
+      object: 'organization',
+      name,
+      external_id: null,
+      metadata: {},
+      stripe_customer_id: null,
+    });
+    ws.organizationMemberships.insert({
+      object: 'organization_membership',
+      organization_id: org.id,
+      user_id: userId,
+      role: { slug: opts?.role ?? 'member' },
+      status: opts?.status ?? 'active',
+      external_id: null,
+      metadata: {},
+    });
+    return org;
+  }
+
+  /** Decode a JWT payload without verifying — these tests only inspect claims. */
+  function decodeJwt(token: string): Record<string, any> {
+    return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf-8'));
+  }
+
+  /** Mint a magic auth code for `email` and exchange it, as a client signing in would. */
+  async function signInWithMagicAuth(email: string) {
+    const magicRes = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+    const { code } = await json(magicRes);
+    return app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        code,
+        email,
+      }),
+    });
+  }
+
   it('authorize redirects with code when user exists', async () => {
     await req('/user_management/users', {
       method: 'POST',
@@ -399,14 +444,9 @@ describe('Auth routes', () => {
 
   it('organization-selection grant scopes session to selected org', async () => {
     const user = await createUser('orgsel@test.com');
-    const ws = getWorkOSStore(store);
-    const org = ws.organizations.insert({
-      object: 'organization',
-      name: 'Test Org',
-      external_id: null,
-      metadata: {},
-      stripe_customer_id: null,
-    });
+    // The user must be an active member of the org they select — production issues no token
+    // for an organization the user does not belong to.
+    const org = joinOrg(user.id, 'Test Org');
 
     // Create a pending auth token
     const pendingToken = 'pending_test_token';
@@ -429,6 +469,288 @@ describe('Auth routes', () => {
     const body = await json(res);
     expect(body.organization_id).toBe(org.id);
     expect(body.user.email).toBe('orgsel@test.com');
+  });
+
+  it('organization-selection grant rejects an org the user does not actively belong to', async () => {
+    const user = await createUser('orgsel-outsider@test.com');
+    const other = await createUser('orgsel-insider@test.com');
+    const foreignOrg = joinOrg(other.id, 'Someone Elses Org');
+    const invitedOrg = joinOrg(user.id, 'Invited But Unaccepted', { status: 'pending' });
+
+    const pendingToken = 'pending_outsider_token';
+    const setPending = () =>
+      store.setData(`pending_auth:${pendingToken}`, {
+        user_id: user.id,
+        organization_id: null,
+        auth_method: 'Password',
+      });
+
+    const select = (organizationId: string) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'urn:workos:oauth:grant-type:organization-selection',
+          pending_authentication_token: pendingToken,
+          organization_id: organizationId,
+        }),
+      });
+
+    setPending();
+    const foreignRes = await select(foreignOrg.id);
+    expect(foreignRes.status).toBe(400);
+    expect((await json(foreignRes)).code).toBe('invalid_organization_id');
+
+    // A rejected selection must not consume the pending token: the client retries with another
+    // organization. An unaccepted invitation is not one it can pick.
+    const pendingRes = await select(invitedOrg.id);
+    expect(pendingRes.status).toBe(400);
+    expect((await json(pendingRes)).code).toBe('invalid_organization_id');
+  });
+
+  // --- Organization resolution on fresh logins ---
+
+  it('magic-auth resolves the single active organization onto the session and token', async () => {
+    const user = await createUser('solo-org@test.com');
+    const org = joinOrg(user.id, 'Solo Corp', { role: 'admin' });
+
+    const res = await signInWithMagicAuth('solo-org@test.com');
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.organization_id).toBe(org.id);
+
+    const claims = decodeJwt(body.access_token);
+    expect(claims.org_id).toBe(org.id);
+    expect(claims.role).toBe('admin');
+    expect(claims.roles).toEqual(['admin']);
+
+    // The session records the same organization the token claims.
+    const session = getWorkOSStore(store).sessions.get(claims.sid);
+    expect(session?.organization_id).toBe(org.id);
+  });
+
+  it('resolves the single active organization through the AuthKit hosted flow', async () => {
+    const user = await createUser('hosted@test.com');
+    const org = joinOrg(user.id, 'Hosted Corp');
+
+    // Codes are minted with organization_id: null, so the hosted flow relies entirely on the
+    // resolution step at the token endpoint.
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=hosted@test.com',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    expect(body.organization_id).toBe(org.id);
+    expect(decodeJwt(body.access_token).org_id).toBe(org.id);
+  });
+
+  it('resolves the single active organization on password, email-verification and device_code', async () => {
+    const created = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'multi-grant@test.com', password: 'pw' }),
+    });
+    const user = await json(created);
+    const org = joinOrg(user.id, 'Grant Corp');
+
+    const passwordRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'multi-grant@test.com', password: 'pw' }),
+    });
+    expect((await json(passwordRes)).organization_id).toBe(org.id);
+
+    const ws = getWorkOSStore(store);
+    const verification = ws.emailVerifications.insert({
+      object: 'email_verification',
+      user_id: user.id,
+      email: user.email,
+      code: '424242',
+      expires_at: new Date(Date.now() + 600000).toISOString(),
+    });
+    const verifyRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        code: verification.code,
+        user_id: user.id,
+      }),
+    });
+    expect((await json(verifyRes)).organization_id).toBe(org.id);
+
+    const deviceRes = await req('/user_management/authorize/device', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: 'test_client' }),
+    });
+    const device = await json(deviceRes);
+    const deviceTokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code: device.device_code,
+      }),
+    });
+    expect((await json(deviceTokenRes)).organization_id).toBe(org.id);
+  });
+
+  it('returns organization_selection_required for a user with several active organizations', async () => {
+    const created = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'multi-org@test.com', password: 'pw' }),
+    });
+    const user = await json(created);
+    const first = joinOrg(user.id, 'Alpha Corp');
+    const second = joinOrg(user.id, 'Beta Corp');
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'multi-org@test.com', password: 'pw' }),
+    });
+    expect(res.status).toBe(403);
+    const body = await json(res);
+    expect(body.code).toBe('organization_selection_required');
+    expect(body.pending_authentication_token).toBeTruthy();
+    expect(body.user.id).toBe(user.id);
+    expect(body.organizations).toEqual([
+      { id: first.id, name: 'Alpha Corp' },
+      { id: second.id, name: 'Beta Corp' },
+    ]);
+    // No session and no sign-in: the authentication is not finished until an org is chosen.
+    expect(body.access_token).toBeUndefined();
+    const ws = getWorkOSStore(store);
+    expect(ws.sessions.findBy('user_id', user.id)).toHaveLength(0);
+    expect(ws.users.get(user.id)?.last_sign_in_at).toBeNull();
+
+    // The pending token it hands back completes the sign-in against a chosen organization.
+    const selected = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:organization-selection',
+        pending_authentication_token: body.pending_authentication_token,
+        organization_id: second.id,
+      }),
+    });
+    expect(selected.status).toBe(200);
+    const selectedBody = await json(selected);
+    expect(selectedBody.organization_id).toBe(second.id);
+    expect(decodeJwt(selectedBody.access_token).org_id).toBe(second.id);
+    // The pending token recorded the primary factor, so the session reports it.
+    expect(selectedBody.authentication_method).toBe('Password');
+  });
+
+  it('requires the second factor before organization selection', async () => {
+    const created = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'mfa-multi-org@test.com', password: 'pw' }),
+    });
+    const user = await json(created);
+    joinOrg(user.id, 'Gamma Corp');
+    const chosen = joinOrg(user.id, 'Delta Corp');
+
+    const ws = getWorkOSStore(store);
+    ws.authFactors.insert({
+      object: 'authentication_factor',
+      user_id: user.id,
+      type: 'totp',
+      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+    });
+
+    // MFA comes first: the org is not resolved while the login is still unauthenticated.
+    const passwordRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'mfa-multi-org@test.com', password: 'pw' }),
+    });
+    expect(passwordRes.status).toBe(403);
+    const challengeBody = await json(passwordRes);
+    expect(challengeBody.code).toBe('mfa_challenge');
+
+    // The response withholds the one-time code, as production does; read it off the challenge.
+    const challengeCode = ws.authChallenges.get(challengeBody.authentication_challenge.id)!.code;
+
+    // Clearing the factor surfaces the organization choice, on a fresh pending token.
+    const mfaRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+        code: challengeCode,
+        pending_authentication_token: challengeBody.pending_authentication_token,
+        authentication_challenge_id: challengeBody.authentication_challenge.id,
+      }),
+    });
+    expect(mfaRes.status).toBe(403);
+    const selectionBody = await json(mfaRes);
+    expect(selectionBody.code).toBe('organization_selection_required');
+    expect(selectionBody.pending_authentication_token).not.toBe(challengeBody.pending_authentication_token);
+
+    const selected = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:organization-selection',
+        pending_authentication_token: selectionBody.pending_authentication_token,
+        organization_id: chosen.id,
+      }),
+    });
+    expect(selected.status).toBe(200);
+    const selectedBody = await json(selected);
+    expect(selectedBody.organization_id).toBe(chosen.id);
+    // The primary factor survives both hops, so the session reports 'Password', not 'MFA'.
+    expect(selectedBody.authentication_method).toBe('Password');
+  });
+
+  it('ignores pending and inactive memberships when resolving an organization', async () => {
+    const user = await createUser('not-yet@test.com');
+    joinOrg(user.id, 'Unaccepted Invite', { status: 'pending' });
+    joinOrg(user.id, 'Deactivated', { status: 'inactive' });
+
+    const res = await signInWithMagicAuth('not-yet@test.com');
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.organization_id).toBeNull();
+    expect(decodeJwt(body.access_token).org_id).toBeUndefined();
+  });
+
+  it('leaves an unscoped session unscoped across a refresh', async () => {
+    const user = await createUser('later-member@test.com');
+
+    const signIn = await signInWithMagicAuth('later-member@test.com');
+    const { refresh_token } = await json(signIn);
+
+    // Joining an org mid-session must not silently upgrade the session's scope on refresh —
+    // only an explicit organization_id moves an existing session between organizations.
+    const org = joinOrg(user.id, 'Joined Later');
+
+    const refreshed = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token }),
+    });
+    expect(refreshed.status).toBe(200);
+    const refreshedBody = await json(refreshed);
+    expect(refreshedBody.organization_id).toBeNull();
+
+    const switched = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: refreshedBody.refresh_token,
+        organization_id: org.id,
+      }),
+    });
+    expect((await json(switched)).organization_id).toBe(org.id);
   });
 
   // --- MFA TOTP grant tests ---
