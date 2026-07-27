@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/workos/emulate/compare/v0.4.0...v0.4.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* align M2M tokens, API key validation, and JWKS with the spec ([#29](https://github.com/workos/emulate/issues/29)) ([b7746ab](https://github.com/workos/emulate/commit/b7746aba4d087d5cc840af30d623089fd515f007))
+* **auth:** scope AuthKit sessions to an organization ([#31](https://github.com/workos/emulate/issues/31)) ([c3fe11a](https://github.com/workos/emulate/commit/c3fe11aafed7e0bcb3c8a5bff2bfc59901454fd1))
+
 ## [0.4.0](https://github.com/workos/emulate/compare/v0.3.0...v0.4.0) (2026-07-27)
 
 
