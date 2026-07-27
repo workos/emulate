@@ -470,14 +470,19 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
 
+        // A deferred invitation is revalidated before the challenge and pending token are consumed.
+        // One revoked or expired during the challenge still fails the request, but the state behind
+        // it survives, so a retry reports the same invitation_invalid rather than degrading into a
+        // confusing invalid_pending_authentication_token once the record is gone.
+        const deferredInvitation = pending.invitation_token ? resolveInvitation(pending.invitation_token) : null;
+
         ws.authChallenges.delete(challenge.id);
         store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, undefined);
 
         user = ws.users.get(pending.user_id);
         organizationId = pending.organization_id;
-        // An invitation supplied to the login that triggered this challenge is only accepted now,
-        // once the second factor has actually proven who is signing in.
-        if (pending.invitation_token) invitation = resolveInvitation(pending.invitation_token);
+        // Accepted further down, now that the second factor has proven who is signing in.
+        invitation = deferredInvitation;
         // Event is authentication.mfa_succeeded; the session records the primary factor the
         // pending token was issued for (MFA is a second factor, not a session auth method).
         authMethod = 'MFA';
@@ -520,10 +525,15 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
 
+        // An invitation deferred to the selection step (one naming no organization of its own) is
+        // revalidated on the same before-consumption rule as the MFA grant above.
+        const deferredInvitation = pending.invitation_token ? resolveInvitation(pending.invitation_token) : null;
+
         store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, undefined);
 
         user = ws.users.get(pending.user_id);
         organizationId = orgId;
+        invitation = deferredInvitation;
         authMethod = pending.auth_method;
         break;
       }
@@ -559,21 +569,22 @@ export function authRoutes(ctx: RouteContext): void {
     if (!user) throw notFound('User');
 
     // Accepting an invitation is the one way a caller can name the organization on a grant that
-    // takes no organization_id: the invitation joins the user and scopes the session, so it runs
-    // ahead of the implicit resolution below and wins over anything that grant had chosen.
-    if (invitation) {
-      // Compared case-insensitively: an invitation addressed to Foo@example.com is for the same
-      // person as foo@example.com, and rejecting on letter case alone would be a false negative.
-      if (invitation.email.toLowerCase() !== user.email.toLowerCase()) {
-        throw new WorkOSApiError(
-          400,
-          'The invitation was issued for a different email address',
-          'invitation_cannot_be_used_for_email',
-        );
-      }
-      const invitedOrgId = acceptInvitation(invitation, user, ws, store.getData<EventBus>(STORE_KEYS.eventBus));
-      if (invitedOrgId) organizationId = invitedOrgId;
+    // takes no organization_id, so an invitation's organization wins over anything the grant itself
+    // chose and settles the resolution below.
+    // Rejected before anything is consumed, so a token addressed to somebody else costs the caller
+    // neither their credential nor the invitation. Compared case-insensitively: an invitation to
+    // Foo@example.com is for the same person as foo@example.com, and rejecting on letter case alone
+    // would be a false negative.
+    if (invitation && invitation.email.toLowerCase() !== user.email.toLowerCase()) {
+      throw new WorkOSApiError(
+        400,
+        'The invitation was issued for a different email address',
+        'invitation_cannot_be_used_for_email',
+      );
     }
+    // The organization is read here, but the invitation is not spent until this request is known to
+    // be issuing a session — see the acceptance below the resolution step.
+    if (invitation?.organization_id) organizationId = invitation.organization_id;
 
     // Resolve the organization for any fresh login that hasn't already picked one. Production
     // does this on every grant: a single active membership is selected implicitly, several
@@ -603,12 +614,14 @@ export function authRoutes(ctx: RouteContext): void {
         // The spec documents the organization_selection_required code but not this response body
         // (as with mfa_challenge above); the pending token, organization list and user mirror
         // WorkOS. The pending token carries the method so the session the organization-selection
-        // grant eventually creates reports the original factor rather than 'unknown'.
+        // grant eventually creates reports the original factor rather than 'unknown', and any
+        // still-unspent invitation so the selection step can finish accepting it.
         const pendingToken = generateId('pending');
         store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, {
           user_id: user.id,
           organization_id: null,
           auth_method: sessionAuthMethod ?? authMethod,
+          invitation_token: invitation?.token ?? null,
         });
         return c.json(
           {
@@ -621,6 +634,14 @@ export function authRoutes(ctx: RouteContext): void {
           403,
         );
       }
+    }
+
+    // Past every continuation check, so this request is the one issuing a session. Spending the
+    // invitation only now is what stops a one-time invitation being burned by an mfa_challenge or
+    // organization_selection_required response the client may never come back from — and it still
+    // lands before the role lookup below, which reads the membership it creates.
+    if (invitation) {
+      acceptInvitation(invitation, user, ws, store.getData<EventBus>(STORE_KEYS.eventBus));
     }
 
     // A fresh login creates a new session (firing session.created); a refresh_token rotation

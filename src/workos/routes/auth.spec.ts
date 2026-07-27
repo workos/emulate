@@ -960,6 +960,92 @@ describe('Auth routes', () => {
     expect((await readInvitation(invitation.token)).state).toBe('accepted');
   });
 
+  it('reports the same error when a deferred invitation dies mid-challenge', async () => {
+    const created = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'mfa-revoked@test.com', password: 'pw' }),
+    });
+    const user = await json(created);
+    const org = createOrg('Vanishing Corp');
+    const invitation = await invite('mfa-revoked@test.com', org.id);
+
+    const ws = getWorkOSStore(store);
+    ws.authFactors.insert({
+      object: 'authentication_factor',
+      user_id: user.id,
+      type: 'totp',
+      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+    });
+
+    const passwordRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'password',
+        email: 'mfa-revoked@test.com',
+        password: 'pw',
+        invitation_token: invitation.token,
+      }),
+    });
+    const challengeBody = await json(passwordRes);
+    const challengeCode = ws.authChallenges.get(challengeBody.authentication_challenge.id)!.code;
+
+    // The invitation is withdrawn while the user is still entering their code.
+    await req(`/user_management/invitations/${invitation.id}/revoke`, { method: 'POST' });
+
+    const completeMfa = () =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+          code: challengeCode,
+          pending_authentication_token: challengeBody.pending_authentication_token,
+          authentication_challenge_id: challengeBody.authentication_challenge.id,
+        }),
+      });
+
+    const first = await completeMfa();
+    expect(first.status).toBe(400);
+    expect((await json(first)).code).toBe('invitation_invalid');
+
+    // The challenge and pending token are revalidated before they are consumed, so a retry reports
+    // the same cause rather than decaying into invalid_pending_authentication_token.
+    const second = await completeMfa();
+    expect(second.status).toBe(400);
+    expect((await json(second)).code).toBe('invitation_invalid');
+
+    expect(ws.sessions.findBy('user_id', user.id)).toHaveLength(0);
+  });
+
+  it('defers an organization-less invitation until selection completes', async () => {
+    const user = await createUser('org-less-invite@test.com');
+    joinOrg(user.id, 'Alpha Existing');
+    const beta = joinOrg(user.id, 'Beta Existing');
+    // An invitation naming no organization cannot settle the choice for a multi-org user.
+    const invitation = await invite('org-less-invite@test.com', null);
+
+    const res = await signInWithMagicAuth('org-less-invite@test.com', invitation.token);
+    expect(res.status).toBe(403);
+    const body = await json(res);
+    expect(body.code).toBe('organization_selection_required');
+    // Not spent on a response that issued no session.
+    expect((await readInvitation(invitation.token)).state).toBe('pending');
+
+    const selected = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:organization-selection',
+        pending_authentication_token: body.pending_authentication_token,
+        organization_id: beta.id,
+      }),
+    });
+    expect(selected.status).toBe(200);
+    expect((await json(selected)).organization_id).toBe(beta.id);
+    expect((await readInvitation(invitation.token)).state).toBe('accepted');
+  });
+
   // --- MFA TOTP grant tests ---
 
   it('mfa-totp grant with valid code succeeds', async () => {
