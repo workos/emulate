@@ -24,6 +24,20 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      # The spec-derived catalogs under src/workos/generated are committed so consumers
+      # never need the spec, which means a @workos/openapi-spec bump does not update them
+      # on its own — and the conformance tests would go on asserting the previous spec's
+      # contract. Regenerate here and fail if anything moved, so a bump PR has to carry
+      # the regenerated catalogs (and any conformance fallout) with it.
+      - name: Check spec codegen is up to date
+        run: |
+          bun run gen:events
+          bun run gen:shapes
+          if ! git diff --exit-code -- src/workos/generated; then
+            echo "::error::Generated spec catalogs are stale. Run 'bun run gen:events && bun run gen:shapes' and commit the result."
+            exit 1
+          fi
+
       - name: Typecheck
         run: bun run typecheck
 
