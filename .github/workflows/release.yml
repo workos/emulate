@@ -1,30 +1,199 @@
 name: Release
 
+# release-please creates the release and pushes its tag. This workflow builds
+# every standalone target, executes the exact artifacts on native hardware, and
+# uploads only binaries that pass. npm and Homebrew follow binary validation.
 on:
   workflow_call:
     inputs:
       tag_name:
         description: Release tag name (e.g., v0.12.0-beta.1)
         type: string
-        default: ''
+        required: true
     secrets:
       SDK_BOT_PRIVATE_KEY:
         description: Private key for the org SDK bot GitHub App, used to mint a short-lived token scoped to workos/homebrew-tap
         required: false
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing release tag to build and publish
+        type: string
+        required: true
+
+concurrency:
+  group: release-${{ inputs.tag_name }}
+
+permissions:
+  contents: read
 
 jobs:
-  publish:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-darwin-arm64
+            asset: workos-emulate-darwin-arm64
+          - target: bun-darwin-x64-baseline
+            asset: workos-emulate-darwin-x64
+          - target: bun-linux-x64-baseline
+            asset: workos-emulate-linux-x64
+          - target: bun-linux-arm64
+            asset: workos-emulate-linux-arm64
+          - target: bun-linux-x64-musl-baseline
+            asset: workos-emulate-linux-x64-musl
+          - target: bun-linux-arm64-musl
+            asset: workos-emulate-linux-arm64-musl
+          - target: bun-windows-x64-baseline
+            asset: workos-emulate-windows-x64.exe
+          - target: bun-windows-arm64
+            asset: workos-emulate-windows-arm64.exe
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build standalone binary
+        run: >-
+          bun build
+          --compile
+          --no-compile-autoload-dotenv
+          --no-compile-autoload-bunfig
+          --target="${{ matrix.target }}"
+          ./src/cli.ts
+          --outfile "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  smoke:
+    name: Smoke test ${{ matrix.asset }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: workos-emulate-darwin-arm64
+            runner: macos-15
+          - asset: workos-emulate-darwin-x64
+            runner: macos-15-intel
+          - asset: workos-emulate-linux-x64
+            runner: ubuntu-24.04
+          - asset: workos-emulate-linux-arm64
+            runner: ubuntu-24.04-arm
+          - asset: workos-emulate-linux-x64-musl
+            runner: ubuntu-24.04
+            musl: true
+          - asset: workos-emulate-linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            musl: true
+          - asset: workos-emulate-windows-x64.exe
+            runner: windows-latest
+          - asset: workos-emulate-windows-arm64.exe
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/smoke
+
+      # Bun ad-hoc signs cross-compiled Mach-O files. Inspect the signature for
+      # diagnostics; executing the exact artifact below is the hard gate.
+      - name: Inspect macOS code signature
+        if: startsWith(matrix.runner, 'macos')
+        run: codesign -dvvv "dist/smoke/${{ matrix.asset }}" || true
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        if: matrix.musl != true
+        with:
+          node-version: 22
+
+      - name: Run the binary
+        if: matrix.musl != true
+        shell: bash
+        env:
+          BINARY: dist/smoke/${{ matrix.asset }}
+        run: |
+          case "$BINARY" in
+            *.exe) ;;
+            *) chmod +x "$BINARY" ;;
+          esac
+          node scripts/smoke-binary.mjs "$BINARY"
+
+      - name: Run the binary on musl
+        if: matrix.musl == true
+        env:
+          BINARY: dist/smoke/${{ matrix.asset }}
+        run: |
+          chmod +x "$BINARY"
+          docker run --rm \
+            --volume "${PWD}/${BINARY}:/workos:ro" \
+            --volume "${PWD}/scripts/smoke-binary.mjs:/smoke-binary.mjs:ro" \
+            alpine:3.22 \
+            sh -eu -c 'apk add --no-cache libstdc++ libgcc nodejs >/dev/null;
+            node /smoke-binary.mjs /workos'
+
+  upload-binaries:
+    name: Upload release binaries
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/binaries
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist/binaries
+        run: |
+          test "$(find . -maxdepth 1 -type f -name 'workos-emulate-*' | wc -l | tr -d ' ')" -eq 8
+          sha256sum workos-emulate-* > checksums.txt
+
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          test -n "$TAG_NAME"
+          gh release upload "$TAG_NAME" dist/binaries/* --clobber
+
+  publish-npm:
     name: Publish to npm
+    needs: upload-binaries
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag_name }}
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.3.11
+          bun-version: 1.3.14
 
       # npm publish --provenance (OIDC trusted publishing) is the deliberate
       # npm exception to the Bun conversion — setup-node configures the registry.
@@ -45,11 +214,6 @@ jobs:
           TAG_NAME: ${{ inputs.tag_name }}
         run: |
           VERSION="${TAG_NAME#v}"
-
-          if [[ -z "$VERSION" ]]; then
-            VERSION="$(node -p "require('./package.json').version")"
-          fi
-
           if [[ "$VERSION" == *"-"* ]]; then
             echo "tag=beta" >> "$GITHUB_OUTPUT"
           else
@@ -57,52 +221,37 @@ jobs:
           fi
 
       - name: Publish
+        env:
+          TAG_NAME: ${{ inputs.tag_name }}
         run: |
           sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"
           unset NODE_AUTH_TOKEN
+
+          VERSION="${TAG_NAME#v}"
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          test "$PACKAGE_VERSION" = "$VERSION"
+
+          if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$PACKAGE_NAME@$VERSION already published; skipping"
+            exit 0
+          fi
+
           npm publish --tag ${{ steps.npm-tag.outputs.tag }} --access public --provenance
-
-  binaries:
-    name: Upload release binaries
-    runs-on: ubuntu-latest
-    needs: publish
-    permissions:
-      contents: write # required for gh release upload
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.3.11
-
-      - name: Install
-        run: bun install --frozen-lockfile
-
-      - name: Build binaries
-        env:
-          TAG_NAME: ${{ inputs.tag_name }}
-        run: scripts/build-binaries.sh "$TAG_NAME"
-
-      - name: Upload binaries to the release-please release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ inputs.tag_name }}
-        run: gh release upload "$TAG_NAME" dist/binaries/* --clobber
 
   homebrew:
     name: Update Homebrew formula
-    runs-on: ubuntu-latest
-    needs: binaries
-    # Homebrew only ships stable releases; prerelease tags (v1.2.3-beta.1) skip the bump.
+    runs-on: macos-15
+    needs: upload-binaries
+    # Homebrew only ships stable releases; prerelease tags skip the bump.
     if: ${{ !contains(inputs.tag_name, '-') }}
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag_name }}
 
-      # Mints an installation token scoped to the tap repo; owner/repositories
-      # target homebrew-tap rather than this repo, and contents:write is all a
-      # formula push needs. The step fails loudly if the app id/key are absent.
       - name: Generate a tap-scoped token
         id: tap-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -119,11 +268,12 @@ jobs:
           token: ${{ steps.tap-token.outputs.token }}
           path: homebrew-tap
 
-      # Re-download the checksums from the release itself so the formula is
-      # guaranteed to describe the binaries users will actually download.
+      # Re-download the published checksum file so the formula can never drift
+      # from the assets users actually receive.
       - name: Download checksums from the release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ inputs.tag_name }}
         run: gh release download "$TAG_NAME" --pattern checksums.txt --dir dist/binaries
 
@@ -132,6 +282,8 @@ jobs:
           TAG_NAME: ${{ inputs.tag_name }}
         run: |
           scripts/update-homebrew-formula.sh "$TAG_NAME" dist/binaries/checksums.txt homebrew-tap/Formula/workos-emulate.rb
+          ruby -c homebrew-tap/Formula/workos-emulate.rb
+          brew style homebrew-tap/Formula/workos-emulate.rb
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -12,8 +12,9 @@ brew install workos/tap/workos-emulate
 
 ### Direct binary download
 
-Self-contained executables for every platform are attached to each
-[GitHub release](https://github.com/workos/emulate/releases) — no Node, npm, or Bun required.
+Self-contained executables for supported macOS, Linux, and Windows targets are attached to each
+[GitHub release](https://github.com/workos/emulate/releases) — no Node, npm, or Bun required. Intel
+and x64 builds use Bun's baseline target for compatibility with older CPUs.
 
 ```bash
 # macOS (Apple Silicon)
@@ -24,18 +25,26 @@ chmod +x workos-emulate
 curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-darwin-x64
 chmod +x workos-emulate
 
-# Linux (x64)
+# Linux with glibc (x64)
 curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-linux-x64
 chmod +x workos-emulate
 
-# Linux (arm64)
+# Linux with glibc (arm64)
 curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-linux-arm64
+chmod +x workos-emulate
+
+# Alpine Linux / musl (x64)
+curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-linux-x64-musl
+chmod +x workos-emulate
+
+# Alpine Linux / musl (arm64)
+curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/download/workos-emulate-linux-arm64-musl
 chmod +x workos-emulate
 ```
 
-On Windows, download `workos-emulate-windows-x64.exe` from the
-[latest release](https://github.com/workos/emulate/releases/latest) and run it directly
-(there is no Homebrew path for Windows).
+On Windows, download `workos-emulate-windows-x64.exe` or `workos-emulate-windows-arm64.exe` from
+the [latest release](https://github.com/workos/emulate/releases/latest) and run it directly (there
+is no Homebrew path for Windows).
 
 Each release also ships a `checksums.txt` with the SHA-256 of every binary.
 
@@ -57,10 +66,17 @@ workos-emulate
 workos-emulate --port 9100 --json
 workos-emulate --seed workos-emulate.config.yaml
 workos-emulate --interactive          # serve login pages for E2E browser testing
+workos-emulate --version
 ```
 
 The emulator defaults to `http://localhost:4100` and the API key `sk_test_default`.
 Use `GET /health` for readiness checks.
+
+In an interactive terminal, the CLI checks for new stable releases without delaying startup. npm
+installations follow the npm registry; Homebrew and direct-download installations follow GitHub
+Releases after their checksums are available. Set `NO_UPDATE_NOTIFIER=1` or
+`WORKOS_EMULATE_DISABLE_UPDATE_CHECK=1` to disable the check. JSON output, CI, and non-interactive
+invocations never perform it.
 
 ## Using from Any Language
 
@@ -748,3 +764,18 @@ The WorkOS Emulator is designed for testing and development environments. When u
 - **Use environment variables**: Store sensitive configuration (API keys, secrets) in environment variables.
 - **Regular updates**: Keep the emulator updated to get security fixes and improvements.
 - **Network isolation**: Run the emulator in an isolated network environment when possible.
+
+## Development
+
+The repository uses Bun 1.3.14, pinned by the `packageManager` field in `package.json`.
+
+```bash
+bun install --frozen-lockfile
+bun run typecheck
+bun test
+bun run build
+```
+
+`bun run test:coverage` writes text output and `coverage/lcov.info`. `bun run build:binary` produces
+a standalone executable for the current platform, while `scripts/build-binaries.sh <version>` builds
+every release target.
