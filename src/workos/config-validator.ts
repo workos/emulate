@@ -503,6 +503,26 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
         });
       }
     });
+
+    // A key value is the identity of the secret: it is the auth allow-list's map key and
+    // the lookup key for the resource behind it. Two entries sharing one would split that
+    // identity — the allow-list keeps the last entry's environment and expiry while the
+    // record lookup resolves the first, so validation would gate on one seed entry and
+    // report another's owner and permissions. Deleting either would also stop the other
+    // authenticating. Production cannot issue one secret twice, so reject it here rather
+    // than pick a winner.
+    const seenKeyValues = new Set<string>();
+    config.apiKeys.forEach((keyConfig, index) => {
+      if (typeof keyConfig.value !== 'string' || keyConfig.value.length === 0) return;
+      if (seenKeyValues.has(keyConfig.value)) {
+        errors.push({
+          path: `apiKeys[${index}].value`,
+          message: 'value must be unique across apiKeys',
+          value: keyConfig.value,
+        });
+      }
+      seenKeyValues.add(keyConfig.value);
+    });
   }
 
   return {

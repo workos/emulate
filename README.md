@@ -359,7 +359,7 @@ organizations:
 apiKeys:
   - name: CI Key
     organization: Acme Corp # owner org, by name (or use `user_id`)
-    value: sk_test_ci_key # optional; must start with `sk_`; generated if omitted
+    value: sk_test_ci_key # optional; must start with `sk_` and be unique; generated if omitted
     permissions: [posts:read, posts:write]
     # expires_at: 2030-01-01T00:00:00.000Z   # optional; never expires if omitted
 ```

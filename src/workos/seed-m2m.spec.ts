@@ -351,4 +351,36 @@ describe('Seed config validation for M2M apps and API keys', () => {
     const result = validateSeedConfig({ apiKeys: { sk_test_x: { environment: 'test' } } });
     expect(result.valid).toBe(true);
   });
+
+  // Two entries sharing a value split the key's identity: the auth allow-list keeps the
+  // last one's expiry while the record lookup resolves the first, so validation would gate
+  // on one entry and report the other's owner and permissions.
+  it('rejects duplicate api key values', () => {
+    expect(
+      findError(
+        {
+          organizations: [{ name: 'A' }, { name: 'B' }],
+          apiKeys: [
+            { name: 'First', organization: 'A', value: 'sk_test_dup' },
+            { name: 'Second', organization: 'B', value: 'sk_test_dup' },
+          ],
+        },
+        'apiKeys[1].value',
+      )?.message,
+    ).toContain('unique');
+  });
+
+  it('accepts distinct api key values, and omitted ones', () => {
+    const result = validateSeedConfig({
+      organizations: [{ name: 'A' }],
+      apiKeys: [
+        { name: 'First', organization: 'A', value: 'sk_test_one' },
+        { name: 'Second', organization: 'A', value: 'sk_test_two' },
+        // Omitted values are generated per key, so two of them are not a collision.
+        { name: 'Third', organization: 'A' },
+        { name: 'Fourth', organization: 'A' },
+      ],
+    });
+    expect(result).toEqual({ valid: true, errors: [] });
+  });
 });
