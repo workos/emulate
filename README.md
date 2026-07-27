@@ -447,6 +447,41 @@ Codes that WorkOS would deliver by email are delivered to you in the webhook pay
 
 Webhooks are signed exactly like production WorkOS: `WorkOS-Signature: t=<timestamp>,v1=<hmac>` where the HMAC-SHA256 is computed over `"{timestamp}.{body}"` with the endpoint's secret. The official SDKs' `webhooks.constructEvent` verifies them unchanged.
 
+### Organization-scoped sessions
+
+Every fresh login resolves an organization the way production does, so tokens carry the claims your authorization code reads:
+
+- **One active membership** — selected implicitly. The response returns `organization_id` and the access token carries `org_id`, `role`, `roles`, and `permissions`.
+- **No memberships** — `organization_id` is `null` and the token carries no `org_id`. Nothing is invented.
+- **Several active memberships** — a `403` asking the client to choose, exactly as WorkOS does:
+
+```json
+{
+  "code": "organization_selection_required",
+  "message": "The user must choose an organization to finish their authentication.",
+  "pending_authentication_token": "pending_...",
+  "organizations": [
+    { "id": "org_...", "name": "Alpha Corp" },
+    { "id": "org_...", "name": "Beta Corp" }
+  ],
+  "user": { "object": "user", "id": "user_...", "email": "member@example.com" }
+}
+```
+
+Finish the sign-in by exchanging that token for a session scoped to the chosen organization — the emulator rejects an organization the user is not an active member of with `organization_membership_not_found`:
+
+```bash
+curl -X POST http://localhost:4100/user_management/authenticate \
+  -H "Content-Type: application/json" \
+  -d '{"grant_type":"urn:workos:oauth:grant-type:organization-selection","pending_authentication_token":"pending_...","organization_id":"org_..."}'
+```
+
+Only `active` memberships count — an unaccepted invitation or a deactivated member is never selected. Passing `invitation_token` to the `authorization_code`, `password`, or Magic Auth grants accepts the invitation as part of the login, joining the user to the invited organization and scoping the session to it, so there is no selection step; a token that is unknown, expired, or already used is rejected with `invitation_invalid`, and one addressed to somebody else with `invitation_cannot_be_used_for_email`. Once a session exists, only an explicit `organization_id` on a refresh (`switchToOrganization`) moves it between organizations.
+
+### Refresh tokens always rotate
+
+The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `invalid_grant`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.
+
 ### Emitted events
 
 Authentication events carry the spec payload `{ type, status, user_id, email, ip_address, user_agent }` (plus `error` on failures and `sso` details on SSO events).
