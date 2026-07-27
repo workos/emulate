@@ -149,7 +149,11 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       users: [{ email: 'alice@acme.com', password: 'secret123' }],
       permissions: [{ slug: 'posts:read', name: 'Read Posts' }],
       roles: [{ slug: 'member', name: 'Member', permissions: ['posts:read'] }],
-      webhookEndpoints: [{ endpoint_url: 'http://localhost:5005/webhooks', events: [] }],
+      // Subscribed to an event this test never triggers, not the catch-all `[]`. Webhook
+      // endpoints are seeded before api keys and connect applications, so a catch-all would
+      // fire deliveries at a port nothing is listening on — and those in-flight fetches
+      // outlive this file and land in whichever suite runs next.
+      webhookEndpoints: [{ endpoint_url: 'http://localhost:5005/webhooks', events: ['dsync.activated'] }],
       connectApplications: [{ name: 'Billing', type: 'm2m', organization: 'Acme Corp', client_id: 'client_billing' }],
       apiKeys: [{ name: 'Envelope Key', organization: 'Acme Corp', value: API_KEY, permissions: ['posts:read'] }],
     });
