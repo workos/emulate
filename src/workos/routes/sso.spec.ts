@@ -98,6 +98,14 @@ describe('SSO routes', () => {
     expect(body.keys[0].alg).toBe('RS256');
   });
 
+  // The per-client path is the one the spec documents and the SDKs fetch when verifying a
+  // session or M2M token. A bare /sso/jwks does not match it, so it is registered too.
+  it('serves the same JWKS from the per-client path the SDKs fetch', async () => {
+    const res = await app.request('/sso/jwks/client_01ABCDEF');
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual(await json(await app.request('/sso/jwks')));
+  });
+
   it('sso authorize rejects non-localhost redirect_uri', async () => {
     const { conn } = await createOrgWithConnection();
 

@@ -1,3 +1,4 @@
+import type { Context } from 'hono';
 import { type RouteContext, parseJsonBody, WorkOSApiError, generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatSSOProfile, expiresIn, isExpired, assertLocalRedirectUri, emitAuthenticationEvent } from '../helpers.js';
@@ -248,9 +249,13 @@ export function ssoRoutes(ctx: RouteContext): void {
     return c.json(formatSSOProfile(profile));
   });
 
-  app.get('/sso/jwks', (c) => {
-    return c.json(jwt.getJWKS());
-  });
+  // The environment's JWKS. The spec only documents the per-client path, which is what the
+  // SDKs fetch (`/sso/jwks/{clientId}`) when verifying a session or M2M access token — a
+  // bare `/sso/jwks` does not match it in Hono, so both are registered. Every token the
+  // emulator issues is signed with the one key, so the client is not used to select a key.
+  const jwks = (c: Context) => c.json(jwt.getJWKS());
+  app.get('/sso/jwks', jwks);
+  app.get('/sso/jwks/:clientId', jwks);
 
   // SSO Single Logout — generate logout token
   app.post('/sso/logout/authorize', async (c) => {
