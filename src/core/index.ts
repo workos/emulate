@@ -7,7 +7,7 @@ export {
   type SortFn,
   type CollectionHooks,
 } from './store.js';
-export { generateId, resetIdState, ID_PREFIXES } from './id.js';
+export { generateId, generateUlid, resetIdState, ID_PREFIXES } from './id.js';
 export {
   parseListParams,
   cursorPaginate,

@@ -6,8 +6,14 @@ export interface JWTPayload {
   org_id?: string;
   role?: string;
   permissions?: string[];
-  /** OAuth scopes granted to an M2M (client_credentials) token. */
-  scp?: string[];
+  /**
+   * OAuth scopes granted to an M2M (client_credentials) token: space-delimited,
+   * per RFC 8693 §4.2 — the claim name and encoding production emits, and the one
+   * the WorkOS SDKs read. Not an array, and not `scp`.
+   */
+  scope?: string;
+  /** Unique token identifier. Required on M2M tokens by the WorkOS SDKs. */
+  jti?: string;
   iss: string;
   aud: string;
   exp: number;

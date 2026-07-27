@@ -5,7 +5,11 @@ const RANDOM_LEN = 16; // 16 chars of randomness
 
 let lastTime = 0;
 
-export function generateId(prefix: string): string {
+/**
+ * A bare, monotonic ULID with no resource prefix — for identifiers that are not
+ * resource ids, e.g. a JWT `jti`, which production emits unprefixed.
+ */
+export function generateUlid(): string {
   let now = Date.now();
   if (now <= lastTime) {
     now = lastTime + 1;
@@ -24,7 +28,11 @@ export function generateId(prefix: string): string {
     randStr += ENCODING[Math.floor(Math.random() * ENCODING_LEN)];
   }
 
-  return `${prefix}_${timeStr}${randStr}`;
+  return `${timeStr}${randStr}`;
+}
+
+export function generateId(prefix: string): string {
+  return `${prefix}_${generateUlid()}`;
 }
 
 export function resetIdState(): void {

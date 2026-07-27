@@ -66,8 +66,23 @@ describe('OAuth M2M token routes', () => {
     expect(claims.sub).toBe('client_billing');
     expect(claims.aud).toBe('client_billing');
     expect(claims.iss).toBe('http://localhost:0');
-    expect(claims.scp).toEqual(['invoices:read', 'invoices:write']);
+    // Space-delimited `scope` string, not a `scp` array — what production emits and what
+    // the SDKs read. An array here would pass locally and break against the real API.
+    expect(claims.scope).toBe('invoices:read invoices:write');
     expect(claims.org_id).toMatch(/^org_/);
+    // The SDKs' M2M claim guard requires `jti`; without it a valid token reads as invalid.
+    expect(claims.jti).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  });
+
+  it('gives each token a distinct jti', async () => {
+    const credentials = {
+      grant_type: 'client_credentials',
+      client_id: 'client_billing',
+      client_secret: 'secret_billing_value',
+    };
+    const first = jwt.verify((await json(await form(credentials))).access_token);
+    const second = jwt.verify((await json(await form(credentials))).access_token);
+    expect(first.jti).not.toBe(second.jti);
   });
 
   it('accepts a JSON body', async () => {
@@ -108,7 +123,7 @@ describe('OAuth M2M token routes', () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.scope).toBe('invoices:read');
-    expect(jwt.verify(body.access_token).scp).toEqual(['invoices:read']);
+    expect(jwt.verify(body.access_token).scope).toBe('invoices:read');
   });
 
   it('ignores a caller-supplied organization_id; the token org is the application org', async () => {

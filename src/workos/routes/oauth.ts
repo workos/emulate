@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { type RouteContext } from '../../core/index.js';
+import { type RouteContext, generateUlid } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 
 /**
@@ -15,8 +15,13 @@ import { getWorkOSStore } from '../store.js';
  * of type `m2m`, see the `connectApplications` seed block) for a signed JWT. The token
  * is signed with the same key the emulator exposes at `/sso/jwks/:client_id` and
  * `/oauth2/jwks`, so a consumer validating with JWKS (e.g. `jose`, checking `iss`/`aud`)
- * verifies it without any emulator-specific shims. Granted scopes ride in the `scp`
- * claim so scope-based authorization can be exercised locally.
+ * verifies it without any emulator-specific shims.
+ *
+ * The claim set mirrors a production M2M token exactly, because the SDKs parse it:
+ * granted scopes ride in a space-delimited `scope` string (RFC 8693 §4.2 — the Node
+ * SDK reads `payload.scope`), and every token carries a `jti`, without which the SDKs'
+ * M2M claim guard rejects an otherwise-valid token. Neither is emulator-flavored: a
+ * scopes *array*, or an omitted `jti`, would pass locally and fail in production.
  */
 
 const TOKEN_TTL_SECONDS = 3600;
@@ -149,8 +154,9 @@ export function oauthRoutes(ctx: RouteContext): void {
       {
         sub: clientId,
         aud: application.audience ?? clientId,
+        jti: generateUlid(),
         org_id: application.organization_id ?? undefined,
-        scp: granted,
+        scope: granted.join(' '),
       },
       { expiresIn: TOKEN_TTL_SECONDS },
     );

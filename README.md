@@ -328,11 +328,19 @@ The `access_token` is an RS256 JWT signed with the same key the emulator publish
 | `iss`    | the emulator base URL (e.g. `http://localhost:4100`)   |
 | `aud`    | the app's `audience` if set, otherwise the `client_id` |
 | `sub`    | the requesting `client_id`                             |
-| `scp`    | granted scopes (array)                                 |
+| `jti`    | a unique token identifier (ULID)                       |
+| `scope`  | granted scopes, space-delimited                        |
 | `org_id` | the application's owning organization                  |
 
-Set `audience` on the seeded application to match what your real WorkOS environment emits, so a
-consumer that validates the `aud` claim accepts emulator tokens unchanged.
+The claim set mirrors a production M2M token, because the SDKs parse it: scopes are a
+space-delimited `scope` **string** (not an array, and not `scp`), and `jti` is always present —
+the WorkOS SDKs reject an M2M token that lacks it, however well-signed.
+
+> **Set `audience` on the seeded application.** In production `aud` is your environment's client
+> ID, which is _not_ the M2M application's `client_id` — and the SDKs default the expected
+> audience to the environment client ID. The emulator has no environment-level client ID to fall
+> back on, so it uses the requesting `client_id`. Pin `audience` to the value your real WorkOS
+> environment emits and a consumer that validates `aud` accepts emulator tokens unchanged.
 
 A request may narrow to a subset of the application's scopes via `-d scope="posts:read"`;
 requesting a scope the application does not have returns `400 invalid_scope`, so scope-based
