@@ -109,8 +109,12 @@ describe('EventBus', () => {
     // Wait for async delivery
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [, init] = fetchSpy.mock.calls[0];
+    // Count this endpoint's delivery, not every call on the spy: `fetch` is global, so a
+    // delivery still in flight from another suite lands here too — and could even be
+    // calls[0], which would make the signature assertions below check someone else's body.
+    const deliveries = fetchSpy.mock.calls.filter(([url]) => url === 'http://localhost:9999/webhook');
+    expect(deliveries).toHaveLength(1);
+    const [, init] = deliveries[0];
     receivedBody = init!.body as string;
     receivedSignature = (init!.headers as Record<string, string>)['WorkOS-Signature'];
 
