@@ -27,6 +27,7 @@ import {
   formatDirectoryUser,
   formatRole,
   formatPermission,
+  formatApiKeyRecord,
 } from './helpers.js';
 import { RESPONSE_SHAPE_REQUIREMENTS } from './generated/response-shapes.js';
 import type {
@@ -38,6 +39,7 @@ import type {
   WorkOSDirectoryUser,
   WorkOSRole,
   WorkOSPermission,
+  WorkOSApiKey,
 } from './entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -154,6 +156,20 @@ const permission: WorkOSPermission = {
   updated_at: TS,
 };
 
+const apiKey: WorkOSApiKey = {
+  id: 'api_key_01',
+  object: 'api_key',
+  name: 'Production API Key',
+  key: 'sk_test_supersecret3456',
+  environment: 'test',
+  owner: { type: 'organization', id: 'org_01' },
+  permissions: ['posts:read', 'posts:write'],
+  last_used_at: null,
+  expires_at: null,
+  created_at: TS,
+  updated_at: TS,
+};
+
 const store = new Store();
 const ws = getWorkOSStore(store);
 
@@ -166,6 +182,7 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'directory_user', output: formatDirectoryUser(directoryUser) },
   { objectType: 'role', output: formatRole(role) },
   { objectType: 'permission', output: formatPermission(permission) },
+  { objectType: 'api_key', output: formatApiKeyRecord(apiKey) },
 ];
 
 /**
@@ -200,13 +217,17 @@ const KNOWN_EXTRA_FIELDS: Record<string, readonly string[]> = {
  *
  * Scope note: this set deliberately omits auth-code/token field names
  * (`code`, `token`, ...). Those belong to flow resources — email verification,
- * magic auth, password reset, client secrets, API keys — whose formatters
- * intentionally surface the value so a test harness can complete the flow
- * without an out-of-band channel. The real API hides them; an emulator must
- * not, which is exactly why those formatters are not in this catalog. Listing
- * those names here would imply a coverage this loop does not provide.
+ * magic auth, password reset, client secrets — whose formatters intentionally
+ * surface the value so a test harness can complete the flow without an
+ * out-of-band channel. The real API hides them; an emulator must not, which is
+ * exactly why those formatters are not in this catalog. Listing those names
+ * here would imply a coverage this loop does not provide.
+ *
+ * An API key is the exception among credential-bearing resources: production
+ * returns its raw value only once, at creation, so `formatApiKeyRecord` emits
+ * `obfuscated_value` and never `key` — hence `key` belongs here.
  */
-const SECRET_FIELDS = new Set<string>(['password_hash', 'code_challenge', 'code_challenge_method']);
+const SECRET_FIELDS = new Set<string>(['password_hash', 'code_challenge', 'code_challenge_method', 'key']);
 
 describe('response shape conformance (format* helpers vs OpenAPI spec)', () => {
   it('covers exactly the resources in the generated requirements catalog', () => {

@@ -26,7 +26,7 @@ import YAML from 'yaml';
 import { format, type FormatConfig } from 'oxfmt';
 
 import { type EventSchemaNode } from './gen-events-lib.js';
-import { parseShapeCatalog, generateShapesFile } from './gen-shapes-lib.js';
+import { parseShapeCatalog, parseEnvelopeCatalog, generateShapesFile } from './gen-shapes-lib.js';
 
 /** Load the project's oxfmt config so generated output matches `npm run fmt`. */
 function loadFormatConfig(): FormatConfig {
@@ -65,9 +65,10 @@ async function main(): Promise<void> {
     ext === '.yaml' || ext === '.yml' ? (YAML.parse(raw) as EventSchemaNode) : (JSON.parse(raw) as EventSchemaNode);
 
   const shapes = parseShapeCatalog(spec);
+  const envelopes = parseEnvelopeCatalog(spec);
   const resolvedOut = resolve(outFile);
   // The output path's `.ts` extension tells oxfmt to use the TypeScript parser.
-  const formatted = await format(resolvedOut, generateShapesFile(shapes), loadFormatConfig());
+  const formatted = await format(resolvedOut, generateShapesFile(shapes, envelopes), loadFormatConfig());
   if (formatted.errors.length > 0) {
     console.error('oxfmt reported errors while formatting generated output:');
     for (const err of formatted.errors) console.error(`  ${err.severity}: ${err.message}`);
@@ -83,7 +84,7 @@ async function main(): Promise<void> {
   mkdirSync(dirname(resolvedOut), { recursive: true });
   writeFileSync(resolvedOut, content, 'utf-8');
   console.log(`  wrote ${resolvedOut}`);
-  console.log(`\nShapes: ${shapes.length} resources`);
+  console.log(`\nShapes: ${shapes.length} resources, ${envelopes.length} envelopes`);
 }
 
 await main();

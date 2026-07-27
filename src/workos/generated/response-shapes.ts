@@ -3,10 +3,14 @@
  * Source: the @workos/openapi-spec package. Regenerate with:
  *   npm run gen:shapes
  *
- * Per-resource response shape requirements, extracted from the spec schema
- * curated for each object type in scripts/gen-shapes-lib.ts (OBJECT_SCHEMA_MAP).
- * Consumed by src/workos/response-shapes.spec.ts to assert the hand-written
- * format* helpers match the spec and never leak internal fields.
+ * Response shape requirements extracted from the spec schemas curated in
+ * scripts/gen-shapes-lib.ts:
+ *   - RESPONSE_SHAPE_REQUIREMENTS    per resource   (OBJECT_SCHEMA_MAP)
+ *   - RESPONSE_ENVELOPE_REQUIREMENTS per operation  (ENVELOPE_SCHEMA_MAP)
+ *
+ * Consumed by src/workos/response-shapes.spec.ts and
+ * src/workos/response-envelopes.spec.ts to assert the emulator matches the
+ * spec and never leaks internal fields.
  */
 
 export interface ResponseShapeRequirement {
@@ -19,6 +23,33 @@ export interface ResponseShapeRequirement {
 }
 
 export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequirement> = {
+  api_key: {
+    schema: 'ApiKey',
+    properties: [
+      'created_at',
+      'expires_at',
+      'id',
+      'last_used_at',
+      'name',
+      'obfuscated_value',
+      'object',
+      'owner',
+      'permissions',
+      'updated_at',
+    ],
+    required: [
+      'created_at',
+      'expires_at',
+      'id',
+      'last_used_at',
+      'name',
+      'obfuscated_value',
+      'object',
+      'owner',
+      'permissions',
+      'updated_at',
+    ],
+  },
   connection: {
     schema: 'Connection',
     properties: [
@@ -206,5 +237,78 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
       'profile_picture_url',
       'updated_at',
     ],
+  },
+};
+
+/**
+ * Top-level envelope requirements, keyed by "METHOD /spec/path". The nested
+ * resource is covered by RESPONSE_SHAPE_REQUIREMENTS; these are the wrapper
+ * fields the route handler itself is responsible for.
+ */
+export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequirement> = {
+  'GET /connect/applications': {
+    schema: 'ConnectApplicationList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'GET /events': {
+    schema: 'EventList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'GET /organizations': {
+    schema: 'OrganizationList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'GET /organizations/{organizationId}/api_keys': {
+    schema: 'OrganizationApiKeyList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'GET /sso/jwks/{clientId}': {
+    schema: 'JwksResponse',
+    properties: ['keys'],
+    required: ['keys'],
+  },
+  'GET /user_management/users': {
+    schema: 'UserlandUserList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'GET /webhook_endpoints': {
+    schema: 'WebhookEndpointList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'POST /api_keys/validations': {
+    schema: 'ApiKeyValidationResponse',
+    properties: ['agent_registration_id', 'api_key'],
+    required: ['api_key'],
+  },
+  'POST /authorization/organization_memberships/{organization_membership_id}/check': {
+    schema: 'AuthorizationCheck',
+    properties: ['authorized'],
+    required: ['authorized'],
+  },
+  'POST /portal/generate_link': {
+    schema: 'PortalLinkResponse',
+    properties: ['link'],
+    required: ['link'],
+  },
+  'POST /user_management/password_reset/confirm': {
+    schema: 'ResetPasswordResponse',
+    properties: ['user'],
+    required: ['user'],
+  },
+  'POST /user_management/users/{id}/email_verification/send': {
+    schema: 'SendVerificationEmailResponse',
+    properties: ['user'],
+    required: ['user'],
+  },
+  'POST /widgets/token': {
+    schema: 'WidgetSessionTokenResponse',
+    properties: ['token'],
+    required: ['token'],
   },
 };
