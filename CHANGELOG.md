@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/workos/emulate/compare/v0.3.0...v0.4.0) (2026-07-27)
+
+
+### Features
+
+* convert toolchain to Bun and ship standalone binaries ([#27](https://github.com/workos/emulate/issues/27)) ([122a3aa](https://github.com/workos/emulate/commit/122a3aa4c4e02072c205ae29d237a3857d09c2a7))
+
+
+### Bug Fixes
+
+* bind emulator server to localhost by default ([#21](https://github.com/workos/emulate/issues/21)) ([5a0fd1b](https://github.com/workos/emulate/commit/5a0fd1bffdd698384059249e76800b5b3982ea27))
+
 ## [0.3.0](https://github.com/workos/emulate/compare/v0.2.2...v0.3.0) (2026-07-21)
 
 
