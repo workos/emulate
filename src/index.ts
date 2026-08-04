@@ -7,6 +7,7 @@ import {
   type ErrorHook,
   type ErrorHookInput,
   type Store,
+  type SigningKeyOptions,
 } from './core/index.js';
 import { workosPlugin, seedFromConfig, type WorkOSSeedConfig } from './workos/index.js';
 import { STORE_KEYS } from './workos/constants.js';
@@ -35,6 +36,7 @@ export interface EmulatorSeedConfig {
   permissions?: WorkOSSeedConfig['permissions'];
   webhookEndpoints?: WorkOSSeedConfig['webhookEndpoints'];
   connectApplications?: WorkOSSeedConfig['connectApplications'];
+  jwtTemplate?: WorkOSSeedConfig['jwtTemplate'];
   errorHooks?: ErrorHookSeedConfig[];
 }
 
@@ -48,6 +50,20 @@ export interface EmulatorOptions {
    */
   hostname?: string;
   seed?: EmulatorSeedConfig;
+  /**
+   * `iss` to mint into access tokens, and to advertise as the OIDC issuer. Defaults to the
+   * emulator's own URL, which changes with the port. Pin it to the issuer your real WorkOS
+   * environment emits so a verifier comparing `iss` against a constant needs no test-only
+   * branch. The verifier must still fetch JWKS from the emulator.
+   */
+  issuer?: string;
+  /**
+   * Pinned RSA signing key. By default the emulator generates one at startup, so its JWKS
+   * — and every token signed against it — is invalidated by a restart. Pin the key to keep
+   * the JWKS stable across restarts, to share one key between several emulator instances,
+   * or to pre-sign tokens offline with the same key the emulator verifies.
+   */
+  signingKey?: SigningKeyOptions;
   interactiveAuth?: boolean;
   webhookRetryConfig?: {
     maxRetries?: number;
@@ -95,6 +111,8 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     port,
     baseUrl,
     apiKeys,
+    issuer: options.issuer,
+    signingKey: options.signingKey,
   });
 
   if (options.interactiveAuth) {
@@ -181,8 +199,9 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   const secondaryServer =
     !options.hostname && hostname === '127.0.0.1' ? await listen('::1', actualPort).catch(() => undefined) : undefined;
 
-  // Update JWT issuer to reflect the actual bound URL (matters when port: 0)
-  jwt.issuer = url;
+  // Update JWT issuer to reflect the actual bound URL (matters when port: 0). A pinned
+  // issuer is left alone — the whole point is that it does not move with the port.
+  if (!options.issuer) jwt.issuer = url;
 
   const primaryApiKey = Object.keys(apiKeys)[0];
 

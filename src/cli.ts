@@ -12,6 +12,9 @@ interface CliArgs {
   port: number;
   host?: string;
   seed?: string;
+  signingKey?: string;
+  kid?: string;
+  issuer?: string;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -21,6 +24,13 @@ interface CliArgs {
 
 const DEFAULT_PORT = 4100;
 const SEED_CANDIDATES = ['workos-emulate.config.yaml', 'workos-emulate.config.yml', 'workos-emulate.config.json'];
+
+/** Flags taking a string value, accepted as either `--flag value` or `--flag=value`. */
+const VALUE_FLAGS = [
+  ['--signing-key', 'signingKey'],
+  ['--kid', 'kid'],
+  ['--issuer', 'issuer'],
+] as const satisfies ReadonlyArray<readonly [string, 'signingKey' | 'kid' | 'issuer']>;
 
 function printHelp(): void {
   console.log(`Usage: workos-emulate [options]
@@ -32,6 +42,12 @@ Options:
   --host <hostname>   Interface to bind to (default: localhost). Use 0.0.0.0 to
                       intentionally expose the emulator to other hosts.
   --seed, -s <path>   Path to seed config file (YAML or JSON)
+  --signing-key <path>
+                      Path to a PEM-encoded RSA private key to sign tokens with. Without
+                      it a key is generated at startup, so the published JWKS changes on
+                      every restart. Pin it to keep the JWKS stable.
+  --kid <id>          Key id to advertise in the JWKS (default: derived from the key)
+  --issuer <url>      Value to mint as the "iss" claim (default: the emulator's own URL)
   --interactive, -i   Show login pages for SSO/AuthKit (for E2E browser testing)
   --validate-config   Validate seed config file without starting server
   --json              Print startup details as JSON
@@ -39,6 +55,9 @@ Options:
   --help, -h          Show this help message
 
 Environment:
+  WORKOS_EMULATE_SIGNING_KEY=<path>     Same as --signing-key
+  WORKOS_EMULATE_KID=<id>               Same as --kid
+  WORKOS_EMULATE_ISSUER=<url>           Same as --issuer
   NO_UPDATE_NOTIFIER=1                  Disable update checks
   WORKOS_EMULATE_DISABLE_UPDATE_CHECK=1 Disable update checks
 `);
@@ -122,6 +141,15 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
+    const valueFlag = VALUE_FLAGS.find(([flag]) => arg === flag || arg.startsWith(`${flag}=`));
+    if (valueFlag) {
+      const [flag, field] = valueFlag;
+      const value = arg === flag ? argv[++i] : arg.slice(flag.length + 1);
+      if (!value) throw new Error(`${flag} requires a value`);
+      parsed[field] = value;
+      continue;
+    }
+
     throw new Error(`Unknown option: ${arg}`);
   }
 
@@ -147,6 +175,16 @@ function loadSeedFile(filePath: string): EmulatorSeedConfig {
     return JSON.parse(content) as EmulatorSeedConfig;
   }
   return parseYaml(content) as EmulatorSeedConfig;
+}
+
+/** Read a pinned signing key from disk. Undefined path means "generate one", not an error. */
+function readSigningKey(filePath?: string): string | undefined {
+  if (!filePath) return undefined;
+  const resolved = resolve(filePath);
+  if (!existsSync(resolved)) {
+    throw new Error(`Signing key file not found: ${resolved}`);
+  }
+  return readFileSync(resolved, 'utf-8');
 }
 
 function autoDetectSeedFile(): EmulatorSeedConfig | undefined {
@@ -200,10 +238,17 @@ async function main(): Promise<void> {
     }
   }
 
+  // Flags win over environment, so a compose file can set a default a command can override.
+  const signingKeyPath = argv.signingKey ?? process.env.WORKOS_EMULATE_SIGNING_KEY;
+  const kid = argv.kid ?? process.env.WORKOS_EMULATE_KID;
+  const issuer = argv.issuer ?? process.env.WORKOS_EMULATE_ISSUER;
+
   const emulator = await createEmulator({
     port: argv.port,
     hostname: argv.host,
     seed: seedConfig,
+    issuer,
+    signingKey: signingKeyPath || kid ? { privateKey: readSigningKey(signingKeyPath), kid } : undefined,
     interactiveAuth: argv.interactive,
   });
 

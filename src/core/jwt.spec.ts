@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, setSystemTime, afterEach } from 'bun:test';
+import { generateKeyPairSync } from 'node:crypto';
 import { JWTManager } from './jwt.js';
 
 describe('JWTManager', () => {
@@ -86,5 +87,86 @@ describe('JWTManager', () => {
   it('returns a PEM-encoded public key', () => {
     const pem = jwt.getPublicKeyPem();
     expect(pem).toContain('-----BEGIN PUBLIC KEY-----');
+  });
+
+  describe('template claims', () => {
+    it('merges claims into the token', () => {
+      const token = jwt.sign(
+        { sub: 'user_01ABC', aud: 'client_01XYZ' },
+        { claims: { 'urn:myapp:tenant': 'tenant_123', 'urn:myapp:seats': 5 } },
+      );
+      const payload = jwt.verify(token);
+      expect(payload['urn:myapp:tenant']).toBe('tenant_123');
+      expect(payload['urn:myapp:seats']).toBe(5);
+    });
+
+    it('lets a claim override a resolved, non-reserved claim', () => {
+      const token = jwt.sign({ sub: 'user_01ABC', aud: 'client_01XYZ', role: 'member' }, { claims: { role: 'admin' } });
+      expect(jwt.verify(token).role).toBe('admin');
+    });
+
+    it('never lets a claim override the token identity', () => {
+      const token = jwt.sign(
+        { sub: 'user_01ABC', aud: 'client_01XYZ' },
+        { claims: { sub: 'user_01SPOOFED', iss: 'https://evil.test', exp: 1, iat: 1, jti: 'x', nbf: 1 } },
+      );
+      const payload = jwt.verify(token);
+      expect(payload.sub).toBe('user_01ABC');
+      expect(payload.iss).toBe('https://api.workos.test');
+      expect(payload.jti).toBeUndefined();
+      expect(payload.nbf).toBeUndefined();
+      expect(payload.exp).toBe(payload.iat + 3600);
+    });
+  });
+
+  describe('pinned signing key', () => {
+    // A fresh keypair per run, so the fixture is never a checked-in private key.
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+
+    it('survives a restart: a new manager verifies the old token', () => {
+      const before = new JWTManager('https://api.workos.test', { privateKey: pem });
+      const token = before.sign({ sub: 'user_01ABC', aud: 'client_01XYZ' });
+
+      const after = new JWTManager('https://api.workos.test', { privateKey: pem });
+      expect(after.verify(token).sub).toBe('user_01ABC');
+    });
+
+    it('publishes the same JWKS and kid for the same key', () => {
+      const a = new JWTManager('https://api.workos.test', { privateKey: pem });
+      const b = new JWTManager('https://api.workos.test', { privateKey: pem });
+      expect(a.getJWKS()).toEqual(b.getJWKS());
+    });
+
+    it('derives a different kid for a different key', () => {
+      const other = new JWTManager('https://api.workos.test');
+      expect(other.getJWKS().keys[0].kid).not.toBe(
+        new JWTManager('https://api.workos.test', { privateKey: pem }).getJWKS().keys[0].kid,
+      );
+    });
+
+    it('honors an explicit kid in the JWKS and the token header', () => {
+      const pinned = new JWTManager('https://api.workos.test', { privateKey: pem, kid: 'my_kid' });
+      expect(pinned.getJWKS().keys[0].kid).toBe('my_kid');
+
+      const header = JSON.parse(
+        Buffer.from(pinned.sign({ sub: 'user_01ABC', aud: 'c' }).split('.')[0], 'base64url').toString('utf-8'),
+      );
+      expect(header.kid).toBe('my_kid');
+    });
+
+    it('rejects a key that is not a PEM private key', () => {
+      expect(() => new JWTManager('https://api.workos.test', { privateKey: 'not a key' })).toThrow(
+        'could not parse as a PEM private key',
+      );
+    });
+
+    it('rejects a non-RSA key, since tokens are signed RS256', () => {
+      const ed25519 = generateKeyPairSync('ed25519').privateKey.export({
+        type: 'pkcs8',
+        format: 'pem',
+      }) as string;
+      expect(() => new JWTManager('https://api.workos.test', { privateKey: ed25519 })).toThrow('expected an RSA key');
+    });
   });
 });

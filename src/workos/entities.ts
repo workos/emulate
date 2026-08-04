@@ -1,5 +1,17 @@
 import type { Entity } from '../core/index.js';
 
+/**
+ * The environment's JWT template. Environment-scoped rather than a collection resource, so
+ * it carries no id and lives in store data instead of a collection.
+ */
+export interface WorkOSJwtTemplate {
+  object: 'jwt_template';
+  /** Template string rendering to a JSON object of claims. See workos/jwt-template.ts. */
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface WorkOSOrganization extends Entity {
   object: 'organization';
   name: string;

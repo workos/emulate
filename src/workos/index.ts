@@ -40,6 +40,7 @@ import { eventRoutes } from './routes/events.js';
 import { EventBus } from './event-bus.js';
 import { STORE_KEYS, EVENTS } from './constants.js';
 import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
+import { validateJwtTemplateContent } from './jwt-template.js';
 import {
   generateVerificationToken,
   hashPassword,
@@ -63,7 +64,13 @@ import {
   formatFeatureFlag,
   generateClientId,
 } from './helpers.js';
-import type { WorkOSConnectionType, PipeProvider, PipeConnectionStatus, WorkOSApiKeyOwner } from './entities.js';
+import type {
+  WorkOSConnectionType,
+  PipeProvider,
+  PipeConnectionStatus,
+  WorkOSApiKeyOwner,
+  WorkOSJwtTemplate,
+} from './entities.js';
 
 export { getWorkOSStore, type WorkOSStore } from './store.js';
 export * from './entities.js';
@@ -218,6 +225,15 @@ export interface WorkOSSeedApiKey {
 /** Legacy auth allow-list: maps a raw API key value to its environment. */
 export type WorkOSSeedApiKeyAuthMap = Record<string, { environment: string }>;
 
+export interface WorkOSSeedJwtTemplate {
+  /**
+   * Template string rendering to a JSON object of claims, e.g.
+   * `'{"urn:myapp:tenant": "{{ organization.metadata.tenant_id }}"}'`. Validated at
+   * startup, so a malformed template fails the boot rather than the first sign-in.
+   */
+  content: string;
+}
+
 export interface WorkOSSeedConfig {
   organizations?: WorkOSSeedOrganization[];
   users?: WorkOSSeedUser[];
@@ -234,6 +250,11 @@ export interface WorkOSSeedConfig {
    * value in the auth allow-list so the seeded key authenticates requests.
    */
   apiKeys?: WorkOSSeedApiKeyAuthMap | WorkOSSeedApiKey[];
+  /**
+   * The environment's JWT template, whose claims are merged into every access token the
+   * emulator mints. Seeding it means a test suite gets custom claims without a setup call.
+   */
+  jwtTemplate?: WorkOSSeedJwtTemplate;
 }
 
 export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSeedConfig): void {
@@ -514,6 +535,20 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       authMap[value] = { environment, expiresAt };
     }
     store.setData(STORE_KEYS.apiKeyMap, authMap);
+  }
+
+  if (config.jwtTemplate) {
+    const problems = validateJwtTemplateContent(config.jwtTemplate.content);
+    if (problems.length > 0) {
+      throw new Error(`workos seed config: jwtTemplate.content is invalid: ${problems.join('; ')}`);
+    }
+    const now = new Date().toISOString();
+    store.setData(STORE_KEYS.jwtTemplate, {
+      object: 'jwt_template',
+      content: config.jwtTemplate.content,
+      created_at: now,
+      updated_at: now,
+    } satisfies WorkOSJwtTemplate);
   }
 }
 

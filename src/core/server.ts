@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { Store } from './store.js';
-import { JWTManager } from './jwt.js';
+import { JWTManager, type SigningKeyOptions } from './jwt.js';
 import { createApiErrorHandler, requestIdMiddleware } from './middleware/error-handler.js';
 import { authMiddleware, type ApiKeyMap, type WorkOSAppEnv } from './middleware/auth.js';
 import { errorHooksMiddleware } from './error-hooks.js';
@@ -11,6 +11,14 @@ export interface ServerOptions {
   port?: number;
   baseUrl?: string;
   apiKeys?: ApiKeyMap;
+  /**
+   * `iss` to mint into tokens. Defaults to the emulator's own base URL. Pin it to match
+   * what your real WorkOS environment emits, so a verifier that checks `iss` against a
+   * constant accepts emulator tokens unchanged.
+   */
+  issuer?: string;
+  /** Pinned RSA signing key, keeping the JWKS stable across restarts. */
+  signingKey?: SigningKeyOptions;
 }
 
 export function createServer(plugin: ServicePlugin, options: ServerOptions = {}) {
@@ -19,7 +27,7 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
 
   const app = new Hono<WorkOSAppEnv>();
   const store = new Store();
-  const jwt = new JWTManager(baseUrl);
+  const jwt = new JWTManager(options.issuer ?? baseUrl, options.signingKey);
 
   const apiKeys: ApiKeyMap = options.apiKeys ?? {
     sk_test_default: { environment: 'test' },

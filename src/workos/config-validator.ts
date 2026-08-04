@@ -2,6 +2,7 @@
  * Configuration validation for seed config files
  */
 import type { WorkOSSeedConfig } from './index.js';
+import { validateJwtTemplateContent } from './jwt-template.js';
 
 /**
  * A pinned id is addressed as a single path segment (`/organizations/:id`,
@@ -523,6 +524,22 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
       }
       seenKeyValues.add(keyConfig.value);
     });
+  }
+
+  // Validating the template here means `--validate-config` catches a broken one, rather
+  // than leaving it to fail at the first sign-in.
+  if (config.jwtTemplate !== undefined) {
+    if (typeof config.jwtTemplate !== 'object' || config.jwtTemplate === null) {
+      errors.push({
+        path: 'jwtTemplate',
+        message: 'must be an object with a content field',
+        value: config.jwtTemplate,
+      });
+    } else {
+      for (const problem of validateJwtTemplateContent(config.jwtTemplate.content)) {
+        errors.push({ path: 'jwtTemplate.content', message: problem, value: config.jwtTemplate.content });
+      }
+    }
   }
 
   return {

@@ -74,26 +74,84 @@ describe('Config routes', () => {
   });
 
   describe('JWT Template', () => {
-    it('gets default JWT template', async () => {
+    const content = '{"urn:myapp:email": "{{ user.email }}"}';
+
+    it('404s before a template is set', async () => {
       const res = await req('/user_management/jwt_template');
-      expect(res.status).toBe(200);
-      const data = await json(res);
-      expect(data.object).toBe('jwt_template');
-      expect(data.custom_claims).toEqual({});
+      expect(res.status).toBe(404);
     });
 
-    it('updates JWT template', async () => {
+    it('updates and persists the template in the spec shape', async () => {
       const res = await req('/user_management/jwt_template', {
         method: 'PUT',
-        body: JSON.stringify({ custom_claims: { role: '{{user.role}}' } }),
+        body: JSON.stringify({ content }),
       });
       expect(res.status).toBe(200);
       const data = await json(res);
-      expect(data.custom_claims).toEqual({ role: '{{user.role}}' });
+      expect(data.object).toBe('jwt_template');
+      expect(data.content).toBe(content);
+      expect(data.created_at).toBeString();
+      expect(data.updated_at).toBeString();
 
-      // Verify persistence
       const getRes = await req('/user_management/jwt_template');
-      expect((await json(getRes)).custom_claims).toEqual({ role: '{{user.role}}' });
+      expect((await json(getRes)).content).toBe(content);
+    });
+
+    it('keeps created_at across updates', async () => {
+      const first = await json(
+        await req('/user_management/jwt_template', { method: 'PUT', body: JSON.stringify({ content }) }),
+      );
+      const second = await json(
+        await req('/user_management/jwt_template', {
+          method: 'PUT',
+          body: JSON.stringify({ content: '{"a": "b"}' }),
+        }),
+      );
+      expect(second.created_at).toBe(first.created_at);
+    });
+
+    it('rejects a template that sets a reserved claim', async () => {
+      const res = await req('/user_management/jwt_template', {
+        method: 'PUT',
+        body: JSON.stringify({ content: '{"sub": "{{ user.id }}", "iss": "me"}' }),
+      });
+      expect(res.status).toBe(422);
+      expect((await json(res)).message).toContain('reserved claims: sub, iss');
+    });
+
+    it('rejects a template referencing an unknown variable', async () => {
+      const res = await req('/user_management/jwt_template', {
+        method: 'PUT',
+        body: JSON.stringify({ content: '{"x": "{{ usr.email }}"}' }),
+      });
+      expect(res.status).toBe(422);
+      expect((await json(res)).message).toContain('unknown template variable `usr`');
+    });
+
+    it('rejects a template that does not render to JSON', async () => {
+      const res = await req('/user_management/jwt_template', {
+        method: 'PUT',
+        body: JSON.stringify({ content: 'not json' }),
+      });
+      expect(res.status).toBe(422);
+      expect((await json(res)).message).toContain('did not render to valid JSON');
+    });
+
+    it('rejects a missing content field', async () => {
+      const res = await req('/user_management/jwt_template', { method: 'PUT', body: JSON.stringify({}) });
+      expect(res.status).toBe(422);
+      expect((await json(res)).message).toContain('content is required');
+    });
+
+    // The emulator used to accept `custom_claims` and silently drop it from the token. Point
+    // anyone still sending it at the field that works instead of accepting it as a no-op.
+    it('names `content` when handed the old custom_claims field', async () => {
+      const res = await req('/user_management/jwt_template', {
+        method: 'PUT',
+        body: JSON.stringify({ custom_claims: { tenant: 'acme' } }),
+      });
+      expect(res.status).toBe(422);
+      expect((await json(res)).message).toContain('custom_claims is not a JWT template field');
     });
   });
 });

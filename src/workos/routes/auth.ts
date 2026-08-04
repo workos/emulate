@@ -17,6 +17,7 @@ import {
   formatAuthChallenge,
   acceptInvitation,
 } from '../helpers.js';
+import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
 import type { WorkOSInvitation } from '../entities.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
@@ -689,17 +690,20 @@ export function authRoutes(ctx: RouteContext): void {
       }
     }
 
-    const accessToken = jwt.sign({
-      sub: user.id,
-      sid: session.id,
-      org_id: organizationId ?? undefined,
-      role: roleSlug,
-      // Production emits the plural `roles` alongside `role`; the emulator models one role per
-      // membership, so it is that role as a single-element array.
-      roles: roleSlug ? [roleSlug] : undefined,
-      permissions: permissionSlugs,
-      aud: clientId ?? 'workos-emulate',
-    });
+    const accessToken = jwt.sign(
+      {
+        sub: user.id,
+        sid: session.id,
+        org_id: organizationId ?? undefined,
+        role: roleSlug,
+        // Production emits the plural `roles` alongside `role`; the emulator models one role per
+        // membership, so it is that role as a single-element array.
+        roles: roleSlug ? [roleSlug] : undefined,
+        permissions: permissionSlugs,
+        aud: clientId ?? 'workos-emulate',
+      },
+      { claims: renderConfiguredJwtTemplate(store, ws, updatedUser, organizationId) },
+    );
 
     // Store a real refresh token
     const newRefreshToken = ws.refreshTokens.insert({
