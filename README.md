@@ -589,7 +589,11 @@ fails the boot rather than the first sign-in. `--validate-config` checks it too.
 WorkOS caps rendered claims at 3072 bytes, because the session cookie carrying them has to fit in a
 browser. That depends on the data, so it is enforced when the token is signed: a template that
 renders too large fails the authenticate call with a 422 naming the size, rather than quietly
-handing back a token missing its claims.
+handing back a token missing its claims. Nothing is persisted when that happens — no session, no
+refresh token, no bumped `last_sign_in_at` — with one exception: a login that passed
+`invitation_token` has already consumed the invitation by then, and the membership it created
+stands. Retrying with the same token returns `invitation_invalid`, so fix the template and re-seed
+rather than replaying the login.
 
 > Earlier versions accepted a `custom_claims` object on this endpoint and stored it without ever
 > putting it in a token. That field is gone; `content` is what works. Sending `custom_claims` now
