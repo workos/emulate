@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/workos/emulate/compare/v0.4.1...v0.5.0) (2026-08-04)
+
+
+### Features
+
+* **jwt:** apply JWT templates and pin the signing key ([#32](https://github.com/workos/emulate/issues/32)) ([f2da8b5](https://github.com/workos/emulate/commit/f2da8b596a3f6dd6d5ae761c81ec51fbc32c042d))
+
 ## [0.4.1](https://github.com/workos/emulate/compare/v0.4.0...v0.4.1) (2026-07-27)
 
 
