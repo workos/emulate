@@ -645,6 +645,13 @@ export function authRoutes(ctx: RouteContext): void {
       acceptInvitation(invitation, user, ws, store.getData<EventBus>(STORE_KEYS.eventBus));
     }
 
+    // Render template claims before anything is persisted. A template that cannot render fails the
+    // request, and rendering here means that failure leaves no orphaned session, no bumped
+    // last_sign_in_at, and no session.created/user.updated webhook implying a login that never
+    // completed. It has to follow acceptInvitation above, whose membership the context reads; the
+    // pre-update `user` record is equivalent, since no template variable exposes last_sign_in_at.
+    const templateClaims = renderConfiguredJwtTemplate(store, ws, user, organizationId);
+
     // A fresh login creates a new session (firing session.created); a refresh_token rotation
     // reuses the existing session, so it emits neither session.created nor an auth event.
     let session;
@@ -702,7 +709,7 @@ export function authRoutes(ctx: RouteContext): void {
         permissions: permissionSlugs,
         aud: clientId ?? 'workos-emulate',
       },
-      { claims: renderConfiguredJwtTemplate(store, ws, updatedUser, organizationId) },
+      { claims: templateClaims },
     );
 
     // Store a real refresh token

@@ -6,6 +6,7 @@
 import { describe, it, expect, afterEach } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
 import { createEmulator, type Emulator } from '../index.js';
+import { getWorkOSStore } from './store.js';
 
 describe('JWT templates end to end', () => {
   let emulator: Emulator | undefined;
@@ -137,6 +138,27 @@ describe('JWT templates end to end', () => {
     const { status, body } = await login(emulator.url);
     expect(status).toBe(422);
     expect(body.message).toContain('over the 3072-byte limit');
+  });
+
+  // The 422 must arrive before any session state is written. Rendering after the session insert
+  // left an orphaned session — plus a bumped last_sign_in_at and the webhooks that go with them —
+  // for a sign-in that never returned a token.
+  it('persists nothing when a template cannot render', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        ...seed,
+        users: [{ email: 'alice@acme.com', first_name: 'x'.repeat(4000), password: 'test123' }],
+        jwtTemplate: { content: '{"urn:myapp:name": "{{ user.first_name }}"}' },
+      },
+    });
+
+    const ws = getWorkOSStore(emulator.store);
+    expect(await login(emulator.url).then((r) => r.status)).toBe(422);
+
+    expect(ws.sessions.all()).toHaveLength(0);
+    expect(ws.refreshTokens.all()).toHaveLength(0);
+    expect(ws.users.findOneBy('email', 'alice@acme.com')?.last_sign_in_at).toBeNull();
   });
 
   it('signs nothing extra when no template is configured', async () => {
