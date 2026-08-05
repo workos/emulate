@@ -32,6 +32,7 @@ describe('Auth routes', () => {
     const ws = getWorkOSStore(store);
     return ws.users.insert({
       object: 'user',
+      name: null,
       email,
       first_name: null,
       last_name: null,
@@ -199,6 +200,7 @@ describe('Auth routes', () => {
     const ws = getWorkOSStore(store);
     ws.users.insert({
       object: 'user',
+      name: null,
       email: 'msft@test.com',
       first_name: null,
       last_name: null,
@@ -1154,6 +1156,7 @@ describe('AuthKit interactive auth', () => {
     const ws = getWorkOSStore(store);
     ws.users.insert({
       object: 'user',
+      name: null,
       email: 'alice@test.com',
       first_name: null,
       last_name: null,
@@ -1188,6 +1191,7 @@ describe('AuthKit interactive auth', () => {
     const ws = getWorkOSStore(store);
     ws.users.insert({
       object: 'user',
+      name: null,
       email: 'post@test.com',
       first_name: null,
       last_name: null,
@@ -1223,6 +1227,7 @@ describe('AuthKit interactive auth', () => {
     const ws = getWorkOSStore(store);
     ws.users.insert({
       object: 'user',
+      name: null,
       email: 'e2e@test.com',
       first_name: null,
       last_name: null,

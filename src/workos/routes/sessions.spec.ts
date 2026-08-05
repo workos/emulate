@@ -26,6 +26,7 @@ describe('Session routes', () => {
     const ws = getWorkOSStore(store);
     const user = ws.users.insert({
       object: 'user',
+      name: null,
       email: 'logout@test.com',
       first_name: null,
       last_name: null,
@@ -64,6 +65,7 @@ describe('Session routes', () => {
     const ws = getWorkOSStore(store);
     const user = ws.users.insert({
       object: 'user',
+      name: null,
       email: 'logout2@test.com',
       first_name: null,
       last_name: null,

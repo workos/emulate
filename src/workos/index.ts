@@ -105,6 +105,7 @@ export interface WorkOSSeedUser {
    */
   id?: string;
   email: string;
+  name?: string;
   first_name?: string;
   last_name?: string;
   password?: string;
@@ -272,6 +273,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         object: 'user',
         id: userConfig.id,
         email: userConfig.email,
+        name: userConfig.name ?? null,
         first_name: userConfig.first_name ?? null,
         last_name: userConfig.last_name ?? null,
         email_verified: userConfig.email_verified ?? false,

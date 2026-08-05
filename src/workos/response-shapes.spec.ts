@@ -51,6 +51,7 @@ const user: WorkOSUser = {
   id: 'user_01',
   object: 'user',
   email: 'alice@example.com',
+  name: 'Alice Smith',
   first_name: 'Alice',
   last_name: 'Smith',
   email_verified: true,

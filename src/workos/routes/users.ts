@@ -29,6 +29,7 @@ export function userRoutes(ctx: RouteContext): void {
     const user = ws.users.insert({
       object: 'user',
       email,
+      name: (body.name as string) ?? null,
       first_name: (body.first_name as string) ?? null,
       last_name: (body.last_name as string) ?? null,
       email_verified: (body.email_verified as boolean) ?? false,
@@ -86,6 +87,7 @@ export function userRoutes(ctx: RouteContext): void {
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
 
+    if ('name' in body) updates.name = body.name ?? null;
     if ('first_name' in body) updates.first_name = body.first_name ?? null;
     if ('last_name' in body) updates.last_name = body.last_name ?? null;
     if ('email_verified' in body) updates.email_verified = body.email_verified;
