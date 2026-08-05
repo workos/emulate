@@ -725,7 +725,13 @@ export function authRoutes(ctx: RouteContext): void {
         roles: roleSlug ? [roleSlug] : undefined,
         permissions: permissionSlugs,
         client_id: tokenClientId,
+        // session.created_at gives the documented semantics: stamped at sign-in, unchanged by
+        // refresh (which reuses the session). If in-session re-authentication is ever modelled,
+        // this needs a dedicated session.authenticated_at to read instead.
         auth_time: Math.floor(new Date(session.created_at).getTime() / 1000),
+        // RFC 8693 actor claim; the docs put the impersonator's email in the nested sub. The
+        // emulator models impersonation as user config, so it is read off the user record.
+        act: updatedUser.impersonator ? { sub: updatedUser.impersonator.email } : undefined,
         aud: tokenClientId ?? 'workos-emulate',
       },
       { claims: templateClaims },

@@ -670,6 +670,59 @@ describe('Auth routes', () => {
     expect(decodeJwt(refreshBody.access_token).client_id).toBe('original_client');
   });
 
+  it('includes the RFC 8693 act claim when the session is impersonated', async () => {
+    await createUser('impersonated@test.com', {
+      impersonator: { email: 'admin@test.com', reason: 'debugging' },
+    });
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=impersonated@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    // The session-tokens reference puts the impersonator's email in the nested sub.
+    expect(decodeJwt(body.access_token).act).toEqual({ sub: 'admin@test.com' });
+  });
+
+  it('keeps the act claim across a refresh_token grant', async () => {
+    await createUser('impersonated-refresh@test.com', {
+      impersonator: { email: 'admin@test.com', reason: 'debugging' },
+    });
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=impersonated-refresh@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const tokenBody = await json(tokenRes);
+    expect(decodeJwt(tokenBody.access_token).act).toEqual({ sub: 'admin@test.com' });
+
+    // A refreshed token still represents the same impersonated session.
+    const refreshRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: tokenBody.refresh_token,
+        client_id: 'test_client',
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    const refreshBody = await json(refreshRes);
+    expect(decodeJwt(refreshBody.access_token).act).toEqual({ sub: 'admin@test.com' });
+  });
+
   it('resolves the single active organization through the AuthKit hosted flow', async () => {
     const user = await createUser('hosted@test.com');
     const org = joinOrg(user.id, 'Hosted Corp');

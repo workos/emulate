@@ -34,6 +34,12 @@ export interface JWTClaims {
   client_id?: string;
   /** Unix-seconds timestamp of the user's most recent active authentication. */
   auth_time?: number;
+  /**
+   * RFC 8693 actor claim, present only when the session was started via impersonation.
+   * The nested `sub` carries the impersonator's email, the identifier the session-tokens
+   * reference documents (and the only one production surfaces for impersonators).
+   */
+  act?: { sub: string };
   iss: string;
   aud: string;
   exp: number;
