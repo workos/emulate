@@ -2,6 +2,9 @@
 
 Local WorkOS API emulator for tests and development.
 
+**[Which features are supported?](SUPPORTED.md)** — a per-feature matrix of endpoint coverage and
+how data gets in, regenerated from the spec and the routes on every build.
+
 ## Installation
 
 ### Homebrew (macOS and Linux)

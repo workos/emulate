@@ -38,6 +38,19 @@ jobs:
             exit 1
           fi
 
+      # SUPPORTED.md is derived from the spec, the registered routes, and the
+      # EmulatorSeedConfig keys, so it goes stale whenever any of the three moves —
+      # including when a route is added, which no spec bump would catch. The generator
+      # also fails outright on a spec tag that no feature claims, so a new WorkOS
+      # product cannot silently drop out of the table.
+      - name: Check support matrix is up to date
+        run: |
+          bun run gen:supported
+          if ! git diff --exit-code -- SUPPORTED.md; then
+            echo "::error::SUPPORTED.md is stale. Run 'bun run gen:supported' and commit the result."
+            exit 1
+          fi
+
       - name: Typecheck
         run: bun run typecheck
 
