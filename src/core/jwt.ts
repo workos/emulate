@@ -30,6 +30,8 @@ export interface JWTClaims {
   scope?: string;
   /** Unique token identifier. Required on M2M tokens by the WorkOS SDKs. */
   jti?: string;
+  /** The OAuth client the token was minted for; production AuthKit includes it. */
+  client_id?: string;
   iss: string;
   aud: string;
   exp: number;

@@ -707,6 +707,7 @@ export function authRoutes(ctx: RouteContext): void {
         // membership, so it is that role as a single-element array.
         roles: roleSlug ? [roleSlug] : undefined,
         permissions: permissionSlugs,
+        client_id: clientId,
         aud: clientId ?? 'workos-emulate',
       },
       { claims: templateClaims },

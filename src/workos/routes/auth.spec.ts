@@ -548,6 +548,23 @@ describe('Auth routes', () => {
     expect(session?.organization_id).toBe(org.id);
   });
 
+  it('includes client_id on the access token when the authorize flow carries one', async () => {
+    await createUser('cid@test.com');
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=cid@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    expect(decodeJwt(body.access_token).client_id).toBe('test_client');
+  });
+
   it('resolves the single active organization through the AuthKit hosted flow', async () => {
     const user = await createUser('hosted@test.com');
     const org = joinOrg(user.id, 'Hosted Corp');
