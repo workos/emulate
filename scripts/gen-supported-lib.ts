@@ -413,7 +413,7 @@ export function deriveSetup(feature: FeatureDef, seedConfigKeys: string[], imple
     if (!seedConfigKeys.includes(key)) {
       throw new Error(
         `Feature "${feature.name}" declares seed key "${key}", which is not a key of EmulatorSeedConfig. ` +
-          `Update FEATURES in scripts/gen-supported-lib.ts, or add the key to EmulatorSeedConfig in src/index.ts.`,
+        `Update FEATURES in scripts/gen-supported-lib.ts, or add the key to EmulatorSeedConfig in src/index.ts.`,
       );
     }
   }
@@ -454,7 +454,7 @@ export function buildMatrix(
   if (unmapped.length > 0) {
     throw new Error(
       `Spec tags are not assigned to a feature: ${unmapped.join(', ')}. ` +
-        `Add them to FEATURES in scripts/gen-supported-lib.ts.`,
+      `Add them to FEATURES in scripts/gen-supported-lib.ts.`,
     );
   }
 
@@ -544,10 +544,10 @@ export function generateSupportedMarkdown(matrix: SupportMatrix, options: Render
     '',
     `The emulator implements **${totals.covered} of ${totals.total}** endpoints in the WorkOS OpenAPI spec${specNote} (**${pct}%**).`,
     '',
-    'Read that number carefully. Endpoint coverage says whether a route exists, not whether a',
-    'feature is usable — Directory Sync implements every endpoint the spec defines for it and is',
+    'Endpoint coverage says whether a route exists, not whether a',
+    'feature is usable; for example, Directory Sync implements every endpoint the spec defines for it and is',
     'still unusable, because nothing can create a directory. The **Set up** column is the one that',
-    'answers "can I actually use this?".',
+    'answers "can I actually emulate this?".',
     '',
     '| Column     | Meaning                                                                    |',
     '| ---------- | -------------------------------------------------------------------------- |',
@@ -585,8 +585,6 @@ export function generateSupportedMarkdown(matrix: SupportMatrix, options: Render
     "- **Feature** groups the spec's API-shaped tags into products, in",
     '  `scripts/gen-supported-lib.ts`. A spec tag with no feature also fails the build, so a new',
     '  WorkOS product cannot silently disappear from this table.',
-    '',
-    'Regenerate with `bun run gen:supported`. CI fails if the committed file is stale.',
     '',
   );
 
