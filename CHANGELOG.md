@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0](https://github.com/workos/emulate/compare/v0.5.0...v0.6.0) (2026-08-05)
+
+
+### Features
+
+* **docker:** publish container image to GHCR on release ([#45](https://github.com/workos/emulate/issues/45)) ([0c6a89a](https://github.com/workos/emulate/commit/0c6a89a991a5b9b405c20c1886db112d3a9fb417))
+* **docs:** generate a feature support matrix ([#47](https://github.com/workos/emulate/issues/47)) ([6a63784](https://github.com/workos/emulate/commit/6a6378449d91c1afe466ad93770cfe3fa3e8c894))
+
+
+### Bug Fixes
+
+* **auth:** add jti claim to AuthKit access tokens ([#44](https://github.com/workos/emulate/issues/44)) ([c0dab82](https://github.com/workos/emulate/commit/c0dab82f0937c7d26ed7f913beda0d03bf97a743))
+* **auth:** add the five missing documented claims to AuthKit tokens ([#46](https://github.com/workos/emulate/issues/46)) ([4dc9066](https://github.com/workos/emulate/commit/4dc906628e77d5380e5d31c69b46d4783ed54679))
+* **ci:** grant packages:write for GHCR release job ([c0980f7](https://github.com/workos/emulate/commit/c0980f72430ed29dbbf633cb23e41307db32a774))
+* **jwt-template:** mirror production context for org domains, user, org, and membership ([#42](https://github.com/workos/emulate/issues/42)) ([0fc88c1](https://github.com/workos/emulate/commit/0fc88c13bbf604b65b79dd658051757b2d852be2))
+* **users:** include name field on user objects ([#43](https://github.com/workos/emulate/issues/43)) ([76483fb](https://github.com/workos/emulate/commit/76483fbdccaa2f2ba21cef565422d98dc1a7baaa))
+* **webhooks:** match the WorkOS signature header ([#41](https://github.com/workos/emulate/issues/41)) ([580ef50](https://github.com/workos/emulate/commit/580ef5068d443f99ecd7d73268666736f152255d))
+
 ## [0.5.0](https://github.com/workos/emulate/compare/v0.4.1...v0.5.0) (2026-08-04)
 
 
