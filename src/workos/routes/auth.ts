@@ -287,7 +287,10 @@ export function authRoutes(ctx: RouteContext): void {
     let isFreshLogin = true;
     let refreshSessionId: string | null = null;
     // The client_id bound to the originating grant (auth code or refresh token). Falls back
-    // to the request's client_id for grants that have no originating authorization.
+    // to the request's client_id when the grant carries none: direct grants (password, magic
+    // auth) have no originating authorization, and codes minted by a client-less /authorize —
+    // a leniency production doesn't permit — store null. In both cases the redemption request
+    // is the only client identity the emulator ever has.
     let grantClientId: string | undefined;
 
     switch (grantType) {
