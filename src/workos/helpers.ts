@@ -73,21 +73,30 @@ export function formatOrganization(
 ): Record<string, unknown> {
   const domains = (opts?.domains ?? ws.organizationDomains.findBy('organization_id', org.id)).map(formatDomain);
 
-  return {
+  const result: Record<string, unknown> = {
     object: 'organization',
     id: org.id,
     name: org.name,
+    allow_profiles_outside_organization: org.allow_profiles_outside_organization,
     external_id: org.external_id,
     metadata: org.metadata,
     domains,
-    stripe_customer_id: org.stripe_customer_id,
     created_at: org.created_at,
     updated_at: org.updated_at,
   };
+
+  // Production omits stripe_customer_id when it is null rather than emitting it.
+  if (org.stripe_customer_id !== null) {
+    result.stripe_customer_id = org.stripe_customer_id;
+  }
+
+  return result;
 }
 
+const DOMAIN_EXCLUDE = new Set([...INTERNAL_FIELDS, 'verification_token', 'verification_prefix']);
+
 export function formatDomain(domain: WorkOSOrganizationDomain): Record<string, unknown> {
-  return formatEntity(domain);
+  return formatEntity(domain, { exclude: DOMAIN_EXCLUDE });
 }
 
 export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStore): Record<string, unknown> {

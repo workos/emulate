@@ -20,6 +20,7 @@ export function organizationRoutes(ctx: RouteContext): void {
       external_id: (body.external_id as string) ?? null,
       metadata: (body.metadata as Record<string, string>) ?? {},
       stripe_customer_id: null,
+      allow_profiles_outside_organization: false,
     });
 
     const domainData = body.domain_data as Array<{ domain: string; state?: string }> | undefined;
@@ -103,6 +104,9 @@ export function organizationRoutes(ctx: RouteContext): void {
     }
     if ('external_id' in body) updates.external_id = body.external_id ?? null;
     if ('metadata' in body) updates.metadata = body.metadata ?? {};
+    if ('allow_profiles_outside_organization' in body) {
+      updates.allow_profiles_outside_organization = Boolean(body.allow_profiles_outside_organization);
+    }
 
     if ('domain_data' in body && Array.isArray(body.domain_data)) {
       const existing = ws.organizationDomains.findBy('organization_id', org.id);

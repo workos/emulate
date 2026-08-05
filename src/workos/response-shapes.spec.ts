@@ -72,6 +72,7 @@ const organization: WorkOSOrganization = {
   external_id: null,
   metadata: {},
   stripe_customer_id: null,
+  allow_profiles_outside_organization: false,
   created_at: TS,
   updated_at: TS,
 };

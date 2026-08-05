@@ -18,6 +18,7 @@ import { type Store, WorkOSApiError } from '../core/index.js';
 import type { WorkOSStore } from './store.js';
 import type { WorkOSJwtTemplate, WorkOSUser } from './entities.js';
 import { STORE_KEYS } from './constants.js';
+import { formatUser, formatOrganization } from './helpers.js';
 
 /**
  * Claims a template may not set. WorkOS rejects these at template-update time, so the
@@ -189,24 +190,50 @@ export function renderJwtTemplate(content: string, context: JwtTemplateContext):
 }
 
 /**
+ * The OAuth provider keys observed in the production JWT template context's
+ * `user.identities` map. The emulator does not model identity linking, so every
+ * provider maps to null — matching a user with no linked identities. Note
+ * GitHubOAuth uses a capital-H per the measured production context.
+ */
+const OAUTH_IDENTITIES_MAP: Record<string, null> = {
+  AppleOAuth: null,
+  GitHubOAuth: null,
+  GoogleOAuth: null,
+  GrokOAuth: null,
+  IntuitOAuth: null,
+  LinkedInOAuth: null,
+  MicrosoftOAuth: null,
+  VercelMarketplaceOAuth: null,
+  VercelOAuth: null,
+  SalesforceOAuth: null,
+};
+
+/**
  * Representative values used to render a template at validation time, so syntax errors,
  * unknown variables, and reserved claims surface when the template is set rather than at
  * the next sign-in. Only the shape matters — these values never reach a token.
  */
 const PROBE_CONTEXT: JwtTemplateContext = {
   user: {
+    object: 'user',
     id: 'user_01PROBE',
     email: 'probe@example.com',
     first_name: 'Probe',
     last_name: 'User',
     email_verified: true,
     profile_picture_url: null,
-    external_id: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
     metadata: {},
+    external_id: null,
+    locale: null,
+    identities: OAUTH_IDENTITIES_MAP,
   },
   organization: {
+    object: 'organization',
     id: 'org_01PROBE',
     name: 'Probe Org',
+    allow_profiles_outside_organization: false,
     domains: [
       {
         object: 'organization_domain',
@@ -219,14 +246,19 @@ const PROBE_CONTEXT: JwtTemplateContext = {
         updated_at: '2026-01-01T00:00:00.000Z',
       },
     ],
-    stripe_customer_id: null,
     external_id: null,
     metadata: {},
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
   },
   organization_membership: {
+    object: 'organization_membership',
     id: 'om_01PROBE',
     role: 'member',
     roles: ['member'],
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    custom_attributes: {},
   },
 };
 
@@ -261,50 +293,37 @@ export function validateJwtTemplateContent(content: unknown): string[] {
 }
 
 /**
- * Assemble the variables a template can read for one sign-in. Fields the emulator does not
- * model — `organization.allow_profiles_outside_organization` and
- * `organization_membership.custom_attributes` among them — are left out rather than filled
- * with a plausible value, so a template referencing them resolves to null.
+ * Assemble the variables a template can read for one sign-in. Mirrors the production
+ * WorkOS JWT template context: `user` and `organization` are built from the format*
+ * helpers (so they track the API response shape), with the adjustments prod's template
+ * context makes on top — `user.identities` is added (a provider→null map for users with
+ * no linked identity) and `user.last_sign_in_at` is dropped. `organization_membership`
+ * is built explicitly with the context-only shape (string `role`/`roles`, no
+ * `external_id`/`metadata`).
+ *
+ * `user.name` is not on the emulator's user entity yet; it will auto-appear via
+ * formatUser once PR #43 adds it. No change here will be needed when that lands.
  */
 export function buildJwtTemplateContext(
   ws: WorkOSStore,
   user: WorkOSUser,
   organizationId?: string | null,
 ): JwtTemplateContext {
-  const context: JwtTemplateContext = {
-    user: {
-      id: user.id,
-      email: user.email,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      email_verified: user.email_verified,
-      profile_picture_url: user.profile_picture_url,
-      external_id: user.external_id,
-      metadata: user.metadata,
-    },
+  const userContext: Record<string, unknown> = {
+    ...formatUser(user),
+    identities: OAUTH_IDENTITIES_MAP,
   };
+  // `last_sign_in_at` is on the API response but omitted from the JWT template context
+  // by production.
+  delete userContext.last_sign_in_at;
+
+  const context: JwtTemplateContext = { user: userContext };
 
   if (!organizationId) return context;
 
   const organization = ws.organizations.get(organizationId);
   if (organization) {
-    context.organization = {
-      id: organization.id,
-      name: organization.name,
-      domains: ws.organizationDomains.findBy('organization_id', organization.id).map((domain) => ({
-        object: domain.object,
-        id: domain.id,
-        organization_id: domain.organization_id,
-        domain: domain.domain,
-        state: domain.state,
-        verification_strategy: domain.verification_strategy,
-        created_at: domain.created_at,
-        updated_at: domain.updated_at,
-      })),
-      stripe_customer_id: organization.stripe_customer_id,
-      external_id: organization.external_id,
-      metadata: organization.metadata,
-    };
+    context.organization = formatOrganization(organization, ws);
   }
 
   const membership = ws.organizationMemberships
@@ -312,11 +331,13 @@ export function buildJwtTemplateContext(
     .find((m) => m.user_id === user.id);
   if (membership) {
     context.organization_membership = {
+      object: 'organization_membership',
       id: membership.id,
       role: membership.role.slug,
       roles: [membership.role.slug],
-      external_id: membership.external_id,
-      metadata: membership.metadata,
+      created_at: membership.created_at,
+      updated_at: membership.updated_at,
+      custom_attributes: {},
     };
   }
 

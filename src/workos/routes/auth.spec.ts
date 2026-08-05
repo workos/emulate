@@ -53,6 +53,7 @@ describe('Auth routes', () => {
       external_id: null,
       metadata: {},
       stripe_customer_id: null,
+      allow_profiles_outside_organization: false,
     });
   }
 

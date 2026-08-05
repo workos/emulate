@@ -135,7 +135,9 @@ describe('renderJwtTemplate', () => {
   });
 
   it('resolves an unmodelled path below a known root to null', () => {
-    expect(render('{"x": "{{ organization.allow_profiles_outside_organization || \'unset\' }}"}')).toEqual({
+    // user.name is not on the emulator entity yet (PR #43 adds it); until then it
+    // resolves to null so a fallback can cover it.
+    expect(render('{"x": "{{ user.name || \'unset\' }}"}')).toEqual({
       x: 'unset',
     });
   });
