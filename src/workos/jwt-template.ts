@@ -291,18 +291,16 @@ export function buildJwtTemplateContext(
     context.organization = {
       id: organization.id,
       name: organization.name,
-      domains: ws.organizationDomains
-        .findBy('organization_id', organization.id)
-        .map((domain) => ({
-          object: domain.object,
-          id: domain.id,
-          organization_id: domain.organization_id,
-          domain: domain.domain,
-          state: domain.state,
-          verification_strategy: domain.verification_strategy,
-          created_at: domain.created_at,
-          updated_at: domain.updated_at,
-        })),
+      domains: ws.organizationDomains.findBy('organization_id', organization.id).map((domain) => ({
+        object: domain.object,
+        id: domain.id,
+        organization_id: domain.organization_id,
+        domain: domain.domain,
+        state: domain.state,
+        verification_strategy: domain.verification_strategy,
+        created_at: domain.created_at,
+        updated_at: domain.updated_at,
+      })),
       stripe_customer_id: organization.stripe_customer_id,
       external_id: organization.external_id,
       metadata: organization.metadata,
