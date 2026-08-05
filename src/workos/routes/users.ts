@@ -25,11 +25,15 @@ export function userRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(409, 'A user with this email already exists', 'user_already_exists');
     }
 
+    if (body.name !== undefined && body.name !== null && typeof body.name !== 'string') {
+      throw validationError('name must be a string or null', [{ field: 'name', code: 'invalid_type' }]);
+    }
+
     const password = body.password as string | undefined;
     const user = ws.users.insert({
       object: 'user',
       email,
-      name: typeof body.name === 'string' ? body.name : null,
+      name: (body.name as string | null) ?? null,
       first_name: (body.first_name as string) ?? null,
       last_name: (body.last_name as string) ?? null,
       email_verified: (body.email_verified as boolean) ?? false,
@@ -87,7 +91,12 @@ export function userRoutes(ctx: RouteContext): void {
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
 
-    if ('name' in body) updates.name = typeof body.name === 'string' ? body.name : null;
+    if ('name' in body) {
+      if (typeof body.name !== 'string' && body.name !== null) {
+        throw validationError('name must be a string or null', [{ field: 'name', code: 'invalid_type' }]);
+      }
+      updates.name = body.name;
+    }
     if ('first_name' in body) updates.first_name = body.first_name ?? null;
     if ('last_name' in body) updates.last_name = body.last_name ?? null;
     if ('email_verified' in body) updates.email_verified = body.email_verified;
