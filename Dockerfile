@@ -1,18 +1,24 @@
 # syntax=docker/dockerfile:1
 
-# Build stage: compile TypeScript to dist/.
-# Uses node:22-slim instead of oven/bun because the bun.lock contains a
-# transitive devDependency (tree-sitter-kotlin) pinned to a git+ssh URL that
-# cannot be cloned without SSH credentials. npm resolves the same github:
-# URL over HTTPS. The build output (tsc) is identical regardless of the
-# package manager that installed typescript.
-FROM node:22-slim AS builder
+# Build stage: compile TypeScript to dist/ from the bun lockfile.
+# bun.lock pins tree-sitter-kotlin (a transitive devDep via @workos/openapi-spec
+# -> @workos/oagen) to a git+ssh URL that can't clone inside the image without
+# SSH credentials. Rewrite that one entry to the `github:` shorthand so bun
+# downloads a tarball over HTTPS at the same pinned commit, and blank its
+# integrity hash (the hash was computed from a git clone, not a tarball). Every
+# other dependency — including typescript@5.9.3 — stays at its locked version,
+# keeping the build reproducible.
+FROM oven/bun:1.3.14 AS builder
 WORKDIR /app
-COPY package.json ./
-RUN npm install --ignore-scripts
+COPY package.json bun.lock ./
+RUN sed -i \
+      -e 's|git+ssh://git@github.com/fwcd/tree-sitter-kotlin.git#|github:fwcd/tree-sitter-kotlin#|g' \
+      -e 's/"sha512-onbog[^"]*"/""/g' \
+      bun.lock \
+ && bun install --frozen-lockfile --ignore-scripts
 COPY tsconfig.json ./
 COPY src/ ./src/
-RUN npm run build
+RUN bun run build
 
 # Deps stage: install production dependencies from the frozen bun lockfile.
 # This stage only needs production deps (no git+ssh transitive devDeps), so
