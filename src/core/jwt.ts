@@ -32,6 +32,8 @@ export interface JWTClaims {
   jti?: string;
   /** The OAuth client the token was minted for; production AuthKit includes it. */
   client_id?: string;
+  /** Unix-seconds timestamp of the user's most recent active authentication. */
+  auth_time?: number;
   iss: string;
   aud: string;
   exp: number;

@@ -708,6 +708,7 @@ export function authRoutes(ctx: RouteContext): void {
         roles: roleSlug ? [roleSlug] : undefined,
         permissions: permissionSlugs,
         client_id: clientId,
+        auth_time: Math.floor(new Date(session.created_at).getTime() / 1000),
         aud: clientId ?? 'workos-emulate',
       },
       { claims: templateClaims },

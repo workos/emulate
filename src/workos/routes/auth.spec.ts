@@ -565,6 +565,59 @@ describe('Auth routes', () => {
     expect(decodeJwt(body.access_token).client_id).toBe('test_client');
   });
 
+  it('includes auth_time as a Unix-seconds number on the access token', async () => {
+    await createUser('authtime@test.com');
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=authtime@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    const claims = decodeJwt(body.access_token);
+    expect(claims.auth_time).toBeNumber();
+    expect(Number.isInteger(claims.auth_time)).toBe(true);
+    // Stamped at sign-in, so it is within a few seconds of now.
+    expect(Math.abs(claims.auth_time - Math.floor(Date.now() / 1000))).toBeLessThan(60);
+  });
+
+  it('carries auth_time unchanged across a refresh_token grant', async () => {
+    await createUser('authtime-refresh@test.com');
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=authtime-refresh@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const tokenBody = await json(tokenRes);
+    const originalAuthTime = decodeJwt(tokenBody.access_token).auth_time;
+    expect(originalAuthTime).toBeNumber();
+
+    // A refresh reuses the existing session, so auth_time must not advance.
+    const refreshRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: tokenBody.refresh_token,
+        client_id: 'test_client',
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    const refreshBody = await json(refreshRes);
+    expect(decodeJwt(refreshBody.access_token).auth_time).toBe(originalAuthTime);
+  });
+
   it('resolves the single active organization through the AuthKit hosted flow', async () => {
     const user = await createUser('hosted@test.com');
     const org = joinOrg(user.id, 'Hosted Corp');
