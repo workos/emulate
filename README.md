@@ -59,6 +59,33 @@ npm install --save-dev @workos/emulate
 npx @workos/emulate
 ```
 
+### Docker
+
+A container image is published to the GitHub Container Registry with each release.
+Stable releases are tagged `:latest` and `:<version>`; prereleases are tagged `:beta`
+and `:<version>`.
+
+```bash
+docker run --rm -p 4100:4100 ghcr.io/workos/emulate
+```
+
+With `docker-compose.yml`:
+
+```yaml
+services:
+  workos-emulate:
+    image: ghcr.io/workos/emulate:latest
+    ports:
+      - '4100:4100'
+    # Mount a seed config file (optional)
+    volumes:
+      - ./workos-emulate.config.yaml:/app/workos-emulate.config.yaml:ro
+```
+
+The image binds to `0.0.0.0` so the emulator is reachable from the host or other
+containers. The seed config is auto-detected from the working directory (`/app`);
+mount it at `/app/workos-emulate.config.yaml` (or `.yml` / `.json`).
+
 ## CLI
 
 ```bash

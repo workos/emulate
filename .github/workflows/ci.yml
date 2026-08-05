@@ -90,3 +90,23 @@ jobs:
 
       - name: Node library compatibility suite
         run: node scripts/smoke-node.mjs
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: false
+          load: true
+          tags: emulate:ci
+
+      - name: Container smoke test
+        shell: bash
+        run: |
+          docker run --rm -d -p 4100:4100 --name emulate-ci emulate:ci
+          trap 'docker stop emulate-ci 2>/dev/null || true' EXIT
+          curl --retry 10 --retry-delay 1 --retry-connrefused --fail http://localhost:4100/health

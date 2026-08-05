@@ -239,6 +239,45 @@ jobs:
 
           npm publish --tag ${{ steps.npm-tag.outputs.tag }} --access public --provenance
 
+  publish-ghcr:
+    name: Publish container image to GHCR
+    needs: upload-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - name: Determine image tags
+        id: tags
+        env:
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          if [[ "$VERSION" == *"-"* ]]; then
+            CHANNEL="beta"
+          else
+            CHANNEL="latest"
+          fi
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          IMAGE="ghcr.io/workos/emulate"
+          echo "tags=${IMAGE}:${VERSION},${IMAGE}:${CHANNEL},${IMAGE}:sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+
   homebrew:
     name: Update Homebrew formula
     runs-on: macos-15
