@@ -1,6 +1,11 @@
 import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatOrganization, generateVerificationToken, formatListResponse } from '../helpers.js';
+import {
+  formatOrganization,
+  generateVerificationToken,
+  formatListResponse,
+  formatAuthorizedApplication,
+} from '../helpers.js';
 import type { WorkOSOrganizationDomain } from '../entities.js';
 
 export function organizationRoutes(ctx: RouteContext): void {
@@ -80,6 +85,23 @@ export function organizationRoutes(ctx: RouteContext): void {
     const org = ws.organizations.get(c.req.param('id'));
     if (!org) throw notFound('Organization');
     return c.json(formatOrganization(org, ws));
+  });
+
+  app.get('/organizations/:id/authorized_applications', (c) => {
+    const org = ws.organizations.get(c.req.param('id'));
+    if (!org) throw notFound('Organization');
+
+    // An organization's authorized applications are the ones granted by its
+    // members. The spec item carries a `user_id`, so we filter the shared
+    // authorized-applications collection by org membership — mirroring the
+    // user-level endpoint's simplified model.
+    const memberUserIds = new Set(ws.organizationMemberships.findBy('organization_id', org.id).map((m) => m.user_id));
+    const apps = ws.authorizedApplications.all().filter((a) => memberUserIds.has(a.user_id));
+    return c.json({
+      object: 'list',
+      data: apps.map(formatAuthorizedApplication),
+      list_metadata: { before: null, after: null },
+    });
   });
 
   app.get('/organizations/external_id/:external_id', (c) => {
