@@ -117,6 +117,8 @@ export interface WorkOSAuthorizationCode extends Entity {
   expires_at: string;
   code_challenge: string | null;
   code_challenge_method: string | null;
+  /** The OAuth client that initiated the authorization, bound to the code so the token claim can't be spoofed at redemption. */
+  client_id: string | null;
 }
 
 export interface WorkOSIdentity extends Entity {
@@ -234,6 +236,8 @@ export interface WorkOSRefreshToken extends Entity {
   organization_id: string | null;
   session_id: string;
   expires_at: string;
+  /** The client_id the original access token was minted for, carried forward across refresh rotations. */
+  client_id: string | null;
 }
 
 export interface WorkOSAuthenticationChallenge extends Entity {

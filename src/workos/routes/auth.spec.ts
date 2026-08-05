@@ -618,6 +618,58 @@ describe('Auth routes', () => {
     expect(decodeJwt(refreshBody.access_token).auth_time).toBe(originalAuthTime);
   });
 
+  it('binds client_id to the authorization grant, not the redemption request', async () => {
+    await createUser('cid-mismatch@test.com');
+
+    // Authorize with one client_id…
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=cid-mismatch@test.com&client_id=original_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    // …then redeem the code with a different one. The token must carry the originating client.
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'spoofed_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    const claims = decodeJwt(body.access_token);
+    expect(claims.client_id).toBe('original_client');
+    expect(claims.aud).toBe('original_client');
+  });
+
+  it('carries the bound client_id across a refresh_token rotation', async () => {
+    await createUser('cid-refresh@test.com');
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=cid-refresh@test.com&client_id=original_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'original_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const tokenBody = await json(tokenRes);
+    expect(decodeJwt(tokenBody.access_token).client_id).toBe('original_client');
+
+    // Refresh with a different client_id — the bound value must persist.
+    const refreshRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: tokenBody.refresh_token,
+        client_id: 'spoofed_client',
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    const refreshBody = await json(refreshRes);
+    expect(decodeJwt(refreshBody.access_token).client_id).toBe('original_client');
+  });
+
   it('resolves the single active organization through the AuthKit hosted flow', async () => {
     const user = await createUser('hosted@test.com');
     const org = joinOrg(user.id, 'Hosted Corp');

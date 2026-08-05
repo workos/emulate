@@ -49,6 +49,7 @@ interface AuthorizeParams {
   codeChallenge: string | null;
   codeChallengeMethod: string | null;
   loginHint: string | null;
+  clientId: string | null;
 }
 
 export function authRoutes(ctx: RouteContext): void {
@@ -56,7 +57,7 @@ export function authRoutes(ctx: RouteContext): void {
   const ws = getWorkOSStore(store);
 
   function resolveAndRedirect(c: any, params: AuthorizeParams) {
-    const { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint } = params;
+    const { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint, clientId } = params;
 
     assertLocalRedirectUri(redirectUri);
 
@@ -89,6 +90,7 @@ export function authRoutes(ctx: RouteContext): void {
       expires_at: expiresIn(10),
       code_challenge: codeChallenge ?? null,
       code_challenge_method: codeChallengeMethod ?? null,
+      client_id: clientId,
     });
 
     const redirect = new URL(redirectUri);
@@ -104,6 +106,7 @@ export function authRoutes(ctx: RouteContext): void {
     const codeChallenge = url.searchParams.get('code_challenge');
     const codeChallengeMethod = url.searchParams.get('code_challenge_method');
     const loginHint = url.searchParams.get('login_hint');
+    const clientId = url.searchParams.get('client_id');
 
     if (!redirectUri) {
       throw new WorkOSApiError(400, 'redirect_uri is required', 'invalid_request');
@@ -115,6 +118,7 @@ export function authRoutes(ctx: RouteContext): void {
       if (state) hiddenFields.state = state;
       if (codeChallenge) hiddenFields.code_challenge = codeChallenge;
       if (codeChallengeMethod) hiddenFields.code_challenge_method = codeChallengeMethod;
+      if (clientId) hiddenFields.client_id = clientId;
 
       return c.html(
         renderLoginPage({
@@ -127,7 +131,7 @@ export function authRoutes(ctx: RouteContext): void {
       );
     }
 
-    return resolveAndRedirect(c, { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint });
+    return resolveAndRedirect(c, { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint, clientId });
   });
 
   app.post('/user_management/authorize', async (c) => {
@@ -143,6 +147,7 @@ export function authRoutes(ctx: RouteContext): void {
       codeChallenge: (form.code_challenge as string) ?? null,
       codeChallengeMethod: (form.code_challenge_method as string) ?? null,
       loginHint: (form.email as string) ?? null,
+      clientId: (form.client_id as string) ?? null,
     });
   });
 
@@ -274,6 +279,9 @@ export function authRoutes(ctx: RouteContext): void {
     // authentications leave this true; refresh_token flips it off and sets refreshSessionId.
     let isFreshLogin = true;
     let refreshSessionId: string | null = null;
+    // The client_id bound to the originating grant (auth code or refresh token). Falls back
+    // to the request's client_id for grants that have no originating authorization.
+    let grantClientId: string | undefined;
 
     switch (grantType) {
       case 'authorization_code': {
@@ -313,6 +321,9 @@ export function authRoutes(ctx: RouteContext): void {
 
         user = ws.users.get(authCode.user_id);
         organizationId = authCode.organization_id;
+        // Bind the token's client_id to the authorization grant, not the unvalidated
+        // redemption-time request parameter.
+        grantClientId = authCode.client_id ?? undefined;
         ws.authCodes.delete(authCode.id);
         authMethod = 'OAuth';
         break;
@@ -425,6 +436,8 @@ export function authRoutes(ctx: RouteContext): void {
         // Rotate within the existing session: capture it for reuse, delete the old token,
         // and issue a new one below — no new session, no authentication event.
         refreshSessionId = refreshToken.session_id;
+        // Carry the original client_id forward across refresh rotations.
+        grantClientId = refreshToken.client_id ?? undefined;
         ws.refreshTokens.delete(refreshToken.id);
         authMethod = 'OAuth';
         isFreshLogin = false;
@@ -697,6 +710,10 @@ export function authRoutes(ctx: RouteContext): void {
       }
     }
 
+    // Prefer the client_id bound to the originating grant (auth code or refresh token)
+    // over the unvalidated redemption-time request parameter.
+    const tokenClientId = grantClientId ?? clientId;
+
     const accessToken = jwt.sign(
       {
         sub: user.id,
@@ -707,9 +724,9 @@ export function authRoutes(ctx: RouteContext): void {
         // membership, so it is that role as a single-element array.
         roles: roleSlug ? [roleSlug] : undefined,
         permissions: permissionSlugs,
-        client_id: clientId,
+        client_id: tokenClientId,
         auth_time: Math.floor(new Date(session.created_at).getTime() / 1000),
-        aud: clientId ?? 'workos-emulate',
+        aud: tokenClientId ?? 'workos-emulate',
       },
       { claims: templateClaims },
     );
@@ -721,6 +738,7 @@ export function authRoutes(ctx: RouteContext): void {
       organization_id: organizationId,
       session_id: session.id,
       expires_at: expiresIn(30 * 24 * 60), // 30 days
+      client_id: tokenClientId ?? null,
     });
 
     // Compute sealed session when client_secret is provided
