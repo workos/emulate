@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import { type RouteContext, notFound, parseJsonBody, WorkOSApiError, generateId, generateUlid } from '../../core/index.js';
+import {
+  type RouteContext,
+  notFound,
+  parseJsonBody,
+  WorkOSApiError,
+  generateId,
+  generateUlid,
+} from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatUser,
