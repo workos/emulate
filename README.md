@@ -446,7 +446,7 @@ Codes that WorkOS would deliver by email are delivered to you in the webhook pay
 
 ### 3. Verify signatures
 
-Webhooks are signed exactly like production WorkOS: `WorkOS-Signature: t=<timestamp>,v1=<hmac>` where the HMAC-SHA256 is computed over `"{timestamp}.{body}"` with the endpoint's secret. The official SDKs' `webhooks.constructEvent` verifies them unchanged.
+Webhooks are signed exactly like production WorkOS: `WorkOS-Signature: t=<timestamp>, v1=<hmac>` where the HMAC-SHA256 is computed over `"{timestamp}.{body}"` with the endpoint's secret. The official SDKs' `webhooks.constructEvent` verifies them unchanged.
 
 ### Organization-scoped sessions
 
