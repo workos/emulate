@@ -2,12 +2,12 @@
 
 # Supported Features
 
-The emulator implements **120 of 209** endpoints in the WorkOS OpenAPI spec (`@workos/openapi-spec@0.41.0`) (**57.4%**).
+The emulator implements **120 of 212** endpoints in the WorkOS OpenAPI spec (`@workos/openapi-spec@0.59.0`) (**56.6%**).
 
-Read that number carefully. Endpoint coverage says whether a route exists, not whether a
-feature is usable — Directory Sync implements every endpoint the spec defines for it and is
+Endpoint coverage says whether a route exists, not whether a
+feature is usable; for example, Directory Sync implements every endpoint the spec defines for it and is
 still unusable, because nothing can create a directory. The **Set up** column is the one that
-answers "can I actually use this?".
+answers "can I actually emulate this?".
 
 | Column     | Meaning                                                                     |
 | ---------- | --------------------------------------------------------------------------- |
@@ -32,8 +32,8 @@ answers "can I actually use this?".
 | Vault                    | ❌ 0/5  | ❌ 0/6  | ❌ none                        | Not implemented.                                                                                                                                                                                                                                                                                                                                                              |
 | Feature Flags            | ✅ 4/4  | ⚠️ 1/4  | ⚠️ API only                    | Enable/disable and targeting exist, but under different verbs than the spec (`POST /feature-flags/:slug/enable` where the spec says `PUT`), so they do not count toward coverage.                                                                                                                                                                                             |
 | API Keys                 | ⚠️ 1/2  | ⚠️ 2/5  | ✅ seed `apiKeys`              | Seeded keys authenticate real requests. User-scoped API key endpoints are not implemented.                                                                                                                                                                                                                                                                                    |
-| Pipes / Connected Apps   | ⚠️ 2/5  | ⚠️ 1/11 | ⚠️ API only                    | Connection CRUD and access-token minting are emulator-specific routes under `/pipes/connections`.                                                                                                                                                                                                                                                                             |
-| Applications             | ⚠️ 3/4  | ⚠️ 4/8  | ✅ seed `connectApplications`  |                                                                                                                                                                                                                                                                                                                                                                               |
+| Pipes / Connected Apps   | ⚠️ 2/5  | ⚠️ 1/12 | ⚠️ API only                    | Connection CRUD and access-token minting are emulator-specific routes under `/pipes/connections`.                                                                                                                                                                                                                                                                             |
+| Applications             | ⚠️ 3/5  | ⚠️ 4/8  | ✅ seed `connectApplications`  |                                                                                                                                                                                                                                                                                                                                                                               |
 | JWT Templates            | ✅ 1/1  | ✅ 1/1  | ✅ seed `jwtTemplate`          | Claims render into every access token. Filters, conditionals, and loops are not supported.                                                                                                                                                                                                                                                                                    |
 | Webhooks                 | ✅ 1/1  | ⚠️ 2/3  | ✅ seed `webhookEndpoints`     | Delivery is fire-and-forget with a 5s timeout and no retries. Endpoints registered in a seed file do not receive events from that same seed file.                                                                                                                                                                                                                             |
 | Events                   | ✅ 1/1  | —       | ✅ automatic                   | Emitted as a side effect of every other operation. All are queryable at `GET /events`, including those with no registered webhook endpoint.                                                                                                                                                                                                                                   |
@@ -41,7 +41,7 @@ answers "can I actually use this?".
 | Admin Portal             | —       | ✅ 1/1  | ⚠️ API only                    | Generates a portal link; the portal itself is not served.                                                                                                                                                                                                                                                                                                                     |
 | Widgets                  | —       | ✅ 1/1  | ⚠️ API only                    | Mints widget tokens only.                                                                                                                                                                                                                                                                                                                                                     |
 | Radar                    | —       | ⚠️ 1/4  | ⚠️ API only                    | Attempt listing only; no risk signals are computed.                                                                                                                                                                                                                                                                                                                           |
-| Agents                   | ❌ 0/1  | ❌ 0/1  | ❌ none                        | Not implemented.                                                                                                                                                                                                                                                                                                                                                              |
+| Agents                   | ❌ 0/1  | ❌ 0/2  | ❌ none                        | Not implemented.                                                                                                                                                                                                                                                                                                                                                              |
 
 ## How this file is generated
 
@@ -54,5 +54,3 @@ Every column except **Notes** is derived, so the table cannot drift from the cod
 - **Feature** groups the spec's API-shaped tags into products, in
   `scripts/gen-supported-lib.ts`. A spec tag with no feature also fails the build, so a new
   WorkOS product cannot silently disappear from this table.
-
-Regenerate with `bun run gen:supported`. CI fails if the committed file is stale.

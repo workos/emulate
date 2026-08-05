@@ -180,6 +180,7 @@ export const FEATURES: FeatureDef[] = [
       'application.client-secrets',
       'client',
       'user-management.users.authorized-applications',
+      'organizations.authorized-applications',
       'workos-connect',
     ],
     seedKeys: ['connectApplications'],
@@ -413,7 +414,7 @@ export function deriveSetup(feature: FeatureDef, seedConfigKeys: string[], imple
     if (!seedConfigKeys.includes(key)) {
       throw new Error(
         `Feature "${feature.name}" declares seed key "${key}", which is not a key of EmulatorSeedConfig. ` +
-        `Update FEATURES in scripts/gen-supported-lib.ts, or add the key to EmulatorSeedConfig in src/index.ts.`,
+          `Update FEATURES in scripts/gen-supported-lib.ts, or add the key to EmulatorSeedConfig in src/index.ts.`,
       );
     }
   }
@@ -454,7 +455,7 @@ export function buildMatrix(
   if (unmapped.length > 0) {
     throw new Error(
       `Spec tags are not assigned to a feature: ${unmapped.join(', ')}. ` +
-      `Add them to FEATURES in scripts/gen-supported-lib.ts.`,
+        `Add them to FEATURES in scripts/gen-supported-lib.ts.`,
     );
   }
 
