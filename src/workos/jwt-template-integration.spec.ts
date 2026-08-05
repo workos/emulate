@@ -169,6 +169,7 @@ describe('JWT templates end to end', () => {
       'exp',
       'iat',
       'iss',
+      'jti',
       'org_id',
       'permissions',
       'role',

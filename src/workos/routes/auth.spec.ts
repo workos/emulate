@@ -542,10 +542,22 @@ describe('Auth routes', () => {
     expect(claims.org_id).toBe(org.id);
     expect(claims.role).toBe('admin');
     expect(claims.roles).toEqual(['admin']);
+    // AuthKit access tokens carry a ULID jti, matching production and the M2M path.
+    expect(claims.jti).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 
     // The session records the same organization the token claims.
     const session = getWorkOSStore(store).sessions.get(claims.sid);
     expect(session?.organization_id).toBe(org.id);
+  });
+
+  it('gives each AuthKit access token a distinct jti', async () => {
+    await createUser('jti-a@test.com');
+    await createUser('jti-b@test.com');
+    const first = decodeJwt((await json(await signInWithMagicAuth('jti-a@test.com'))).access_token);
+    const second = decodeJwt((await json(await signInWithMagicAuth('jti-b@test.com'))).access_token);
+    expect(first.jti).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(second.jti).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(first.jti).not.toBe(second.jti);
   });
 
   it('resolves the single active organization through the AuthKit hosted flow', async () => {

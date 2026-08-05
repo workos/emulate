@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { type RouteContext, notFound, parseJsonBody, WorkOSApiError, generateId } from '../../core/index.js';
+import { type RouteContext, notFound, parseJsonBody, WorkOSApiError, generateId, generateUlid } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatUser,
@@ -701,6 +701,7 @@ export function authRoutes(ctx: RouteContext): void {
       {
         sub: user.id,
         sid: session.id,
+        jti: generateUlid(),
         org_id: organizationId ?? undefined,
         role: roleSlug,
         // Production emits the plural `roles` alongside `role`; the emulator models one role per
