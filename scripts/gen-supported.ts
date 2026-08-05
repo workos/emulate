@@ -17,8 +17,10 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve, extname, join } from 'node:path';
+import { resolve, extname, join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
+import { format, type FormatConfig } from 'oxfmt';
 
 import {
   type SupportSpec,
@@ -32,6 +34,12 @@ import {
 const ROUTES_DIR = 'src/workos/routes';
 const SERVER_FILE = 'src/core/server.ts';
 const INDEX_FILE = 'src/index.ts';
+
+/** Load the project's oxfmt config so generated output matches `npm run fmt`. */
+function loadFormatConfig(): FormatConfig {
+  const configPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.oxfmtrc.json');
+  return existsSync(configPath) ? (JSON.parse(readFileSync(configPath, 'utf-8')) as FormatConfig) : {};
+}
 
 /** Collect route source: every route module, plus server.ts for JWKS and friends. */
 function readRouteSources(): string[] {
@@ -63,7 +71,7 @@ function readSpecVersion(require: NodeRequire): string | undefined {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const flags = args.filter((a) => a.startsWith('--'));
   const positional = args.filter((a) => !a.startsWith('--'));
@@ -94,16 +102,27 @@ function main(): void {
   // buildMatrix throws on an unmapped spec tag or a stale seed key — that is
   // the drift check, and it must fail the build rather than emit a wrong table.
   const matrix = buildMatrix(operations, routes, seedKeys);
-  const content = generateSupportedMarkdown(matrix, {
+  const markdown = generateSupportedMarkdown(matrix, {
     specVersion: positional[0] ? undefined : readSpecVersion(require),
   });
+
+  // Run the output through oxfmt (which aligns Markdown tables) so a freshly
+  // generated file is already `fmt:check`-clean — otherwise every regeneration
+  // would trip the pre-push hook and CI.
+  const resolvedOut = resolve(outFile);
+  const formatted = await format(resolvedOut, markdown, loadFormatConfig());
+  if (formatted.errors.length > 0) {
+    console.error('oxfmt reported errors while formatting generated output:');
+    for (const err of formatted.errors) console.error(`  ${err.severity}: ${err.message}`);
+    process.exit(1);
+  }
+  const content = formatted.code;
 
   if (dryRun) {
     console.log(content);
     return;
   }
 
-  const resolvedOut = resolve(outFile);
   writeFileSync(resolvedOut, content, 'utf-8');
 
   const { covered, total } = matrix.totals;
@@ -112,4 +131,4 @@ function main(): void {
   console.log(`\nCoverage: ${covered}/${total} endpoints (${pct}%) across ${matrix.rows.length} features`);
 }
 
-main();
+await main();
