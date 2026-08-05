@@ -113,6 +113,58 @@ describe('parseEmulatorRoutes', () => {
     const routes = parseEmulatorRoutes([`app.get('/a', h); app.post('/b', h);`]);
     expect(routes.map((r) => r.path)).toEqual(['/a', '/b']);
   });
+
+  it('resolves template literals with const variable interpolation', () => {
+    const source = [
+      `const prefix = '/authorization/organizations/:orgId/roles';`,
+      `app.put(\`${'${prefix}'}/priority\`, (c) => {});`,
+      `app.delete(\`${'${prefix}'}/:slug/permissions/:permissionSlug\`, (c) => {});`,
+    ].join('\n');
+    const routes = parseEmulatorRoutes([source]);
+    expect(routes).toContainEqual({ method: 'PUT', path: '/authorization/organizations/:orgId/roles/priority' });
+    expect(routes).toContainEqual({
+      method: 'DELETE',
+      path: '/authorization/organizations/:orgId/roles/:slug/permissions/:permissionSlug',
+    });
+  });
+
+  it('skips template literals with unresolved interpolations', () => {
+    const source = `app.get(\`${'${unknown}'}/path\`, (c) => {});`;
+    const routes = parseEmulatorRoutes([source]);
+    expect(routes).toHaveLength(0);
+  });
+
+  it('expands registerRoleRoutes helper with a literal pathPrefix', () => {
+    const source = [
+      `registerRoleRoutes(ctx, {`,
+      `  pathPrefix: '/authorization/roles',`,
+      `  roleType: 'EnvironmentRole',`,
+      `});`,
+    ].join('\n');
+    const routes = parseEmulatorRoutes([source]);
+    expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'POST /authorization/roles',
+      'GET /authorization/roles',
+      'GET /authorization/roles/:slug',
+      'PUT /authorization/roles/:slug',
+      'DELETE /authorization/roles/:slug',
+      'GET /authorization/roles/:slug/permissions',
+      'POST /authorization/roles/:slug/permissions',
+    ]);
+  });
+
+  it('expands registerRoleRoutes helper with a variable pathPrefix', () => {
+    const source = [
+      `const prefix = '/authorization/organizations/:orgId/roles';`,
+      `registerRoleRoutes(ctx, {`,
+      `  pathPrefix: prefix,`,
+      `  roleType: 'OrganizationRole',`,
+      `});`,
+    ].join('\n');
+    const routes = parseEmulatorRoutes([source]);
+    expect(routes).toHaveLength(7);
+    expect(routes[0]).toEqual({ method: 'POST', path: '/authorization/organizations/:orgId/roles' });
+  });
 });
 
 describe('parseSeedConfigKeys', () => {

@@ -279,17 +279,69 @@ export function parseSpecOperations(spec: SupportSpec): SpecOperation[] {
 }
 
 /**
- * Extract `app.get('/path'` style registrations from route source. Static
- * parsing rather than booting the server keeps codegen free of side effects
- * (a real boot binds a port and seeds a store).
+ * Routes that `registerRoleRoutes` in `src/workos/role-helpers.ts` registers
+ * for each path prefix. Kept in sync with that helper — if it gains or loses
+ * a route, this list must be updated.
+ */
+const ROLE_HELPER_ROUTES: ReadonlyArray<{ method: string; suffix: string }> = [
+  { method: 'POST', suffix: '' },
+  { method: 'GET', suffix: '' },
+  { method: 'GET', suffix: '/:slug' },
+  { method: 'PUT', suffix: '/:slug' },
+  { method: 'DELETE', suffix: '/:slug' },
+  { method: 'GET', suffix: '/:slug/permissions' },
+  { method: 'POST', suffix: '/:slug/permissions' },
+];
+
+/**
+ * Extract route registrations from route source. Handles three patterns:
+ *   - `app.method('/literal')` — direct literal paths
+ *   - `app.method(`\`${prefix}/suffix\``) — template literals whose variable
+ *     is a `const` assigned a literal string earlier in the same file
+ *   - `registerRoleRoutes(ctx, { pathPrefix: … })` — helper that registers a
+ *     known set of routes under the given prefix
+ *
+ * Static parsing rather than booting the server keeps codegen free of side
+ * effects (a real boot binds a port and seeds a store).
  */
 export function parseEmulatorRoutes(sources: string[]): EmulatorRoute[] {
   const routes: EmulatorRoute[] = [];
-  const pattern = /app\.(get|post|put|patch|delete)\('([^']+)'/g;
+  const literalPattern = /app\.(get|post|put|patch|delete)\('([^']+)'/g;
+  const templatePattern = /app\.(get|post|put|patch|delete)\(`([^`]+)`/g;
+  const helperPattern = /pathPrefix:\s*([^,}\n]+)/g;
 
   for (const source of sources) {
-    for (const match of source.matchAll(pattern)) {
+    // Build a map of `const name = 'value'` assignments so template-literal
+    // interpolations and helper pathPrefix variables can be resolved.
+    const vars = new Map<string, string>();
+    for (const m of source.matchAll(/const\s+(\w+)\s*=\s*'([^']+)'/g)) {
+      vars.set(m[1], m[2]);
+    }
+
+    // 1. Literal string routes
+    for (const match of source.matchAll(literalPattern)) {
       routes.push({ method: match[1].toUpperCase(), path: match[2] });
+    }
+
+    // 2. Template literal routes — resolve ${var} interpolations
+    for (const match of source.matchAll(templatePattern)) {
+      const raw = match[2].replace(/\$\{(\w+)\}/g, (full, name) => vars.get(name) ?? full);
+      if (raw.includes('${')) continue; // unresolved interpolation — skip
+      routes.push({ method: match[1].toUpperCase(), path: raw });
+    }
+
+    // 3. registerRoleRoutes helper — expand the known routes from pathPrefix
+    for (const match of source.matchAll(helperPattern)) {
+      let prefix = match[1].trim();
+      if (prefix.startsWith("'") && prefix.endsWith("'")) {
+        prefix = prefix.slice(1, -1);
+      } else {
+        prefix = vars.get(prefix) ?? '';
+      }
+      if (!prefix) continue;
+      for (const r of ROLE_HELPER_ROUTES) {
+        routes.push({ method: r.method, path: prefix + r.suffix });
+      }
     }
   }
 
