@@ -131,6 +131,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: org.id,
           });
         }
+        if (
+          org.entitlements !== undefined &&
+          (!Array.isArray(org.entitlements) || org.entitlements.some((e) => typeof e !== 'string'))
+        ) {
+          errors.push({
+            path: `organizations[${index}].entitlements`,
+            message: 'entitlements must be an array of strings if provided',
+            value: org.entitlements,
+          });
+        }
         if (org.domains) {
           if (!Array.isArray(org.domains)) {
             errors.push({

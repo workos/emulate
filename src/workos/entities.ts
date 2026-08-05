@@ -19,6 +19,11 @@ export interface WorkOSOrganization extends Entity {
   metadata: Record<string, string>;
   stripe_customer_id: string | null;
   allow_profiles_outside_organization: boolean;
+  /**
+   * Entitlement slugs minted into org-scoped access tokens. Seed-only state: the spec's
+   * organization shape has no such field, so it is never serialized onto the API object.
+   */
+  entitlements: string[];
 }
 
 export interface WorkOSOrganizationDomain extends Entity {

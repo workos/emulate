@@ -74,6 +74,7 @@ const organization: WorkOSOrganization = {
   metadata: {},
   stripe_customer_id: null,
   allow_profiles_outside_organization: false,
+  entitlements: ['audit-logs'],
   created_at: TS,
   updated_at: TS,
 };

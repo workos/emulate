@@ -40,6 +40,10 @@ export interface JWTClaims {
    * reference documents (and the only one production surfaces for impersonators).
    */
   act?: { sub: string };
+  /** Entitlement slugs of the organization the session is scoped to; omitted when empty. */
+  entitlements?: string[];
+  /** Slugs of feature flags resolving true for the session's user/org context; omitted when empty. */
+  feature_flags?: string[];
   iss: string;
   aud: string;
   exp: number;

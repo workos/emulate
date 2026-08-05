@@ -228,6 +228,8 @@ organizations:
     domains:
       - domain: acme.com
         state: verified
+    # Minted into the `entitlements` claim of access tokens scoped to this organization.
+    entitlements: [audit-logs, sso]
 
 roles:
   - slug: admin

@@ -47,7 +47,7 @@ describe('Auth routes', () => {
     });
   }
 
-  function createOrg(name: string) {
+  function createOrg(name: string, entitlements: string[] = []) {
     return getWorkOSStore(store).organizations.insert({
       object: 'organization',
       name,
@@ -55,6 +55,7 @@ describe('Auth routes', () => {
       metadata: {},
       stripe_customer_id: null,
       allow_profiles_outside_organization: false,
+      entitlements,
     });
   }
 
@@ -73,9 +74,13 @@ describe('Auth routes', () => {
     (await json(await req(`/user_management/organization_memberships?organization_id=${orgId}`))).data;
 
   /** Create an organization and join `userId` to it, defaulting to an active membership. */
-  function joinOrg(userId: string, name: string, opts?: { status?: 'active' | 'inactive' | 'pending'; role?: string }) {
+  function joinOrg(
+    userId: string,
+    name: string,
+    opts?: { status?: 'active' | 'inactive' | 'pending'; role?: string; entitlements?: string[] },
+  ) {
     const ws = getWorkOSStore(store);
-    const org = createOrg(name);
+    const org = createOrg(name, opts?.entitlements);
     ws.organizationMemberships.insert({
       object: 'organization_membership',
       organization_id: org.id,
@@ -86,6 +91,31 @@ describe('Auth routes', () => {
       metadata: {},
     });
     return org;
+  }
+
+  function createFlag(
+    slug: string,
+    opts?: { enabled?: boolean; type?: 'boolean' | 'string' | 'number'; default_value?: unknown },
+  ) {
+    return getWorkOSStore(store).featureFlags.insert({
+      object: 'feature_flag',
+      slug,
+      name: slug,
+      description: null,
+      type: opts?.type ?? 'boolean',
+      default_value: opts?.default_value ?? true,
+      enabled: opts?.enabled ?? true,
+    });
+  }
+
+  function targetFlag(slug: string, resourceId: string, value: unknown, resourceType = 'user') {
+    return getWorkOSStore(store).flagTargets.insert({
+      object: 'flag_target',
+      flag_slug: slug,
+      resource_id: resourceId,
+      resource_type: resourceType,
+      value,
+    });
   }
 
   /** Decode a JWT payload without verifying — these tests only inspect claims. */
@@ -726,6 +756,117 @@ describe('Auth routes', () => {
     expect(refreshRes.status).toBe(200);
     const refreshBody = await json(refreshRes);
     expect(decodeJwt(refreshBody.access_token).act).toEqual({ sub: 'admin@test.com' });
+  });
+
+  it('mints the organization entitlements on org-scoped tokens and re-reads them on refresh', async () => {
+    const user = await createUser('entitled@test.com');
+    const org = joinOrg(user.id, 'Entitled Corp', { entitlements: ['audit-logs', 'sso'] });
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=entitled@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const tokenBody = await json(tokenRes);
+    expect(decodeJwt(tokenBody.access_token).entitlements).toEqual(['audit-logs', 'sso']);
+
+    // Re-read at every mint: a plan change shows up in the next refreshed token.
+    getWorkOSStore(store).organizations.update(org.id, { entitlements: ['audit-logs'] });
+    const refreshRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: tokenBody.refresh_token,
+        client_id: 'test_client',
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    expect(decodeJwt((await json(refreshRes)).access_token).entitlements).toEqual(['audit-logs']);
+  });
+
+  it('mints feature_flags from flags resolving strictly true for the user', async () => {
+    const user = await createUser('flags@test.com');
+    createFlag('on-by-default');
+    createFlag('switched-off', { enabled: false });
+    createFlag('targeted-on', { enabled: false });
+    targetFlag('targeted-on', user.id, true);
+    createFlag('typed', { type: 'string', default_value: 'variant-a' });
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=flags@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    // Enabled default and true user target are in; disabled and non-boolean flags are not.
+    expect(decodeJwt(body.access_token).feature_flags!.sort()).toEqual(['on-by-default', 'targeted-on']);
+  });
+
+  it('resolves org-targeted flags for org-scoped sessions, with user targets winning', async () => {
+    const user = await createUser('org-flags@test.com');
+    const org = joinOrg(user.id, 'Flag Corp');
+    createFlag('org-flag', { enabled: false });
+    targetFlag('org-flag', org.id, true, 'organization');
+    createFlag('user-off');
+    targetFlag('user-off', user.id, false);
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=org-flags@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const body = await json(tokenRes);
+    const flags = decodeJwt(body.access_token).feature_flags!;
+    expect(flags).toContain('org-flag');
+    expect(flags).not.toContain('user-off');
+  });
+
+  it('re-resolves feature_flags on refresh and omits the claim when nothing is on', async () => {
+    await createUser('flag-toggle@test.com');
+    const flag = createFlag('beta');
+
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=flag-toggle@test.com&client_id=test_client',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'test_client' }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const tokenBody = await json(tokenRes);
+    expect(decodeJwt(tokenBody.access_token).feature_flags).toEqual(['beta']);
+
+    // The toggle lands in the next mint; with nothing on, the claim is omitted, not [].
+    getWorkOSStore(store).featureFlags.update(flag.id, { enabled: false });
+    const refreshRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: tokenBody.refresh_token,
+        client_id: 'test_client',
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    expect(decodeJwt((await json(refreshRes)).access_token).feature_flags).toBeUndefined();
   });
 
   it('gives each AuthKit access token a distinct jti', async () => {

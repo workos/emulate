@@ -15,6 +15,27 @@ function evaluateFlags(ws: WorkOSStore, resourceId: string) {
   });
 }
 
+/**
+ * Flag slugs minted into an access token: a flag counts when it resolves strictly true for
+ * the session's context — a user target wins over an org target, which wins over the flag's
+ * default value when the flag is enabled (the same target-over-default precedence
+ * evaluateFlags applies to a single resource). Typed flags carrying strings or numbers stay
+ * out of the claim rather than guessing at truthiness.
+ */
+export function tokenFeatureFlags(ws: WorkOSStore, userId: string, organizationId: string | null): string[] {
+  return ws.featureFlags
+    .all()
+    .filter((flag) => {
+      const targets = ws.flagTargets.findBy('flag_slug', flag.slug);
+      const target =
+        targets.find((t) => t.resource_id === userId) ??
+        (organizationId ? targets.find((t) => t.resource_id === organizationId) : undefined);
+      const value = target ? target.value : flag.enabled ? flag.default_value : null;
+      return value === true;
+    })
+    .map((flag) => flag.slug);
+}
+
 export function featureFlagRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
   const ws = getWorkOSStore(store);

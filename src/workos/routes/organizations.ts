@@ -26,6 +26,8 @@ export function organizationRoutes(ctx: RouteContext): void {
       metadata: (body.metadata as Record<string, string>) ?? {},
       stripe_customer_id: null,
       allow_profiles_outside_organization: false,
+      // Not in the spec's create shape; entitlements are seeded, not set over the API.
+      entitlements: [],
     });
 
     const domainData = body.domain_data as Array<{ domain: string; state?: string }> | undefined;

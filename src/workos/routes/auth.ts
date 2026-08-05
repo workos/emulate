@@ -8,6 +8,7 @@ import {
   generateUlid,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
+import { tokenFeatureFlags } from './feature-flags.js';
 import {
   formatUser,
   formatDeviceAuthorization,
@@ -724,6 +725,12 @@ export function authRoutes(ctx: RouteContext): void {
     // over the unvalidated redemption-time request parameter.
     const tokenClientId = grantClientId ?? clientId;
 
+    // Entitlements and feature flags re-resolve at every mint — including refresh grants — so
+    // a plan change or flag toggle lands in the next token. Both claims are omitted rather
+    // than minted as [] when nothing resolves, matching the docs marking them optional.
+    const entitlements = organizationId ? ws.organizations.get(organizationId)?.entitlements : undefined;
+    const flagSlugs = tokenFeatureFlags(ws, user.id, organizationId);
+
     const accessToken = jwt.sign(
       {
         sub: user.id,
@@ -743,6 +750,8 @@ export function authRoutes(ctx: RouteContext): void {
         // RFC 8693 actor claim; the docs put the impersonator's email in the nested sub. The
         // emulator models impersonation as user config, so it is read off the user record.
         act: updatedUser.impersonator ? { sub: updatedUser.impersonator.email } : undefined,
+        entitlements: entitlements?.length ? entitlements : undefined,
+        feature_flags: flagSlugs.length ? flagSlugs : undefined,
         aud: tokenClientId ?? 'workos-emulate',
       },
       { claims: templateClaims },

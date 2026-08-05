@@ -87,6 +87,8 @@ export interface WorkOSSeedOrganization {
   metadata?: Record<string, string>;
   domains?: Array<{ domain: string; state?: 'verified' | 'pending' }>;
   allow_profiles_outside_organization?: boolean;
+  /** Entitlement slugs minted into the `entitlements` claim of org-scoped access tokens. */
+  entitlements?: string[];
   memberships?: Array<{
     /**
      * Email of a user defined in `users`. Seeded user ids are generated at startup,
@@ -300,6 +302,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         metadata: orgConfig.metadata ?? {},
         stripe_customer_id: null,
         allow_profiles_outside_organization: orgConfig.allow_profiles_outside_organization ?? false,
+        entitlements: orgConfig.entitlements ?? [],
       });
 
       if (orgConfig.domains) {
