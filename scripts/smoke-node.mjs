@@ -105,7 +105,7 @@ try {
 }
 
 function verifyWebhookSignature(signature, rawBody) {
-  const match = signature?.match(/^t=(\d+),v1=([a-f0-9]{64})$/);
+  const match = signature?.match(/^t=(\d+), v1=([a-f0-9]{64})$/);
   assert.ok(match, `unexpected WorkOS-Signature: ${signature}`);
   const expected = createHmac('sha256', webhookSecret).update(`${match[1]}.${rawBody}`).digest('hex');
   assert.equal(match[2], expected);
