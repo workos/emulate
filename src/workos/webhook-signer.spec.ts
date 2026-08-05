@@ -3,9 +3,9 @@ import { createHmac } from 'node:crypto';
 import { signWebhookPayload } from './webhook-signer.js';
 
 describe('signWebhookPayload', () => {
-  it('returns signature in t=...,v1=... format', () => {
+  it('returns signature in t=..., v1=... format with millisecond timestamp', () => {
     const sig = signWebhookPayload('{"test":true}', 'secret123');
-    expect(sig).toMatch(/^t=\d+,v1=[a-f0-9]{64}$/);
+    expect(sig).toMatch(/^t=\d{13}, v1=[a-f0-9]{64}$/);
   });
 
   it('produces verifiable HMAC-SHA256 signature', () => {
@@ -13,7 +13,7 @@ describe('signWebhookPayload', () => {
     const secret = 'whsec_test_key';
     const sig = signWebhookPayload(payload, secret);
 
-    const match = sig.match(/^t=(\d+),v1=([a-f0-9]+)$/);
+    const match = sig.match(/^t=(\d+), v1=([a-f0-9]+)$/);
     expect(match).toBeTruthy();
 
     const [, timestamp, hash] = match!;
@@ -27,8 +27,8 @@ describe('signWebhookPayload', () => {
     const sig1 = signWebhookPayload(payload, 'secret_a');
     const sig2 = signWebhookPayload(payload, 'secret_b');
 
-    const hash1 = sig1.split(',v1=')[1];
-    const hash2 = sig2.split(',v1=')[1];
+    const hash1 = sig1.split(', v1=')[1];
+    const hash2 = sig2.split(', v1=')[1];
     expect(hash1).not.toBe(hash2);
   });
 });
