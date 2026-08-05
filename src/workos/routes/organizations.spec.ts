@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 
 const apiKeys: ApiKeyMap = { sk_test_org: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_org', 'Content-Type': 'application/json' };
@@ -11,9 +12,12 @@ function createTestApp() {
 
 describe('Organization routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: ReturnType<typeof createTestApp>['store'];
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const result = createTestApp();
+    app = result.app;
+    store = result.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -142,5 +146,73 @@ describe('Organization routes', () => {
   it('rejects unauthenticated request', async () => {
     const res = await app.request('/organizations', { method: 'GET' });
     expect(res.status).toBe(401);
+  });
+
+  describe('authorized applications', () => {
+    async function createUser(email: string) {
+      return json(
+        await req('/user_management/users', {
+          method: 'POST',
+          body: JSON.stringify({ email }),
+        }),
+      );
+    }
+
+    function joinOrg(userId: string, orgId: string) {
+      const ws = getWorkOSStore(store);
+      ws.organizationMemberships.insert({
+        object: 'organization_membership',
+        organization_id: orgId,
+        user_id: userId,
+        role: { slug: 'member' },
+        status: 'active',
+        external_id: null,
+        metadata: {},
+      });
+    }
+
+    it('lists authorized applications granted by org members', async () => {
+      const org = await json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'Acme' }) }));
+      const member = await createUser('member@acme.com');
+      joinOrg(member.id, org.id);
+
+      const ws = getWorkOSStore(store);
+      ws.authorizedApplications.insert({
+        object: 'authorized_application',
+        user_id: member.id,
+        name: 'Member App',
+        redirect_uri: 'http://localhost:3000/callback',
+      });
+
+      const res = await req(`/organizations/${org.id}/authorized_applications`);
+      expect(res.status).toBe(200);
+      const list = await json(res);
+      expect(list.object).toBe('list');
+      expect(list.data).toHaveLength(1);
+      expect(list.data[0].name).toBe('Member App');
+    });
+
+    it('excludes authorized applications from non-members', async () => {
+      const org = await json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'Acme' }) }));
+      const outsider = await createUser('outsider@example.com');
+      // No membership created for the outsider.
+
+      const ws = getWorkOSStore(store);
+      ws.authorizedApplications.insert({
+        object: 'authorized_application',
+        user_id: outsider.id,
+        name: 'Outsider App',
+        redirect_uri: 'http://localhost:3000/callback',
+      });
+
+      const res = await req(`/organizations/${org.id}/authorized_applications`);
+      expect(res.status).toBe(200);
+      expect((await json(res)).data).toHaveLength(0);
+    });
+
+    it('returns 404 for nonexistent org', async () => {
+      const res = await req('/organizations/org_nonexistent/authorized_applications');
+      expect(res.status).toBe(404);
+    });
   });
 });

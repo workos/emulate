@@ -119,10 +119,10 @@ describe('EventBus', () => {
     receivedSignature = (init!.headers as Record<string, string>)['WorkOS-Signature'];
 
     // Verify signature format
-    expect(receivedSignature).toMatch(/^t=\d+,v1=[a-f0-9]{64}$/);
+    expect(receivedSignature).toMatch(/^t=\d{13}, v1=[a-f0-9]{64}$/);
 
     // Verify HMAC is correct
-    const match = receivedSignature!.match(/^t=(\d+),v1=([a-f0-9]+)$/)!;
+    const match = receivedSignature!.match(/^t=(\d+), v1=([a-f0-9]+)$/)!;
     const [, timestamp, hash] = match;
     const expectedHash = createHmac('sha256', secret).update(`${timestamp}.${receivedBody}`).digest('hex');
     expect(hash).toBe(expectedHash);

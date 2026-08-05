@@ -15,6 +15,7 @@ export const EVENTS = {
   agentRegistrationDeleted: 'agent.registration.deleted',
   agentRegistrationExpired: 'agent.registration.expired',
   agentRegistrationOrganizationSwitched: 'agent.registration.organization.switched',
+  agentRegistrationRefreshed: 'agent.registration.refreshed',
   agentRegistrationRevoked: 'agent.registration.revoked',
   apiKeyCreated: 'api_key.created',
   apiKeyRevoked: 'api_key.revoked',
@@ -129,6 +130,7 @@ export const SUBSCRIBABLE_EVENTS: readonly WorkOSEventName[] = [
   'agent.registration.deleted',
   'agent.registration.expired',
   'agent.registration.organization.switched',
+  'agent.registration.refreshed',
   'agent.registration.revoked',
   'api_key.created',
   'api_key.revoked',
@@ -303,6 +305,7 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
     'agent.registration.organization.switched': {
       required: ['agent_registration_id', 'from_organization_id', 'to_organization_id'],
     },
+    'agent.registration.refreshed': { required: ['agent_registration_id'] },
     'agent.registration.revoked': { required: ['agent_registration_id'] },
     'api_key.created': {
       required: [

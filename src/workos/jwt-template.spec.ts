@@ -19,7 +19,28 @@ const context: JwtTemplateContext = {
   organization: {
     id: 'org_01XYZ',
     name: 'Acme Corp',
-    domains: [{ domain: 'acme.com' }, { domain: 'acme.dev' }],
+    domains: [
+      {
+        object: 'organization_domain',
+        id: 'org_domain_01A',
+        organization_id: 'org_01XYZ',
+        domain: 'acme.com',
+        state: 'verified',
+        verification_strategy: 'manual',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        object: 'organization_domain',
+        id: 'org_domain_01B',
+        organization_id: 'org_01XYZ',
+        domain: 'acme.dev',
+        state: 'pending',
+        verification_strategy: 'dns',
+        created_at: '2026-01-02T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z',
+      },
+    ],
     metadata: {},
   },
   organization_membership: {
@@ -83,8 +104,40 @@ describe('renderJwtTemplate', () => {
     expect(render('{"sub": "spoofed", "keep": "{{ user.id }}"}')).toEqual({ keep: 'user_01ABC' });
   });
 
+  it('renders the full organization_domain object in organization.domains', () => {
+    const result = render('{"domains": {{ organization.domains }}}');
+    expect(result.domains).toEqual([
+      {
+        object: 'organization_domain',
+        id: 'org_domain_01A',
+        organization_id: 'org_01XYZ',
+        domain: 'acme.com',
+        state: 'verified',
+        verification_strategy: 'manual',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        object: 'organization_domain',
+        id: 'org_domain_01B',
+        organization_id: 'org_01XYZ',
+        domain: 'acme.dev',
+        state: 'pending',
+        verification_strategy: 'dns',
+        created_at: '2026-01-02T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z',
+      },
+    ]);
+    // verification_token/verification_prefix must not appear in the rendered object.
+    const flat = JSON.stringify(result.domains);
+    expect(flat).not.toContain('verification_token');
+    expect(flat).not.toContain('verification_prefix');
+  });
+
   it('resolves an unmodelled path below a known root to null', () => {
-    expect(render('{"x": "{{ organization.allow_profiles_outside_organization || \'unset\' }}"}')).toEqual({
+    // user.name is not on the emulator entity yet (PR #43 adds it); until then it
+    // resolves to null so a fallback can cover it.
+    expect(render('{"x": "{{ user.name || \'unset\' }}"}')).toEqual({
       x: 'unset',
     });
   });

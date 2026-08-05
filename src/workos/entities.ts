@@ -18,6 +18,7 @@ export interface WorkOSOrganization extends Entity {
   external_id: string | null;
   metadata: Record<string, string>;
   stripe_customer_id: string | null;
+  allow_profiles_outside_organization: boolean;
 }
 
 export interface WorkOSOrganizationDomain extends Entity {
@@ -43,6 +44,7 @@ export interface WorkOSOrganizationMembership extends Entity {
 export interface WorkOSUser extends Entity {
   object: 'user';
   email: string;
+  name: string | null;
   first_name: string | null;
   last_name: string | null;
   email_verified: boolean;

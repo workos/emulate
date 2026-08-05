@@ -51,6 +51,7 @@ const user: WorkOSUser = {
   id: 'user_01',
   object: 'user',
   email: 'alice@example.com',
+  name: 'Alice Smith',
   first_name: 'Alice',
   last_name: 'Smith',
   email_verified: true,
@@ -72,6 +73,7 @@ const organization: WorkOSOrganization = {
   external_id: null,
   metadata: {},
   stripe_customer_id: null,
+  allow_profiles_outside_organization: false,
   created_at: TS,
   updated_at: TS,
 };

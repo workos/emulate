@@ -98,9 +98,9 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
     );
   }
 
-  /** WorkOS-Signature: t=<unix>,v1=<hmac-sha256 of "t.body"> — same scheme the official SDKs verify. */
+  /** WorkOS-Signature: t=<unix-ms>, v1=<hmac-sha256 of "t.body"> — same scheme the official SDKs verify. */
   function verifySignature(webhook: ReceivedWebhook): void {
-    const match = webhook.signature?.match(/^t=(\d+),v1=([a-f0-9]{64})$/);
+    const match = webhook.signature?.match(/^t=(\d+), v1=([a-f0-9]{64})$/);
     expect(match, `unexpected signature format: ${webhook.signature}`).toBeTruthy();
     const expected = createHmac('sha256', webhookSecret).update(`${match![1]}.${webhook.rawBody}`).digest('hex');
     expect(match![2]).toBe(expected);

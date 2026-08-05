@@ -1,6 +1,11 @@
 import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatOrganization, generateVerificationToken, formatListResponse } from '../helpers.js';
+import {
+  formatOrganization,
+  generateVerificationToken,
+  formatListResponse,
+  formatAuthorizedApplication,
+} from '../helpers.js';
 import type { WorkOSOrganizationDomain } from '../entities.js';
 
 export function organizationRoutes(ctx: RouteContext): void {
@@ -20,6 +25,7 @@ export function organizationRoutes(ctx: RouteContext): void {
       external_id: (body.external_id as string) ?? null,
       metadata: (body.metadata as Record<string, string>) ?? {},
       stripe_customer_id: null,
+      allow_profiles_outside_organization: false,
     });
 
     const domainData = body.domain_data as Array<{ domain: string; state?: string }> | undefined;
@@ -82,6 +88,23 @@ export function organizationRoutes(ctx: RouteContext): void {
     return c.json(formatOrganization(org, ws));
   });
 
+  app.get('/organizations/:id/authorized_applications', (c) => {
+    const org = ws.organizations.get(c.req.param('id'));
+    if (!org) throw notFound('Organization');
+
+    // An organization's authorized applications are the ones granted by its
+    // members. The spec item carries a `user_id`, so we filter the shared
+    // authorized-applications collection by org membership — mirroring the
+    // user-level endpoint's simplified model.
+    const memberUserIds = new Set(ws.organizationMemberships.findBy('organization_id', org.id).map((m) => m.user_id));
+    const apps = ws.authorizedApplications.all().filter((a) => memberUserIds.has(a.user_id));
+    return c.json({
+      object: 'list',
+      data: apps.map(formatAuthorizedApplication),
+      list_metadata: { before: null, after: null },
+    });
+  });
+
   app.get('/organizations/external_id/:external_id', (c) => {
     const org = ws.organizations.findOneBy('external_id', c.req.param('external_id'));
     if (!org) throw notFound('Organization');
@@ -103,6 +126,9 @@ export function organizationRoutes(ctx: RouteContext): void {
     }
     if ('external_id' in body) updates.external_id = body.external_id ?? null;
     if ('metadata' in body) updates.metadata = body.metadata ?? {};
+    if ('allow_profiles_outside_organization' in body) {
+      updates.allow_profiles_outside_organization = Boolean(body.allow_profiles_outside_organization);
+    }
 
     if ('domain_data' in body && Array.isArray(body.domain_data)) {
       const existing = ws.organizationDomains.findBy('organization_id', org.id);

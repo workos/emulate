@@ -7,6 +7,7 @@ import { describe, it, expect, afterEach } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
 import { createEmulator, type Emulator } from '../index.js';
 import { getWorkOSStore } from './store.js';
+import { buildJwtTemplateContext } from './jwt-template.js';
 
 describe('JWT templates end to end', () => {
   let emulator: Emulator | undefined;
@@ -161,6 +162,43 @@ describe('JWT templates end to end', () => {
     expect(ws.users.findOneBy('email', 'alice@acme.com')?.last_sign_in_at).toBeNull();
   });
 
+  it('renders the full organization_domain in template claims', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        ...seed,
+        organizations: [
+          {
+            name: 'Acme Corp',
+            domains: [{ domain: 'acme.com', state: 'verified' as const }],
+            memberships: [{ email: 'alice@acme.com', role: 'admin', status: 'active' as const }],
+          },
+        ],
+        jwtTemplate: {
+          content: '{"urn:example:domains": {{ organization.domains }}}',
+        },
+      },
+    });
+
+    const { status, body } = await login(emulator.url);
+    expect(status).toBe(200);
+
+    const claims = decode(body.access_token);
+    const domains = claims['urn:example:domains'] as Array<Record<string, unknown>>;
+    expect(domains).toHaveLength(1);
+    expect(domains[0].object).toBe('organization_domain');
+    expect(domains[0].organization_id).toBeString();
+    expect(domains[0].domain).toBe('acme.com');
+    expect(domains[0].state).toBe('verified');
+    expect(domains[0].verification_strategy).toBe('manual');
+    expect(domains[0].created_at).toBeString();
+    expect(domains[0].updated_at).toBeString();
+    // verification_token/verification_prefix must not leak into the claim.
+    const flat = JSON.stringify(domains);
+    expect(flat).not.toContain('verification_token');
+    expect(flat).not.toContain('verification_prefix');
+  });
+
   it('signs nothing extra when no template is configured', async () => {
     emulator = await createEmulator({ port: 0, seed });
     const { body } = await login(emulator.url);
@@ -171,6 +209,7 @@ describe('JWT templates end to end', () => {
       'exp',
       'iat',
       'iss',
+      'jti',
       'org_id',
       'permissions',
       'role',
@@ -178,6 +217,125 @@ describe('JWT templates end to end', () => {
       'sid',
       'sub',
     ]);
+  });
+
+  // The context objects must mirror the production WorkOS JWT template context shapes,
+  // which were measured by minting real tokens against api.workos.com.
+  describe('buildJwtTemplateContext mirrors production shapes', () => {
+    it('builds the user context with all prod fields and no last_sign_in_at', async () => {
+      emulator = await createEmulator({ port: 0, seed });
+      const ws = getWorkOSStore(emulator.store);
+      const user = ws.users.findOneBy('email', 'alice@acme.com')!;
+
+      const ctx = buildJwtTemplateContext(ws, user, null);
+      const u = ctx.user!;
+
+      expect(u.object).toBe('user');
+      expect(u.id).toBeString();
+      expect(u.email).toBe('alice@acme.com');
+      expect(u.first_name).toBe('Alice');
+      expect(u.last_name).toBe('Smith');
+      expect(u.email_verified).toBe(false);
+      expect(u.profile_picture_url).toBeNull();
+      expect(u.created_at).toBeString();
+      expect(u.updated_at).toBeString();
+      expect(u.metadata).toEqual({});
+      expect(u.external_id).toBeNull();
+      expect(u.locale).toBeNull();
+      expect(u.last_sign_in_at).toBeUndefined();
+      expect(u.password_hash).toBeUndefined();
+      expect(u.impersonator).toBeUndefined();
+      expect(u.oauth_provider).toBeUndefined();
+
+      const identities = u.identities as Record<string, null>;
+      expect(identities).toEqual({
+        AppleOAuth: null,
+        GitHubOAuth: null,
+        GoogleOAuth: null,
+        GrokOAuth: null,
+        IntuitOAuth: null,
+        LinkedInOAuth: null,
+        MicrosoftOAuth: null,
+        VercelMarketplaceOAuth: null,
+        VercelOAuth: null,
+        SalesforceOAuth: null,
+      });
+    });
+
+    it('builds the organization context with prod fields and no null stripe_customer_id', async () => {
+      emulator = await createEmulator({
+        port: 0,
+        seed: {
+          ...seed,
+          organizations: [
+            {
+              name: 'Acme Corp',
+              domains: [{ domain: 'acme.com', state: 'verified' as const }],
+              memberships: [{ email: 'alice@acme.com', role: 'admin', status: 'active' as const }],
+            },
+          ],
+        },
+      });
+      const ws = getWorkOSStore(emulator.store);
+      const user = ws.users.findOneBy('email', 'alice@acme.com')!;
+      const org = ws.organizations.findOneBy('name', 'Acme Corp')!;
+
+      const ctx = buildJwtTemplateContext(ws, user, org.id);
+      const o = ctx.organization!;
+
+      expect(o.object).toBe('organization');
+      expect(o.id).toBe(org.id);
+      expect(o.name).toBe('Acme Corp');
+      expect(o.allow_profiles_outside_organization).toBe(false);
+      expect(o.created_at).toBeString();
+      expect(o.updated_at).toBeString();
+      expect(o.metadata).toEqual({});
+      expect(o.external_id).toBeNull();
+      // stripe_customer_id is omitted when null (prod drops it).
+      expect(o.stripe_customer_id).toBeUndefined();
+
+      const domains = o.domains as Array<Record<string, unknown>>;
+      expect(domains).toHaveLength(1);
+      const d = domains[0];
+      expect(Object.keys(d).sort()).toEqual(
+        [
+          'object',
+          'id',
+          'organization_id',
+          'domain',
+          'state',
+          'verification_strategy',
+          'created_at',
+          'updated_at',
+        ].sort(),
+      );
+      expect(d.verification_token).toBeUndefined();
+      expect(d.verification_prefix).toBeUndefined();
+    });
+
+    it('builds the membership context with prod-only fields', async () => {
+      emulator = await createEmulator({ port: 0, seed });
+      const ws = getWorkOSStore(emulator.store);
+      const user = ws.users.findOneBy('email', 'alice@acme.com')!;
+      const org = ws.organizations.findOneBy('name', 'Acme Corp')!;
+
+      const ctx = buildJwtTemplateContext(ws, user, org.id);
+      const m = ctx.organization_membership!;
+
+      expect(m.object).toBe('organization_membership');
+      expect(m.id).toBeString();
+      expect(m.role).toBe('admin');
+      expect(m.roles).toEqual(['admin']);
+      expect(m.created_at).toBeString();
+      expect(m.updated_at).toBeString();
+      expect(m.custom_attributes).toEqual({});
+      // Prod omits these from the context (they are on the API response but not the context).
+      expect(m.external_id).toBeUndefined();
+      expect(m.metadata).toBeUndefined();
+      expect(m.organization_id).toBeUndefined();
+      expect(m.user_id).toBeUndefined();
+      expect(m.status).toBeUndefined();
+    });
   });
 });
 

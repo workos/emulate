@@ -106,6 +106,73 @@ describe('User routes', () => {
   });
 });
 
+describe('User name field', () => {
+  let app: ReturnType<typeof createTestApp>['app'];
+
+  beforeEach(() => {
+    app = createTestApp().app;
+  });
+
+  const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
+  const json = (res: Response) => res.json() as Promise<any>;
+
+  it('creates a user with name and returns it', async () => {
+    const res = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'named@test.com', name: 'Alice Smith' }),
+    });
+    expect(res.status).toBe(201);
+    const user = await json(res);
+    expect(user.name).toBe('Alice Smith');
+  });
+
+  it('creates a user without name and returns null', async () => {
+    const res = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'noname@test.com' }),
+    });
+    expect(res.status).toBe(201);
+    const user = await json(res);
+    expect(user.name).toBeNull();
+  });
+
+  it('updates a user name via PUT', async () => {
+    const created = await json(
+      await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'updatename@test.com' }),
+      }),
+    );
+    expect(created.name).toBeNull();
+
+    const res = await req(`/user_management/users/${created.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name: 'Bob Jones' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await json(res)).name).toBe('Bob Jones');
+  });
+
+  it('leaves name unchanged when omitted from update', async () => {
+    const created = await json(
+      await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'keepname@test.com', name: 'Carol Lee' }),
+      }),
+    );
+    expect(created.name).toBe('Carol Lee');
+
+    const res = await req(`/user_management/users/${created.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ first_name: 'Carol' }),
+    });
+    expect(res.status).toBe(200);
+    const updated = await json(res);
+    expect(updated.name).toBe('Carol Lee');
+    expect(updated.first_name).toBe('Carol');
+  });
+});
+
 describe('Email Verification', () => {
   let app: ReturnType<typeof createTestApp>['app'];
 

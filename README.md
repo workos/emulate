@@ -2,6 +2,9 @@
 
 Local WorkOS API emulator for tests and development.
 
+**[Which features are supported?](SUPPORTED.md)** — a per-feature matrix of endpoint coverage and
+how data gets in, regenerated from the spec and the routes on every build.
+
 ## Installation
 
 ### Homebrew (macOS and Linux)
@@ -446,7 +449,7 @@ Codes that WorkOS would deliver by email are delivered to you in the webhook pay
 
 ### 3. Verify signatures
 
-Webhooks are signed exactly like production WorkOS: `WorkOS-Signature: t=<timestamp>,v1=<hmac>` where the HMAC-SHA256 is computed over `"{timestamp}.{body}"` with the endpoint's secret. The official SDKs' `webhooks.constructEvent` verifies them unchanged.
+Webhooks are signed exactly like production WorkOS: `WorkOS-Signature: t=<timestamp>, v1=<hmac>` where the HMAC-SHA256 is computed over `"{timestamp}.{body}"` with the endpoint's secret. The official SDKs' `webhooks.constructEvent` verifies them unchanged.
 
 ### Organization-scoped sessions
 

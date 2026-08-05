@@ -86,6 +86,7 @@ export interface WorkOSSeedOrganization {
   external_id?: string;
   metadata?: Record<string, string>;
   domains?: Array<{ domain: string; state?: 'verified' | 'pending' }>;
+  allow_profiles_outside_organization?: boolean;
   memberships?: Array<{
     /**
      * Email of a user defined in `users`. Seeded user ids are generated at startup,
@@ -105,6 +106,7 @@ export interface WorkOSSeedUser {
    */
   id?: string;
   email: string;
+  name?: string;
   first_name?: string;
   last_name?: string;
   password?: string;
@@ -272,6 +274,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         object: 'user',
         id: userConfig.id,
         email: userConfig.email,
+        name: userConfig.name ?? null,
         first_name: userConfig.first_name ?? null,
         last_name: userConfig.last_name ?? null,
         email_verified: userConfig.email_verified ?? false,
@@ -296,6 +299,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         external_id: orgConfig.external_id ?? null,
         metadata: orgConfig.metadata ?? {},
         stripe_customer_id: null,
+        allow_profiles_outside_organization: orgConfig.allow_profiles_outside_organization ?? false,
       });
 
       if (orgConfig.domains) {

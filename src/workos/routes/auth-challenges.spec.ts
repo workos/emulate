@@ -28,6 +28,7 @@ describe('Auth challenge routes', () => {
     const ws = getWorkOSStore(store);
     const user = ws.users.insert({
       object: 'user',
+      name: null,
       email: 'mfa@test.com',
       first_name: null,
       last_name: null,
