@@ -207,7 +207,18 @@ const PROBE_CONTEXT: JwtTemplateContext = {
   organization: {
     id: 'org_01PROBE',
     name: 'Probe Org',
-    domains: [{ domain: 'example.com' }],
+    domains: [
+      {
+        object: 'organization_domain',
+        id: 'org_domain_01PROBE',
+        organization_id: 'org_01PROBE',
+        domain: 'example.com',
+        state: 'verified',
+        verification_strategy: 'manual',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      },
+    ],
     stripe_customer_id: null,
     external_id: null,
     metadata: {},
@@ -282,7 +293,16 @@ export function buildJwtTemplateContext(
       name: organization.name,
       domains: ws.organizationDomains
         .findBy('organization_id', organization.id)
-        .map((domain) => ({ id: domain.id, domain: domain.domain, state: domain.state })),
+        .map((domain) => ({
+          object: domain.object,
+          id: domain.id,
+          organization_id: domain.organization_id,
+          domain: domain.domain,
+          state: domain.state,
+          verification_strategy: domain.verification_strategy,
+          created_at: domain.created_at,
+          updated_at: domain.updated_at,
+        })),
       stripe_customer_id: organization.stripe_customer_id,
       external_id: organization.external_id,
       metadata: organization.metadata,

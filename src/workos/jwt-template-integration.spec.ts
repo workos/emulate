@@ -161,6 +161,43 @@ describe('JWT templates end to end', () => {
     expect(ws.users.findOneBy('email', 'alice@acme.com')?.last_sign_in_at).toBeNull();
   });
 
+  it('renders the full organization_domain in template claims', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        ...seed,
+        organizations: [
+          {
+            name: 'Acme Corp',
+            domains: [{ domain: 'acme.com', state: 'verified' as const }],
+            memberships: [{ email: 'alice@acme.com', role: 'admin', status: 'active' as const }],
+          },
+        ],
+        jwtTemplate: {
+          content: '{"urn:example:domains": {{ organization.domains }}}',
+        },
+      },
+    });
+
+    const { status, body } = await login(emulator.url);
+    expect(status).toBe(200);
+
+    const claims = decode(body.access_token);
+    const domains = claims['urn:example:domains'] as Array<Record<string, unknown>>;
+    expect(domains).toHaveLength(1);
+    expect(domains[0].object).toBe('organization_domain');
+    expect(domains[0].organization_id).toBeString();
+    expect(domains[0].domain).toBe('acme.com');
+    expect(domains[0].state).toBe('verified');
+    expect(domains[0].verification_strategy).toBe('manual');
+    expect(domains[0].created_at).toBeString();
+    expect(domains[0].updated_at).toBeString();
+    // verification_token/verification_prefix must not leak into the claim.
+    const flat = JSON.stringify(domains);
+    expect(flat).not.toContain('verification_token');
+    expect(flat).not.toContain('verification_prefix');
+  });
+
   it('signs nothing extra when no template is configured', async () => {
     emulator = await createEmulator({ port: 0, seed });
     const { body } = await login(emulator.url);
