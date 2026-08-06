@@ -471,6 +471,60 @@ describe('Auth routes', () => {
     expect(res.status).toBe(400);
     const body = await json(res);
     expect(body.code).toBe('invalid_request');
+    // Named for what it is. Routing this into the presence check reported "email is required" for
+    // an address that was supplied — the same backwards message the shape guard exists to avoid.
+    expect(body.message).toBe('email must be a string');
+  });
+
+  // Every one of these paths type-asserted `email` and then lowercased it to resolve the account
+  // case-insensitively, so a non-string arrived at `.toLowerCase()` and came back a 500 —
+  // `server_error` in a consumer's suite reads as an emulator defect, not a malformed request.
+  it('rejects a non-string email with 400 on every grant that resolves one', async () => {
+    const password = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 123, password: 'whatever' }),
+    });
+    expect(password.status).toBe(400);
+    expect((await json(password)).message).toBe('email must be a string');
+
+    const magic = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        code: '123456',
+        email: { not: 'a string' },
+      }),
+    });
+    expect(magic.status).toBe(400);
+    expect((await json(magic)).message).toBe('email must be a string');
+  });
+
+  // Creation trims before storing, so a read that skipped the trim could not find the account
+  // creation had just written under the same address.
+  it('trims a padded address on the paths that resolve one', async () => {
+    const signup = await json(
+      await req('/user_management/magic_auth', {
+        method: 'POST',
+        body: JSON.stringify({ email: '  padded@x.test  ' }),
+      }),
+    );
+    expect(signup.email).toBe('padded@x.test');
+
+    getWorkOSStore(store).users.update(signup.user_id, { password_hash: hashPassword('pw') });
+    const password = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: ' padded@x.test ', password: 'pw' }),
+    });
+    expect(password.status).toBe(200);
+
+    const reset = await req('/user_management/password_reset', {
+      method: 'POST',
+      body: JSON.stringify({ email: ' padded@x.test ' }),
+    });
+    expect(reset.status).toBe(201);
   });
 
   it('creates the user at magic auth code creation for an unknown email', async () => {

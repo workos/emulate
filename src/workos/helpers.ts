@@ -345,6 +345,32 @@ export function isEmailShaped(value: string): boolean {
 }
 
 /**
+ * Narrow a request's `email` to a trimmed string. Absence is handed back as `''` for the caller to
+ * report its own way; a value that is present but not a string is rejected here, because the two
+ * have the same fix only if the caller is told which one happened.
+ *
+ * Every caller used to type-assert instead, which was survivable while a lookup by email could
+ * only miss — `findOneBy` returns undefined for a number as readily as for an unknown address.
+ * Resolving case-insensitively means calling `toLowerCase` on it, so the same assertion now throws
+ * and a malformed request comes back a 500 that tells the caller nothing.
+ *
+ * Trimmed here too: creation stores the trimmed address, so a read that skipped the trim could not
+ * find what creation had just written.
+ */
+export function requireEmailString(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') {
+    throw new WorkOSApiError(400, 'email must be a string', 'invalid_request');
+  }
+  return value.trim();
+}
+
+/** Whether two addresses name the same account. Case-insensitive, like every lookup by email. */
+export function emailsMatch(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
  * Look a user up by email, ignoring case. `findOneBy` is an exact-match index lookup, which is
  * fine for a read but forks the account in two anywhere a miss creates a user instead.
  */

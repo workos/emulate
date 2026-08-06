@@ -25,6 +25,8 @@ import {
   formatAuthChallenge,
   acceptInvitation,
   findUserByEmail,
+  requireEmailString,
+  emailsMatch,
 } from '../helpers.js';
 import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
@@ -344,7 +346,7 @@ export function authRoutes(ctx: RouteContext): void {
       }
 
       case 'password': {
-        const email = body.email as string;
+        const email = requireEmailString(body.email);
         const password = body.password as string;
         if (!email || !password) {
           throw new WorkOSApiError(400, 'email and password are required', 'invalid_request');
@@ -373,7 +375,7 @@ export function authRoutes(ctx: RouteContext): void {
       case 'urn:workos:oauth:grant-type:magic-auth':
       case 'urn:workos:oauth:grant-type:magic-auth:code': {
         const code = body.code as string;
-        const email = body.email as string;
+        const email = requireEmailString(body.email);
         if (!code || !email) {
           throw new WorkOSApiError(400, 'code and email are required', 'invalid_request');
         }
@@ -382,10 +384,7 @@ export function authRoutes(ctx: RouteContext): void {
         // for 'user@x.test' against a stored 'User@X.test' is recorded under the stored casing,
         // so an exact match here would hand back a code that the address it was requested for
         // could never redeem.
-        const normalizedEmail = email.toLowerCase();
-        const magicAuth = ws.magicAuths
-          .all()
-          .find((ma) => ma.code === code && ma.email.toLowerCase() === normalizedEmail);
+        const magicAuth = ws.magicAuths.all().find((ma) => ma.code === code && emailsMatch(ma.email, email));
         if (!magicAuth) {
           failAuth('MagicAuth', { email }, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
         }
@@ -610,7 +609,7 @@ export function authRoutes(ctx: RouteContext): void {
     // neither their credential nor the invitation. Compared case-insensitively: an invitation to
     // Foo@example.com is for the same person as foo@example.com, and rejecting on letter case alone
     // would be a false negative.
-    if (invitation && invitation.email.toLowerCase() !== user.email.toLowerCase()) {
+    if (invitation && !emailsMatch(invitation.email, user.email)) {
       throw new WorkOSApiError(
         400,
         'The invitation was issued for a different email address',

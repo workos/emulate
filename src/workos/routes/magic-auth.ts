@@ -1,6 +1,13 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatMagicAuth, generateCode, expiresIn, findUserByEmail, isEmailShaped } from '../helpers.js';
+import {
+  formatMagicAuth,
+  generateCode,
+  expiresIn,
+  findUserByEmail,
+  isEmailShaped,
+  requireEmailString,
+} from '../helpers.js';
 
 export function magicAuthRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -17,7 +24,7 @@ export function magicAuthRoutes(ctx: RouteContext): void {
     // This handler now creates users, so its input guard is the only thing standing between a
     // typo and a permanent ghost account. A bare presence check was enough when the endpoint
     // could only ever read.
-    const email = typeof body.email === 'string' ? body.email.trim() : '';
+    const email = requireEmailString(body.email);
     if (!email) {
       throw new WorkOSApiError(400, 'email is required', 'invalid_request');
     }

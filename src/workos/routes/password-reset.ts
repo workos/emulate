@@ -7,6 +7,7 @@ import {
   expiresIn,
   isExpired,
   findUserByEmail,
+  requireEmailString,
 } from '../helpers.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
 import type { EventBus } from '../event-bus.js';
@@ -23,7 +24,7 @@ export function passwordResetRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/password_reset', async (c) => {
     const body = await parseJsonBody(c);
-    const email = body.email as string | undefined;
+    const email = requireEmailString(body.email);
     if (!email) {
       throw new WorkOSApiError(400, 'email is required', 'invalid_request');
     }
