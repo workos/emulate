@@ -450,6 +450,11 @@ export function authRoutes(ctx: RouteContext): void {
         }
 
         user = ws.users.get(refreshToken.user_id);
+        // A token whose user was deleted is as invalid as an unknown one — verified live;
+        // without this the shared lookup below would answer with a plain 404.
+        if (!user) {
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
+        }
         // Allow body.organization_id to switch org context (switchToOrganization)
         organizationId = (body.organization_id as string) ?? refreshToken.organization_id;
 

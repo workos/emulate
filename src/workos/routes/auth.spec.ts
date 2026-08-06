@@ -378,6 +378,21 @@ describe('Auth routes', () => {
     expect(body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
   });
 
+  it('fails refresh OAuth-style when the user behind the token was deleted', async () => {
+    await createUser('deleted@test.com');
+    const auth = await json(await signInWithMagicAuth('deleted@test.com'));
+    getWorkOSStore(store).users.delete(auth.user.id);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: auth.refresh_token }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
+  });
+
   it('fails an unknown authorization code OAuth-style', async () => {
     const res = await app.request('/user_management/authenticate', {
       method: 'POST',
