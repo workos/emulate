@@ -1,4 +1,6 @@
 import { randomBytes, createHash, createCipheriv } from 'node:crypto';
+import { isIPv6 } from 'node:net';
+import { domainToASCII } from 'node:url';
 import { WorkOSApiError, generateId, type CursorPaginatedResult, type Entity, type Store } from '../core/index.js';
 import { EVENTS, STORE_KEYS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
 import type { WorkOSStore } from './store.js';
@@ -441,8 +443,8 @@ const ANY_HOST = '*';
 
 /**
  * Normalize a configured redirect host into the form `URL.hostname` produces: lowercase,
- * no scheme, no port, IPv6 in brackets. Accepts a bare hostname (`app.example.test`), a
- * subdomain wildcard (`*.example.test`), `*`, or a whole origin
+ * punycode, no scheme, no port, IPv6 in brackets. Accepts a bare hostname
+ * (`app.example.test`), a subdomain wildcard (`*.example.test`), `*`, or a whole origin
  * (`https://app.example.test:8443`), since an origin is what people usually have on hand.
  * Throws on input that would silently never match.
  */
@@ -459,17 +461,37 @@ export function normalizeRedirectHost(value: string): string {
   } else if (host.startsWith('[')) {
     // Bracketed IPv6, possibly with a port: keep everything through the closing bracket.
     host = host.slice(0, host.indexOf(']') + 1);
-  } else if (host.includes(':')) {
-    const portIndex = host.lastIndexOf(':');
-    const port = host.slice(portIndex + 1);
-    // `example.test:3000` is a host and port; anything else with colons is bare IPv6.
-    host = /^\d+$/.test(port) && !host.slice(0, portIndex).includes(':') ? host.slice(0, portIndex) : `[${host}]`;
+  } else {
+    if (host.includes(':')) {
+      const portIndex = host.lastIndexOf(':');
+      const port = host.slice(portIndex + 1);
+      // `example.test:3000` is a host and port; anything else with colons is bare IPv6.
+      host = /^\d+$/.test(port) && !host.slice(0, portIndex).includes(':') ? host.slice(0, portIndex) : `[${host}]`;
+    }
+    if (!host.startsWith('[')) host = toAsciiHost(host);
   }
 
   if (!isMatchableHostPattern(host)) {
     throw new Error(`Invalid redirect host: ${JSON.stringify(value)}`);
   }
   return host;
+}
+
+/**
+ * Convert an internationalized hostname to the punycode `URL.hostname` yields, so `møller.test`
+ * can be configured the way its owner spells it. Without this, only the origin form
+ * (`https://møller.test`) worked — `URL` punycodes on the way through — leaving the bare form
+ * with no spelling that could ever match. Returns '' for input that is not a domain at all,
+ * which the shape check then rejects.
+ */
+function toAsciiHost(host: string): string {
+  // Everything a hostname may legally contain is printable ASCII; anything else needs IDNA.
+  if (!/[^ -~]/.test(host)) return host;
+  const wildcard = host.startsWith('*.');
+  // `*` is not an IDNA label, so convert only what follows it.
+  const ascii = domainToASCII(wildcard ? host.slice(2) : host);
+  if (!ascii) return '';
+  return wildcard ? `*.${ascii}` : ascii;
 }
 
 /** A DNS label: alphanumeric, inner hyphens allowed, dot-separated. */
@@ -486,11 +508,9 @@ function isMatchableHostPattern(host: string): boolean {
   const bare = host.startsWith('*.') ? host.slice(2) : host;
   if (!bare) return false;
   if (bare.startsWith('[')) {
-    if (!bare.endsWith(']')) return false;
-    const inner = bare.slice(1, -1);
-    // Hex groups, IPv4-mapped tails, and the `::` elision — but not an arbitrary `host:port`
-    // that only reached this branch because its port was not numeric.
-    return inner.includes(':') && /^[0-9a-f:.]+$/.test(inner);
+    // A real address, not just IPv6-shaped characters: `[:::]` and `[....]` would pass a
+    // character-class check and then match no hostname, the same silent failure as above.
+    return bare.endsWith(']') && isIPv6(bare.slice(1, -1));
   }
   return HOSTNAME.test(bare);
 }
@@ -499,6 +519,15 @@ function isMatchableHostPattern(host: string): boolean {
 export function normalizeRedirectHosts(values: readonly string[]): string[] {
   return values.filter((value) => value.trim() !== '').map(normalizeRedirectHost);
 }
+
+/**
+ * Schemes that run in the page instead of navigating to it. The host check alone does not stop
+ * them: `javascript://localhost/%0aalert(1)` parses with a hostname of `localhost`, so a script
+ * URI reaches the redirect on the strength of an authority it never uses. Custom app schemes
+ * (`myapp://callback`, RFC 8252) stay allowed — they are a real redirect target a native client
+ * tests against, and they carry no script.
+ */
+const SCRIPT_REDIRECT_SCHEMES = new Set(['javascript:', 'data:', 'vbscript:', 'blob:', 'file:']);
 
 function hostMatches(hostname: string, pattern: string): boolean {
   if (pattern === ANY_HOST) return true;
@@ -519,6 +548,16 @@ export function assertAllowedRedirectUri(uri: string, store: Store): void {
     parsed = new URL(uri);
   } catch {
     throw new WorkOSApiError(400, 'Invalid redirect_uri', 'invalid_redirect_uri');
+  }
+
+  // Checked before the host, and regardless of configuration: `*` widens which host may be
+  // redirected to, never what a redirect is allowed to execute.
+  if (SCRIPT_REDIRECT_SCHEMES.has(parsed.protocol)) {
+    throw new WorkOSApiError(
+      400,
+      `redirect_uri scheme ${parsed.protocol.slice(0, -1)} is not allowed`,
+      'invalid_redirect_uri',
+    );
   }
 
   const configured = store.getData<string[]>(STORE_KEYS.allowedRedirectHosts) ?? [];

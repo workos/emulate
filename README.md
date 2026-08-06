@@ -716,11 +716,16 @@ Notes:
   working.
 - An entry is a hostname (`app.example.test`), a subdomain wildcard (`*.example.test`), or `*`. A
   whole origin (`https://app.example.test:8443`) is accepted and reduced to its hostname — ports and
-  schemes are never part of the check.
+  schemes are never part of the host check.
 - The check applies to `redirect_uri` on `/user_management/authorize`, `/sso/authorize` and
   `/data-integrations/:slug/authorize`, and to `return_to` on `/user_management/sessions/logout`.
+- An internationalized hostname may be written either way: `møller.test` and its punycode
+  (`xn--mller-vua.test`) normalize to the same entry, since that is the form a request carries.
 - A host that could never match (`https://`, anything with whitespace) fails at startup rather than
   silently rejecting every request.
+- `javascript:`, `data:`, `vbscript:`, `blob:` and `file:` redirect URIs are always refused, `*`
+  included — `javascript://localhost/…` parses with an allowed hostname it never navigates to.
+  Custom app schemes (`myapp://callback`, for native clients) are allowed if their host is.
 
 ## Error Hooks
 
@@ -1040,7 +1045,7 @@ The WorkOS Emulator is designed for testing and development environments. When u
 ### Network Security
 
 - **Bind to localhost**: By default, the emulator binds to `localhost`, so its unauthenticated endpoints are only reachable from the local machine. To intentionally expose it to other hosts, pass `--host 0.0.0.0` (CLI) or `hostname: '0.0.0.0'` (`createEmulator`), and protect it with a firewall or VPN.
-- **Open redirect protection**: The authorize endpoints only redirect to localhost by default. `--redirect-hosts` (or `allowedRedirectHosts`) widens that for test environments with production-like hostnames; `--redirect-hosts '*'` disables the check entirely, so only use it on an emulator nothing untrusted can reach. See [Redirect URI Hosts](#redirect-uri-hosts).
+- **Open redirect protection**: The authorize endpoints only redirect to localhost by default. `--redirect-hosts` (or `allowedRedirectHosts`) widens that for test environments with production-like hostnames; `--redirect-hosts '*'` disables the host check entirely, so only use it on an emulator nothing untrusted can reach. Script-bearing schemes (`javascript:`, `data:`) are refused regardless. See [Redirect URI Hosts](#redirect-uri-hosts).
 - **No CORS restrictions**: The emulator doesn't enforce CORS. Configure CORS in your application if needed.
 - **No TLS/SSL**: The emulator doesn't provide HTTPS. Use a reverse proxy (nginx, Caddy) for TLS termination in production.
 

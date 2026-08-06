@@ -51,6 +51,16 @@ describe('normalizeRedirectHost', () => {
     expect(() => normalizeRedirectHost('two hosts')).toThrow('Invalid redirect host');
   });
 
+  // A request carries the punycode `URL.hostname` produced, so a configured entry has to reach
+  // the same form or the bare spelling of an internationalized host could never match.
+  it('punycodes an internationalized hostname, bare or wildcarded', () => {
+    expect(normalizeRedirectHost('møller.test')).toBe('xn--mller-vua.test');
+    expect(normalizeRedirectHost('MØLLER.test')).toBe('xn--mller-vua.test');
+    expect(normalizeRedirectHost('*.møller.test')).toBe('*.xn--mller-vua.test');
+    // Which is what the origin form already yielded, since URL punycodes on the way through.
+    expect(normalizeRedirectHost('https://møller.test')).toBe('xn--mller-vua.test');
+  });
+
   it('rejects patterns that look plausible but can never match a hostname', () => {
     for (const bad of [
       '*example.test', // wildcard without the separating dot
@@ -61,6 +71,10 @@ describe('normalizeRedirectHost', () => {
       'trailing-.example.test',
       'double..dot.test',
       '*.*.example.test',
+      '[:::]', // IPv6-shaped characters, not an address
+      '[....]',
+      '[fd00::1', // never closed
+      'møller.test/path', // punycoding must not smuggle a path through
     ]) {
       expect(() => normalizeRedirectHost(bad)).toThrow('Invalid redirect host');
     }
@@ -77,6 +91,7 @@ describe('normalizeRedirectHost', () => {
       'https://app.example.test:8443/callback',
       '*.example.test',
       'xn--80ak6aa92e.test', // punycode
+      'møller.test', // and the same host written the way its owner spells it
       '*',
     ]) {
       expect(() => normalizeRedirectHost(good)).not.toThrow();
@@ -209,6 +224,45 @@ describe('redirect host validation (configured hosts)', () => {
   });
 });
 
+describe('redirect URI schemes', () => {
+  // A script URI can borrow an allowed authority it never navigates to, so matching on the host
+  // alone let `javascript://localhost/…` through the guard the localhost check exists to be.
+  it('refuses a script scheme that parses with an allowed hostname', async () => {
+    const { app } = createTestApp();
+    for (const uri of ['javascript://localhost/%0aalert(1)', 'javascript://127.0.0.1/%0aalert(1)']) {
+      const res = await app.request(`/data-integrations/salesforce/authorize?redirect_uri=${encodeURIComponent(uri)}`, {
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(400);
+      const body = await json(res);
+      expect(body.code).toBe('invalid_redirect_uri');
+      expect(body.message).toContain('scheme javascript is not allowed');
+    }
+  });
+
+  // `*` widens which host may be redirected to; it does not widen what a redirect may execute.
+  it('refuses script schemes even when any host is allowed', async () => {
+    const { app } = createTestApp(['*']);
+    for (const uri of ['javascript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'file:///etc/passwd']) {
+      const res = await app.request(`/data-integrations/salesforce/authorize?redirect_uri=${encodeURIComponent(uri)}`, {
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(400);
+      expect((await json(res)).code).toBe('invalid_redirect_uri');
+    }
+  });
+
+  // Native clients (RFC 8252) redirect to a custom scheme, which carries no script.
+  it('still allows a custom app scheme whose host is allowed', async () => {
+    const { app } = createTestApp(['callback']);
+    const res = await app.request(
+      `/data-integrations/salesforce/authorize?redirect_uri=${encodeURIComponent('myapp://callback/done')}`,
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(302);
+  });
+});
+
 describe('createEmulator({ allowedRedirectHosts })', () => {
   it('applies the configured hosts, normalizing origins, and survives reset()', async () => {
     const emulator = await createEmulator({ port: 0, allowedRedirectHosts: ['https://app.example.test:8443'] });
@@ -244,4 +298,99 @@ describe('createEmulator({ allowedRedirectHosts })', () => {
       await emulator.close();
     }
   });
+});
+
+/**
+ * The flag and the environment variable are the two ways a compose file or a CI command reaches
+ * this feature, and neither is exercised by anything above: `createEmulator` is handed a list
+ * that the CLI is responsible for splitting, collecting and preferring over the environment.
+ */
+describe('--redirect-hosts / WORKOS_EMULATE_REDIRECT_HOSTS', () => {
+  const CLI = new URL('../cli.ts', import.meta.url).pathname;
+
+  /**
+   * The startup line only, not the whole stream: a served emulator never closes stdout, so
+   * reading to EOF would wait for the process this function is about to make requests against.
+   */
+  async function readStartupLine(stream: ReadableStream<Uint8Array>): Promise<string> {
+    const reader = stream.getReader();
+    let buffered = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (value) buffered += new TextDecoder().decode(value);
+        const line = buffered.split('\n').find((l) => l.startsWith('{'));
+        if (line && buffered.includes('\n')) return line;
+        if (done) throw new Error(`CLI printed no startup JSON: ${buffered}`);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /** Start the CLI, hand its `--json` URL to `body`, and make sure the process is reaped. */
+  async function withCli(
+    args: string[],
+    env: Record<string, string>,
+    body: (url: string) => Promise<void>,
+  ): Promise<void> {
+    const proc = Bun.spawn([process.execPath, CLI, '--port', '0', '--json', ...args], {
+      env: { ...process.env, NO_UPDATE_NOTIFIER: '1', WORKOS_EMULATE_REDIRECT_HOSTS: '', ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    try {
+      const line = await readStartupLine(proc.stdout);
+      await body((JSON.parse(line) as { url: string }).url);
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }
+
+  const authorize = (url: string, host: string) =>
+    fetch(`${url}/data-integrations/salesforce/authorize?redirect_uri=https://${host}/cb`, { redirect: 'manual' });
+
+  it('collects hosts from repeated, comma-separated and inline forms of the flag', async () => {
+    await withCli(
+      ['--redirect-hosts', 'a.example.test,b.example.test', '--redirect-hosts=c.example.test'],
+      {},
+      async (url) => {
+        for (const host of ['a.example.test', 'b.example.test', 'c.example.test']) {
+          expect((await authorize(url, host)).status).toBe(302);
+        }
+        expect((await authorize(url, 'd.example.test')).status).toBe(400);
+      },
+    );
+  }, 20000);
+
+  it('reads the environment variable', async () => {
+    await withCli([], { WORKOS_EMULATE_REDIRECT_HOSTS: 'env.example.test, *.env.example.test' }, async (url) => {
+      expect((await authorize(url, 'env.example.test')).status).toBe(302);
+      expect((await authorize(url, 'sub.env.example.test')).status).toBe(302);
+      expect((await authorize(url, 'other.example.test')).status).toBe(400);
+    });
+  }, 20000);
+
+  it('prefers the flag over the environment', async () => {
+    await withCli(
+      ['--redirect-hosts', 'flag.example.test'],
+      { WORKOS_EMULATE_REDIRECT_HOSTS: 'env.example.test' },
+      async (url) => {
+        expect((await authorize(url, 'flag.example.test')).status).toBe(302);
+        expect((await authorize(url, 'env.example.test')).status).toBe(400);
+      },
+    );
+  }, 20000);
+
+  it('exits with the validation error rather than starting on an unmatchable host', async () => {
+    const proc = Bun.spawn([process.execPath, CLI, '--port', '0', '--json', '--redirect-hosts', 'https://'], {
+      env: { ...process.env, NO_UPDATE_NOTIFIER: '1' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const stderr = await Bun.readableStreamToText(proc.stderr);
+    expect(await proc.exited).toBe(1);
+    expect(stderr).toContain('Invalid redirect host');
+  }, 20000);
 });
