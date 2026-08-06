@@ -195,7 +195,11 @@ describe('Auth routes', () => {
         password: 'wrong',
       }),
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'invalid_credentials',
+      message: "Invalid credentials for 'bad@test.com'.",
+    });
   });
 
   it('authorization_code grant flow', async () => {
@@ -421,6 +425,59 @@ describe('Auth routes', () => {
     expect(res.status).toBe(400);
     const body = await json(res);
     expect(body).toEqual({ code: 'invalid_one_time_code', message: 'Invalid one-time code' });
+  });
+
+  it('fails a PKCE verifier mismatch OAuth-style, like any other bad authorization code', async () => {
+    const user = await createUser('pkce@test.com');
+    getWorkOSStore(store).authCodes.insert({
+      object: 'authorization_code',
+      code: 'pkce-code',
+      user_id: user.id,
+      organization_id: null,
+      client_id: null,
+      code_challenge: 'a-challenge-no-verifier-will-hash-to',
+      code_challenge_method: 'S256',
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+    } as never);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code: 'pkce-code', code_verifier: 'wrong' }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      error: 'invalid_grant',
+      error_description: "The code 'pkce-code' has expired or is invalid.",
+    });
+  });
+
+  it('fails device-code polling OAuth-style at every stage', async () => {
+    const start = await req('/user_management/authorize/device', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: 'client_device' }),
+    });
+    const { device_code } = await json(start);
+
+    // Nobody has approved it yet.
+    const pending = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code }),
+    });
+    expect(pending.status).toBe(400);
+    expect(await json(pending)).toEqual({
+      error: 'authorization_pending',
+      error_description: 'The authorization request is still pending.',
+    });
+
+    const unknown = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: 'nope' }),
+    });
+    expect(unknown.status).toBe(400);
+    expect(await json(unknown)).toEqual({ error: 'invalid_grant', error_description: 'Invalid device code.' });
   });
 
   it('fails an expired magic auth code with the production code string', async () => {
@@ -1721,7 +1778,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ grant_type: 'password', email: 'evt-fail@test.com', password: 'wrong' }),
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
 
     const [event] = eventsNamed('authentication.password_failed');
     expect(event).toBeDefined();
@@ -1729,7 +1786,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       type: 'password',
       status: 'failed',
       email: 'evt-fail@test.com',
-      error: { code: 'invalid_credentials', message: 'Invalid credentials' },
+      error: { code: 'invalid_credentials', message: "Invalid credentials for 'evt-fail@test.com'." },
     });
   });
 

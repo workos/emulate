@@ -298,13 +298,19 @@ describe('SSO authentication events', () => {
       body: JSON.stringify({ grant_type: 'authorization_code', code: 'sso_bogus' }),
     });
     expect(res.status).toBe(400);
+    // The response is OAuth-shaped, but the event's error object keeps the spec's
+    // {code, message} — OauthApiError reuses those fields, so both stay correct.
+    expect(await res.json()).toEqual({
+      error: 'invalid_grant',
+      error_description: "The code 'sso_bogus' has expired or is invalid.",
+    });
 
     const [event] = eventsNamed('authentication.sso_failed');
     expect(event).toBeDefined();
     expect(event.data).toMatchObject({
       type: 'sso',
       status: 'failed',
-      error: { code: 'invalid_code', message: 'Invalid authorization code' },
+      error: { code: 'invalid_grant', message: "The code 'sso_bogus' has expired or is invalid." },
       sso: { organization_id: null, connection_id: null, session_id: null },
     });
   });

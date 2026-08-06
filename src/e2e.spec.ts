@@ -279,14 +279,14 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ grant_type: 'password', email, password: 'wrong password' }),
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
 
     const webhook = await waitForWebhook('authentication.password_failed', { after: cursor });
     expect(webhook.data).toMatchObject({
       type: 'password',
       status: 'failed',
       email,
-      error: { code: 'invalid_credentials', message: 'Invalid credentials' },
+      error: { code: 'invalid_credentials', message: `Invalid credentials for '${email}'.` },
     });
     verifySignature(webhook);
     expectSpecShape(webhook);

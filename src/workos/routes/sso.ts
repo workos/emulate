@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { type RouteContext, parseJsonBody, WorkOSApiError, generateId } from '../../core/index.js';
+import { type RouteContext, parseJsonBody, WorkOSApiError, OauthApiError, generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatSSOProfile, expiresIn, isExpired, assertLocalRedirectUri, emitAuthenticationEvent } from '../helpers.js';
 import type { WorkOSConnection } from '../entities.js';
@@ -138,8 +138,10 @@ export function ssoRoutes(ctx: RouteContext): void {
     const grantType = body.grant_type as string;
     const code = body.code as string;
 
+    // The spec gives /sso/token only OAuth-shaped 400s — invalid_client, unauthorized_client,
+    // invalid_grant, unsupported_grant_type — so every failure below is rendered that way.
     if (grantType !== 'authorization_code') {
-      throw new WorkOSApiError(400, 'Unsupported grant_type', 'invalid_request');
+      throw new OauthApiError(400, 'unsupported_grant_type', `The grant type is not supported: ${grantType}`);
     }
     if (!code) {
       throw new WorkOSApiError(400, 'code is required', 'invalid_request');
@@ -147,7 +149,7 @@ export function ssoRoutes(ctx: RouteContext): void {
 
     const auth = ws.ssoAuthorizations.findOneBy('code', code);
     if (!auth) {
-      const error = new WorkOSApiError(400, 'Invalid authorization code', 'invalid_code');
+      const error = new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`);
       emitAuthenticationEvent({
         eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
         method: 'SSO',
@@ -166,7 +168,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     if (isExpired(auth.expires_at)) {
       ws.ssoAuthorizations.delete(auth.id);
       const expiredProfile = ws.ssoProfiles.get(auth.profile_id);
-      const error = new WorkOSApiError(400, 'Authorization code has expired', 'expired_code');
+      const error = new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`);
       emitAuthenticationEvent({
         eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
         method: 'SSO',

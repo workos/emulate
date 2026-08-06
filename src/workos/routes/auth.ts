@@ -331,10 +331,14 @@ export function authRoutes(ctx: RouteContext): void {
             challenge = codeVerifier;
           }
           if (challenge !== authCode.code_challenge) {
+            // A failed verifier is a failure of the authorization_code grant, so it fails the
+            // same OAuth-style way an unknown code does (RFC 7636 §4.6). Leaving it plain put
+            // the shape of a failure at odds with the reason for it, on the one path every
+            // PKCE client takes.
             failAuth(
               'OAuth',
               { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },
-              new WorkOSApiError(400, 'Invalid code_verifier', 'invalid_code_verifier'),
+              new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
             );
           }
         }
@@ -358,10 +362,13 @@ export function authRoutes(ctx: RouteContext): void {
 
         user = ws.users.findOneBy('email', email);
         if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
+          // Verified live: 400 (not 401) with the email interpolated. `password` is an RFC 6749
+          // grant that nonetheless fails with the plain shape, which is why the rule here is an
+          // explicit two-grant allowlist rather than "standard grants fail OAuth-style".
           failAuth(
             'Password',
             { email, userId: user?.id },
-            new WorkOSApiError(401, 'Invalid credentials', 'invalid_credentials'),
+            new WorkOSApiError(400, `Invalid credentials for '${email}'.`, 'invalid_credentials'),
           );
         }
         authMethod = 'Password';
@@ -583,16 +590,21 @@ export function authRoutes(ctx: RouteContext): void {
           throw new WorkOSApiError(400, 'device_code is required', 'invalid_request');
         }
 
+        // The spec renders every device-flow code — expired_token, authorization_pending,
+        // slow_down, access_denied — as {error, error_description}. These previously used the
+        // plain envelope while already carrying OAuth error codes, so a polling client matching
+        // `error` saw nothing and one matching `code` worked: the exact inverse of every other
+        // grant here.
         const deviceAuth = ws.deviceAuthorizations.findOneBy('device_code', deviceCode);
         if (!deviceAuth) {
-          throw new WorkOSApiError(400, 'Invalid device code', 'invalid_grant');
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid device code.');
         }
         if (isExpired(deviceAuth.expires_at)) {
           ws.deviceAuthorizations.delete(deviceAuth.id);
-          throw new WorkOSApiError(400, 'Device code has expired', 'expired_token');
+          throw new OauthApiError(400, 'expired_token', 'The device code has expired.');
         }
         if (!deviceAuth.user_id) {
-          throw new WorkOSApiError(400, 'Authorization pending', 'authorization_pending');
+          throw new OauthApiError(400, 'authorization_pending', 'The authorization request is still pending.');
         }
 
         user = ws.users.get(deviceAuth.user_id);
