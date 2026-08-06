@@ -507,6 +507,21 @@ describe('Auth routes', () => {
     const users = getWorkOSStore(store).users.all();
     expect(users).toHaveLength(1);
     expect(users[0].email).toBe('Casing@Test.com');
+
+    // And the code is redeemable with the address it was requested for, not only the stored
+    // casing. Resolving the user case-insensitively while matching the code exactly would
+    // return a 201 carrying a code that this authenticate call could never spend.
+    const auth = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        code: second.code,
+        email: 'casing@test.com',
+      }),
+    });
+    expect(auth.status).toBe(200);
+    expect((await json(auth)).user.id).toBe(first.user_id);
   });
 
   it('rejects an email that could only be a typo, rather than creating a ghost user', async () => {

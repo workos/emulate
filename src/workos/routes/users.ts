@@ -7,7 +7,7 @@ import {
   parseListParams,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatUser, formatIdentity, hashPassword, formatListResponse } from '../helpers.js';
+import { formatUser, formatIdentity, hashPassword, formatListResponse, isEmailShaped } from '../helpers.js';
 
 export function userRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -15,9 +15,19 @@ export function userRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/users', async (c) => {
     const body = await parseJsonBody(c);
-    const email = body.email as string | undefined;
+    if (body.email !== undefined && typeof body.email !== 'string') {
+      throw validationError('email must be a string', [{ field: 'email', code: 'invalid_type' }]);
+    }
+    const email = body.email?.trim();
     if (!email) {
       throw validationError('email is required', [{ field: 'email', code: 'required' }]);
+    }
+    // The same guard the magic auth handler applies, for the same reason: this route creates
+    // users, and an address that could only be a typo becomes an account nothing can reach.
+    // Holding the two paths to one standard is what stops `{email: 'nope'}` being a 422 on one
+    // and a 201 on the other.
+    if (!isEmailShaped(email)) {
+      throw validationError('email must be a valid email address', [{ field: 'email', code: 'invalid' }]);
     }
 
     const existing = ws.users.findOneBy('email', email);

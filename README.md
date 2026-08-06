@@ -515,6 +515,17 @@ Only `active` memberships count — an unaccepted invitation or a deactivated me
 
 The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `invalid_grant`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.
 
+### Magic Auth doubles as sign-up
+
+`POST /user_management/magic_auth` creates the user when the email has none, so a sign-up flow needs no separate `POST /user_management/users` first. Production does the same at code-creation time rather than at authenticate: the 201 already carries a `user_id`, the user is immediately listable with `email_verified: false`, and the email it sends uses the "Sign up" template.
+
+Two consequences worth knowing before you point an existing test suite at it:
+
+- The endpoint no longer 404s an unknown email. A test that asserted that 404 now gets a 201 — and a user.
+- Redeeming a Magic Auth code sets `email_verified` to `true`, matching the live authenticate response for the same flow. This applies to **any** user who was not already verified, not only ones the endpoint just created, so a fixture seeded `email_verified: false` comes back verified after its first Magic Auth login.
+
+An email is resolved case-insensitively (`User@x.test` and `user@x.test` are the same account, stored under whichever case created it), and one that could only be a typo is rejected rather than turned into an account nothing can reach — the same guard `POST /user_management/users` applies.
+
 ### Emitted events
 
 Authentication events carry the spec payload `{ type, status, user_id, email, ip_address, user_agent }` (plus `error` on failures and `sso` details on SSO events).

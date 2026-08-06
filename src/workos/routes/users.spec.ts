@@ -33,6 +33,21 @@ describe('User routes', () => {
     expect(user.password_hash).toBeUndefined();
   });
 
+  // Held to the same standard as the magic auth handler, which validates for the same reason:
+  // both create users, and an address that could only be a typo becomes an unreachable account.
+  it('rejects an email that could only be a typo', async () => {
+    for (const email of ['', '   ', 'not-an-email', 'a b@test.com', '@test.com', 'nope@', 'two@at@test.com', 123]) {
+      const res = await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+      expect(res.status).toBe(422);
+      expect((await json(res)).code).toBe('unprocessable_entity');
+    }
+    const list = await json(await req('/user_management/users'));
+    expect(list.data).toHaveLength(0);
+  });
+
   it('rejects duplicate email', async () => {
     await req('/user_management/users', {
       method: 'POST',

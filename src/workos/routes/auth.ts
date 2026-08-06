@@ -375,7 +375,14 @@ export function authRoutes(ctx: RouteContext): void {
           throw new WorkOSApiError(400, 'code and email are required', 'invalid_request');
         }
 
-        const magicAuth = ws.magicAuths.all().find((ma) => ma.code === code && ma.email === email);
+        // Case-insensitively, because code creation resolves the user that way: a code requested
+        // for 'user@x.test' against a stored 'User@X.test' is recorded under the stored casing,
+        // so an exact match here would hand back a code that the address it was requested for
+        // could never redeem.
+        const normalizedEmail = email.toLowerCase();
+        const magicAuth = ws.magicAuths
+          .all()
+          .find((ma) => ma.code === code && ma.email.toLowerCase() === normalizedEmail);
         if (!magicAuth) {
           failAuth('MagicAuth', { email }, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
         }
