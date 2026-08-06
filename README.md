@@ -513,11 +513,11 @@ Only `active` memberships count — an unaccepted invitation or a deactivated me
 
 ### Refresh tokens always rotate
 
-The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `{"error": "invalid_grant", "error_description": "Invalid refresh token."}` — the OAuth shape described below, which the Node SDK surfaces as an `OauthException`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.
+The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `{"error": "invalid_grant", "error_description": "Invalid refresh token."}`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.
 
 ### Authentication failure shapes
 
-`POST /user_management/authenticate` does not use one error shape for every failure, and neither does production. Two grants fail OAuth-style; everything else keeps the plain shape:
+`POST /user_management/authenticate` does not use one error shape for every failure. Two grants fail OAuth-style; everything else keeps the plain shape:
 
 | Failure                                                         | Body                                                                  | Node SDK raises           |
 | --------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
@@ -528,7 +528,7 @@ The emulator issues a new refresh token on every refresh and invalidates the one
 | Magic Auth — wrong or expired code                              | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`         | `GenericServerException`  |
 | Step-up (MFA, org selection, email verification)                | `{"code": "…", "message": "…"}` (403)                                 | `AuthenticationException` |
 
-`password` is the one that surprises people: it is an RFC 6749 grant, but production fails it with the plain shape, so the emulator does too. `/sso/token` is OAuth-shaped throughout, matching its spec definition.
+`password` is an RFC 6749 grant, but production fails it with the plain shape, so the emulator does too. `/sso/token` is OAuth-shaped throughout, matching its spec definition.
 
 ### Emitted events
 
