@@ -523,7 +523,9 @@ Redeeming a Magic Auth code sets `email_verified` to `true`, matching the live a
 
 An email is resolved case-insensitively (`User@x.test` and `user@x.test` are the same account, stored under whichever case created it), and one that could only be a typo is rejected rather than turned into an account nothing can reach. `POST /user_management/users` applies both — so it answers 409 for an address that differs from an existing one only in case, rather than creating a second account no lookup can tell apart from the first.
 
-Every lookup by email is case-insensitive, not just Magic Auth's: the password grant, `login_hint` on the authorize endpoints, and `POST /user_management/password_reset` all resolve the same way, so an account created by a Magic Auth sign-up is reachable by whatever casing the caller has.
+Every lookup by email is case-insensitive, not just Magic Auth's, so an account created by a Magic Auth sign-up is reachable by whatever casing the caller has: the password grant, `login_hint` on the authorize endpoints, `POST /user_management/password_reset`, the `email` filter on `GET /user_management/users` and `GET /user_management/invitations`, accepting an invitation, the `user_id` on SSO authentication events, and the email a seeded organization membership joins its user by. Seeded `users` are held to the same uniqueness the API enforces — two entries differing only in case are a config error, since a seed was otherwise the one way left to produce the pair of accounts no lookup can tell apart.
+
+A field named `email` must be a string wherever it is accepted. A number or object is a `400` (`422` on `POST /user_management/users`, which keeps that route's validation shape) naming the type, distinct from the `email is required` reported for one that is genuinely absent. Addresses are trimmed before they are stored or resolved, so a padded copy of an address finds the account written under it.
 
 ### Emitted events
 

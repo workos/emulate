@@ -49,6 +49,26 @@ describe('Seeding organization memberships', () => {
     expect(m.user).toMatchObject({ object: 'user', id: m.user_id, email: 'admin@acme.com' });
   });
 
+  // The join resolves case-insensitively, like every other lookup by email, so a reference the
+  // running emulator would honour is not rejected at startup on letter case alone.
+  it('joins a membership to its user by any casing of the address', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        users: [{ email: 'Admin@Acme.com' }],
+        organizations: [{ name: 'Acme Corp', memberships: [{ email: 'admin@acme.com', role: 'admin' }] }],
+      },
+    });
+
+    const res = await fetch(`${emulator.url}/user_management/organization_memberships`, {
+      headers: auth(emulator.apiKey),
+    });
+    const list = (await res.json()) as any;
+    expect(list.data).toHaveLength(1);
+    // Stored under the case that seeded it, reached by the case the membership named.
+    expect(list.data[0].user).toMatchObject({ email: 'Admin@Acme.com' });
+  });
+
   it('rejects startup when a membership references an email with no seeded user', async () => {
     await expect(
       createEmulator({
@@ -79,6 +99,27 @@ describe('Seeding organization memberships', () => {
         'organizations[0].memberships[0].email',
       );
       expect(error.message).toContain('must match a user defined in users');
+    });
+
+    it('accepts a membership email differing from its user only in case', () => {
+      const { valid } = validateSeedConfig({
+        users: [{ email: 'Admin@Acme.com' }],
+        organizations: [{ name: 'Acme', memberships: [{ email: 'admin@acme.com' }] }],
+      });
+      expect(valid).toBe(true);
+    });
+
+    it('rejects two seeded users with the same email', () => {
+      const error = findError({ users: [{ email: 'dup@acme.com' }, { email: 'dup@acme.com' }] }, 'users[1].email');
+      expect(error.message).toContain('unique across users');
+    });
+
+    // The uniqueness the API enforces: POST /user_management/users answers 409 for an address
+    // differing only in case, so a seed that got two through would be the one remaining way to
+    // manufacture the pair of accounts no lookup by email can tell apart.
+    it('rejects two seeded users whose emails differ only in case', () => {
+      const error = findError({ users: [{ email: 'Dup@Acme.com' }, { email: 'dup@acme.com' }] }, 'users[1].email');
+      expect(error.message).toContain('unique across users');
     });
 
     it('rejects a membership when no users are defined at all', () => {

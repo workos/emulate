@@ -28,10 +28,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
   const errors: ConfigValidationError[] = [];
 
   // Seeded user ids are generated at insert time, so org memberships reference users
-  // by email — collect the emails defined in this config for cross-referencing.
+  // by email — collect the emails defined in this config for cross-referencing. Lowercased,
+  // because every lookup by email is case-insensitive: a membership for 'a@x.test' names the
+  // user seeded as 'A@x.test', and resolving it any other way would reject a reference the
+  // running emulator then honours.
   const userEmails = new Set(
     Array.isArray(config.users)
-      ? config.users.map((u) => u.email).filter((e): e is string => typeof e === 'string')
+      ? config.users
+          .map((u) => u.email)
+          .filter((e): e is string => typeof e === 'string')
+          .map((e) => e.toLowerCase())
       : [],
   );
 
@@ -76,18 +82,22 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
       });
 
       // Email is the lookup key org memberships join on; duplicates would silently
-      // bind a membership to the first match.
+      // bind a membership to the first match. Compared case-insensitively, matching the
+      // uniqueness the API enforces: `POST /user_management/users` answers 409 for an address
+      // differing only in case, so a seed that got two through would be the one way left to
+      // manufacture the pair of accounts no lookup by email can tell apart.
       const seenEmails = new Set<string>();
       config.users.forEach((user, index) => {
         if (!user.email || typeof user.email !== 'string') return;
-        if (seenEmails.has(user.email)) {
+        const normalized = user.email.toLowerCase();
+        if (seenEmails.has(normalized)) {
           errors.push({
             path: `users[${index}].email`,
             message: 'email must be unique across users',
             value: user.email,
           });
         }
-        seenEmails.add(user.email);
+        seenEmails.add(normalized);
       });
 
       // A pinned user id is the primary key in the store; two users sharing one would
@@ -194,7 +204,7 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
                     value: membership.email,
                   });
                 }
-              } else if (!userEmails.has(membership.email)) {
+              } else if (!userEmails.has(membership.email.toLowerCase())) {
                 // A dangling reference would seed a membership whose embedded user
                 // cannot resolve, which membership serialization rejects.
                 errors.push({

@@ -63,6 +63,7 @@ import {
   formatApiKeyRecord,
   formatFeatureFlag,
   generateClientId,
+  findUserByEmail,
 } from './helpers.js';
 import type {
   WorkOSConnectionType,
@@ -325,8 +326,8 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
           // insert time, so an id literal in a config could never resolve, and a
           // dangling membership would break membership serialization (which requires
           // a resolvable embedded user). validateSeedConfig guarantees the reference
-          // matches a seeded user.
-          const memberUser = ws.users.findOneBy('email', mm.email);
+          // matches a seeded user — case-insensitively, as it does here.
+          const memberUser = findUserByEmail(ws, mm.email);
           if (!memberUser) {
             throw new Error(`Seed membership references unknown user '${mm.email}' (organization '${orgConfig.name}')`);
           }

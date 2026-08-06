@@ -291,6 +291,32 @@ describe('SSO authentication events', () => {
     expect(event.data).toHaveProperty('email');
   });
 
+  // SSO is profile-based, so the event's user_id is resolved from the profile's email. Resolving it
+  // exactly reported user_id: null for an account that existed under a different case — and Magic
+  // Auth sign-up creates accounts under whatever case it was handed.
+  it('resolves the event user_id for an account stored under a different case', async () => {
+    const { conn } = await createOrgWithConnection();
+    const user = await json(
+      await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'Federated@SSO-Events.example.com' }),
+      }),
+    );
+
+    const authRes = await app.request(
+      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=federated%40sso-events.example.com`,
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+
+    const [event] = eventsNamed('authentication.sso_succeeded');
+    expect(event.data).toMatchObject({ user_id: user.id, email: 'federated@sso-events.example.com' });
+  });
+
   it('emits authentication.sso_failed with an error object for an invalid code', async () => {
     const res = await app.request('/sso/token', {
       method: 'POST',

@@ -66,6 +66,25 @@ describe('User routes', () => {
     expect((await json(second)).code).toBe('user_already_exists');
   });
 
+  // This is the lookup an SDK's listUsers({ email }) maps to, so it is how a caller finds the
+  // account a Magic Auth sign-up just made — and sign-up stores whatever case it was handed.
+  // Filtering exactly meant the address the caller had returned nothing for a user that existed.
+  it('filters by email case-insensitively', async () => {
+    const created = await json(
+      await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'Listed@X.test' }) }),
+    );
+
+    for (const query of ['listed%40x.test', 'Listed%40X.test', 'LISTED%40X.TEST']) {
+      const list = await json(await req(`/user_management/users?email=${query}`));
+      expect(list.data).toHaveLength(1);
+      expect(list.data[0].id).toBe(created.id);
+    }
+
+    // Still a filter, not a fuzzy match.
+    const miss = await json(await req('/user_management/users?email=listed%40y.test'));
+    expect(miss.data).toHaveLength(0);
+  });
+
   it('rejects duplicate email', async () => {
     await req('/user_management/users', {
       method: 'POST',

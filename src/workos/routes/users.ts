@@ -14,6 +14,7 @@ import {
   formatListResponse,
   isEmailShaped,
   findUserByEmail,
+  emailsMatch,
 } from '../helpers.js';
 
 export function userRoutes(ctx: RouteContext): void {
@@ -84,7 +85,10 @@ export function userRoutes(ctx: RouteContext): void {
     const result = ws.users.list({
       ...params,
       filter: (user) => {
-        if (emailFilter && user.email !== emailFilter) return false;
+        // Case-insensitively, like every other lookup by email. This is the lookup an SDK's
+        // listUsers({ email }) reaches for, so it is how a caller finds the account a Magic Auth
+        // sign-up just made — and that account is stored under whatever case created it.
+        if (emailFilter && !emailsMatch(user.email, emailFilter)) return false;
         if (orgUserIds && !orgUserIds.has(user.id)) return false;
         return true;
       },

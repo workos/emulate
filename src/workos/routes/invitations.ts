@@ -13,6 +13,8 @@ import {
   expiresIn,
   formatListResponse,
   acceptInvitation,
+  findUserByEmail,
+  emailsMatch,
 } from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
@@ -53,7 +55,8 @@ export function invitationRoutes(ctx: RouteContext): void {
     const result = ws.invitations.list({
       ...params,
       filter: (inv) => {
-        if (emailFilter && inv.email !== emailFilter) return false;
+        // Case-insensitively, like every other lookup by email.
+        if (emailFilter && !emailsMatch(inv.email, emailFilter)) return false;
         if (orgFilter && inv.organization_id !== orgFilter) return false;
         return true;
       },
@@ -82,7 +85,11 @@ export function invitationRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, `Invitation is ${inv.state}`, 'invalid_invitation_state');
     }
 
-    acceptInvitation(inv, ws.users.findOneBy('email', inv.email), ws, store.getData<EventBus>(STORE_KEYS.eventBus));
+    // Case-insensitively: an exact match here enrolled nobody for an account stored under a
+    // different case, spending the invitation and emitting invitation.accepted with no membership
+    // to show for it. The authenticate flow already compares the two addresses this way, and Magic
+    // Auth sign-up makes accounts under whatever case the caller sent.
+    acceptInvitation(inv, findUserByEmail(ws, inv.email), ws, store.getData<EventBus>(STORE_KEYS.eventBus));
 
     const updated = ws.invitations.get(inv.id)!;
     return c.json(formatInvitation(updated));

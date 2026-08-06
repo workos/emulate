@@ -132,6 +132,39 @@ describe('Invitation routes', () => {
     expect(memberships.data[0].organization_id).toBe(org.id);
   });
 
+  // Resolving the recipient exactly enrolled nobody for an account stored under a different case:
+  // the invitation was still spent and invitation.accepted still fired, with no membership to show
+  // for it and no error anywhere. Magic Auth sign-up makes accounts under whatever case it was
+  // handed, and the authenticate flow already compares the two addresses case-insensitively.
+  it('accepts an invitation for an account stored under a different case', async () => {
+    const user = await json(
+      await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'Member@X.test' }) }),
+    );
+    const org = await json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'Case Org' }) }));
+
+    const inv = await json(
+      await req('/user_management/invitations', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'member@x.test', organization_id: org.id }),
+      }),
+    );
+    const accepted = await req(`/user_management/invitations/${inv.id}/accept`, { method: 'POST' });
+    expect(accepted.status).toBe(200);
+    expect((await json(accepted)).state).toBe('accepted');
+
+    const memberships = await json(await req(`/user_management/organization_memberships?organization_id=${org.id}`));
+    expect(memberships.data).toHaveLength(1);
+    expect(memberships.data[0].user_id).toBe(user.id);
+  });
+
+  it('filters invitations by email case-insensitively', async () => {
+    await req('/user_management/invitations', { method: 'POST', body: JSON.stringify({ email: 'Filter@X.test' }) });
+
+    const list = await json(await req('/user_management/invitations?email=filter%40x.test'));
+    expect(list.data).toHaveLength(1);
+    expect(list.data[0].email).toBe('Filter@X.test');
+  });
+
   it('revokes an invitation', async () => {
     const created = await json(
       await req('/user_management/invitations', {
