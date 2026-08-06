@@ -7,7 +7,14 @@ import {
   parseListParams,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatUser, formatIdentity, hashPassword, formatListResponse, isEmailShaped } from '../helpers.js';
+import {
+  formatUser,
+  formatIdentity,
+  hashPassword,
+  formatListResponse,
+  isEmailShaped,
+  findUserByEmail,
+} from '../helpers.js';
 
 export function userRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -30,7 +37,11 @@ export function userRoutes(ctx: RouteContext): void {
       throw validationError('email must be a valid email address', [{ field: 'email', code: 'invalid' }]);
     }
 
-    const existing = ws.users.findOneBy('email', email);
+    // Case-insensitively, for the same reason the magic auth handler resolves that way: an
+    // exact-match miss on 'User@x.test' vs 'user@x.test' let both be created, and then the two
+    // creation paths disagreed about which account an address names — with magic auth resolving
+    // the ambiguity by insertion order.
+    const existing = findUserByEmail(ws, email);
     if (existing) {
       throw new WorkOSApiError(409, 'A user with this email already exists', 'user_already_exists');
     }

@@ -24,6 +24,7 @@ import {
   generateCode,
   formatAuthChallenge,
   acceptInvitation,
+  findUserByEmail,
 } from '../helpers.js';
 import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
@@ -71,7 +72,9 @@ export function authRoutes(ctx: RouteContext): void {
 
     let user;
     if (loginHint) {
-      user = ws.users.findOneBy('email', loginHint);
+      // Case-insensitively, like every other lookup by email: Magic Auth stores the case it was
+      // handed, so an account created as 'User@x.test' has to be reachable as 'user@x.test'.
+      user = findUserByEmail(ws, loginHint);
       if (!user) {
         const redirect = new URL(redirectUri);
         redirect.searchParams.set('error', 'user_not_found');
@@ -347,7 +350,7 @@ export function authRoutes(ctx: RouteContext): void {
           throw new WorkOSApiError(400, 'email and password are required', 'invalid_request');
         }
 
-        user = ws.users.findOneBy('email', email);
+        user = findUserByEmail(ws, email);
         if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
           failAuth(
             'Password',

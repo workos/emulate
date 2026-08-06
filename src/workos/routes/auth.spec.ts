@@ -3,6 +3,7 @@ import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
 import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
+import { hashPassword } from '../helpers.js';
 import type { Store } from '../../core/index.js';
 
 const apiKeys: ApiKeyMap = { sk_test_auth: { environment: 'test' } };
@@ -488,6 +489,24 @@ describe('Auth routes', () => {
     expect(users.data[0].email_verified).toBe(false);
   });
 
+  // A sign-up that creates a user is a sign-up a webhook consumer expects to hear about, which is
+  // a large part of why this endpoint creating one is useful to test against at all.
+  it('emits user.created for a sign-up, and none when the user already existed', async () => {
+    const ws = getWorkOSStore(store);
+    const created = () =>
+      ws.events.all().filter((e: { event: string; data: Record<string, unknown> }) => e.event === 'user.created');
+
+    const signup = await json(
+      await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email: 'evented@test.com' }) }),
+    );
+    expect(created()).toHaveLength(1);
+    expect(created()[0].data).toMatchObject({ id: signup.user_id, email: 'evented@test.com', email_verified: false });
+
+    // A second code for the same address resolves the existing user, so nothing was created.
+    await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email: 'evented@test.com' }) });
+    expect(created()).toHaveLength(1);
+  });
+
   it('resolves an existing user case-insensitively instead of forking the account', async () => {
     const first = await json(
       await req('/user_management/magic_auth', {
@@ -534,6 +553,40 @@ describe('Auth routes', () => {
       expect((await json(res)).code).toBe('invalid_request');
     }
     expect(getWorkOSStore(store).users.all()).toHaveLength(0);
+  });
+
+  // Absent and malformed have the same fix only if the caller is told which one happened.
+  it('distinguishes a missing email from an unusable one', async () => {
+    const missing = await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({}) });
+    expect((await json(missing)).message).toBe('email is required');
+
+    const malformed = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'not-an-email' }),
+    });
+    expect((await json(malformed)).message).toBe('email must be a valid email address');
+  });
+
+  // Magic Auth stores the case it was handed, so every other way in has to resolve that way too
+  // — otherwise a sign-up creates an account the rest of the API cannot reach.
+  it('reaches a Magic Auth account by any casing of its address', async () => {
+    await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email: 'Mixed@Case.test' }) });
+    const user = getWorkOSStore(store).users.all()[0];
+    getWorkOSStore(store).users.update(user.id, { password_hash: hashPassword('correct horse') });
+
+    const password = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'mixed@case.test', password: 'correct horse' }),
+    });
+    expect(password.status).toBe(200);
+    expect((await json(password)).user.id).toBe(user.id);
+
+    const reset = await req('/user_management/password_reset', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'mixed@case.test' }),
+    });
+    expect(reset.status).toBe(201);
   });
 
   it('emits one user.updated per magic auth sign-in, and none for a no-op re-verify', async () => {

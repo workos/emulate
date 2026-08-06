@@ -48,6 +48,24 @@ describe('User routes', () => {
     expect(list.data).toHaveLength(0);
   });
 
+  // Case-insensitively, like the magic auth handler: two accounts differing only in case left the
+  // two creation paths disagreeing about which one an address names, with magic auth's resolver
+  // settling it by insertion order.
+  it('rejects a duplicate email that differs only in case', async () => {
+    const first = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'User@x.test' }),
+    });
+    expect(first.status).toBe(201);
+
+    const second = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'user@x.test' }),
+    });
+    expect(second.status).toBe(409);
+    expect((await json(second)).code).toBe('user_already_exists');
+  });
+
   it('rejects duplicate email', async () => {
     await req('/user_management/users', {
       method: 'POST',

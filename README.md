@@ -521,7 +521,9 @@ The emulator issues a new refresh token on every refresh and invalidates the one
 
 Redeeming a Magic Auth code sets `email_verified` to `true`, matching the live authenticate response for the same flow. This applies to **any** user who was not already verified, not only ones the endpoint just created, so a fixture seeded `email_verified: false` comes back verified after its first Magic Auth login.
 
-An email is resolved case-insensitively (`User@x.test` and `user@x.test` are the same account, stored under whichever case created it), and one that could only be a typo is rejected rather than turned into an account nothing can reach. This is the same guard `POST /user_management/users` applies.
+An email is resolved case-insensitively (`User@x.test` and `user@x.test` are the same account, stored under whichever case created it), and one that could only be a typo is rejected rather than turned into an account nothing can reach. `POST /user_management/users` applies both — so it answers 409 for an address that differs from an existing one only in case, rather than creating a second account no lookup can tell apart from the first.
+
+Every lookup by email is case-insensitive, not just Magic Auth's: the password grant, `login_hint` on the authorize endpoints, and `POST /user_management/password_reset` all resolve the same way, so an account created by a Magic Auth sign-up is reachable by whatever casing the caller has.
 
 ### Emitted events
 

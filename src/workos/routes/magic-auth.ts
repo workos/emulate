@@ -18,8 +18,14 @@ export function magicAuthRoutes(ctx: RouteContext): void {
     // typo and a permanent ghost account. A bare presence check was enough when the endpoint
     // could only ever read.
     const email = typeof body.email === 'string' ? body.email.trim() : '';
-    if (!email || !isEmailShaped(email)) {
+    if (!email) {
       throw new WorkOSApiError(400, 'email is required', 'invalid_request');
+    }
+    // Reported apart from absence: the two have the same fix only if the caller is told which
+    // one happened, and "email is required" describes an address that was in fact supplied
+    // exactly backwards.
+    if (!isEmailShaped(email)) {
+      throw new WorkOSApiError(400, 'email must be a valid email address', 'invalid_request');
     }
 
     // Magic Auth doubles as sign-up: production creates the user at code-creation
