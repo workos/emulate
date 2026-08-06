@@ -519,14 +519,14 @@ The emulator issues a new refresh token on every refresh and invalidates the one
 
 `POST /user_management/authenticate` does not use one error shape for every failure, and neither does production. Two grants fail OAuth-style; everything else keeps the plain shape:
 
-| Failure                                                        | Body                                                              | Node SDK raises        |
-| -------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------- |
-| `authorization_code` — unknown, expired, or bad `code_verifier` | `{"error": "invalid_grant", "error_description": "…"}`            | `OauthException`       |
-| `refresh_token` — unknown, expired, rotated, or user deleted    | `{"error": "invalid_grant", "error_description": "…"}`            | `OauthException`       |
-| Device code — pending, expired, unknown                        | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}` | `OauthException`       |
-| `password` — wrong password                                    | `{"code": "invalid_credentials", "message": "…"}` (400)           | `GenericServerException` |
-| Magic Auth — wrong or expired code                             | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`      | `GenericServerException` |
-| Step-up (MFA, org selection, email verification)               | `{"code": "…", "message": "…"}` (403)                             | `AuthenticationException` |
+| Failure                                                         | Body                                                                  | Node SDK raises           |
+| --------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
+| `authorization_code` — unknown, expired, or bad `code_verifier` | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
+| `refresh_token` — unknown, expired, rotated, or user deleted    | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
+| Device code — pending, expired, unknown                         | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}` | `OauthException`          |
+| `password` — wrong password                                     | `{"code": "invalid_credentials", "message": "…"}` (400)               | `GenericServerException`  |
+| Magic Auth — wrong or expired code                              | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`         | `GenericServerException`  |
+| Step-up (MFA, org selection, email verification)                | `{"code": "…", "message": "…"}` (403)                                 | `AuthenticationException` |
 
 `password` is the one that surprises people: it is an RFC 6749 grant, but production fails it with the plain shape, so the emulator does too. `/sso/token` is OAuth-shaped throughout, matching its spec definition.
 
