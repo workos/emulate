@@ -4,6 +4,7 @@ import {
   notFound,
   parseJsonBody,
   WorkOSApiError,
+  OauthApiError,
   generateId,
   generateUlid,
 } from '../../core/index.js';
@@ -299,13 +300,21 @@ export function authRoutes(ctx: RouteContext): void {
         const code = body.code as string;
         if (!code) throw new WorkOSApiError(400, 'code is required', 'invalid_request');
 
+        // Production does not distinguish unknown from expired codes: both fail OAuth-style
+        // as invalid_grant with the same description.
         const authCode = ws.authCodes.findOneBy('code', code);
-        if (!authCode) failAuth('OAuth', {}, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
+        if (!authCode) {
+          failAuth(
+            'OAuth',
+            {},
+            new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
+          );
+        }
         if (isExpired(authCode.expires_at)) {
           failAuth(
             'OAuth',
             { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },
-            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+            new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
           );
         }
 
@@ -377,13 +386,13 @@ export function authRoutes(ctx: RouteContext): void {
 
         const magicAuth = ws.magicAuths.all().find((ma) => ma.code === code && ma.email === email);
         if (!magicAuth) {
-          failAuth('MagicAuth', { email }, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
+          failAuth('MagicAuth', { email }, new WorkOSApiError(400, 'Invalid one-time code', 'invalid_one_time_code'));
         }
         if (isExpired(magicAuth.expires_at)) {
           failAuth(
             'MagicAuth',
             { email: magicAuth.email, userId: magicAuth.user_id },
-            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+            new WorkOSApiError(400, `One-time code for '${magicAuth.email}' has expired.`, 'one_time_code_expired'),
           );
         }
 
@@ -433,11 +442,11 @@ export function authRoutes(ctx: RouteContext): void {
 
         const refreshToken = ws.refreshTokens.findOneBy('token', token);
         if (!refreshToken) {
-          throw new WorkOSApiError(400, 'Invalid refresh token', 'invalid_grant');
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
         }
         if (isExpired(refreshToken.expires_at)) {
           ws.refreshTokens.delete(refreshToken.id);
-          throw new WorkOSApiError(400, 'Refresh token has expired', 'invalid_grant');
+          throw new OauthApiError(400, 'invalid_grant', 'Refresh token has expired.');
         }
 
         user = ws.users.get(refreshToken.user_id);
@@ -694,7 +703,7 @@ export function authRoutes(ctx: RouteContext): void {
       });
     } else {
       const existing = refreshSessionId ? ws.sessions.get(refreshSessionId) : undefined;
-      if (!existing) throw new WorkOSApiError(400, 'Invalid refresh token', 'invalid_grant');
+      if (!existing) throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
       session = existing;
     }
     const updatedUser = ws.users.get(user.id)!;

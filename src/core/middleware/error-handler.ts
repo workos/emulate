@@ -13,8 +13,24 @@ export class WorkOSApiError extends Error {
   }
 }
 
+/**
+ * A failure of an RFC 6749 grant, rendered OAuth-style as `{error, error_description}` —
+ * production only uses this shape for the standard grants; the `urn:workos:` grants keep
+ * the plain `{code, message}` shape. Reuses `code`/`message` storage so event payloads
+ * (which always carry `{code, message}`) need no special casing.
+ */
+export class OauthApiError extends WorkOSApiError {
+  constructor(status: number, error: string, description: string) {
+    super(status, description, error);
+    this.name = 'OauthApiError';
+  }
+}
+
 export function createApiErrorHandler(): ErrorHandler {
   return (err, c) => {
+    if (err instanceof OauthApiError) {
+      return c.json({ error: err.code, error_description: err.message }, err.status as ContentfulStatusCode);
+    }
     if (err instanceof WorkOSApiError) {
       const body: Record<string, unknown> = {
         message: err.message,

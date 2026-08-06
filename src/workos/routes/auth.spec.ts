@@ -363,7 +363,8 @@ describe('Auth routes', () => {
     });
     expect(retryRes.status).toBe(400);
     const retryBody = await json(retryRes);
-    expect(retryBody.code).toBe('invalid_grant');
+    expect(retryBody.error).toBe('invalid_grant');
+    expect(retryBody.error_description).toBe('Invalid refresh token.');
   });
 
   it('rejects invalid refresh token', async () => {
@@ -374,7 +375,63 @@ describe('Auth routes', () => {
     });
     expect(res.status).toBe(400);
     const body = await json(res);
-    expect(body.code).toBe('invalid_grant');
+    expect(body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
+  });
+
+  it('fails an unknown authorization code OAuth-style', async () => {
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code: 'bogus' }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body).toEqual({
+      error: 'invalid_grant',
+      error_description: "The code 'bogus' has expired or is invalid.",
+    });
+  });
+
+  it('fails a wrong magic auth code with the plain shape and production code string', async () => {
+    await createUser('wrongcode@test.com');
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        email: 'wrongcode@test.com',
+        code: '000000',
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body).toEqual({ code: 'invalid_one_time_code', message: 'Invalid one-time code' });
+  });
+
+  it('fails an expired magic auth code with the production code string', async () => {
+    const user = await createUser('expired@test.com');
+    getWorkOSStore(store).magicAuths.insert({
+      object: 'magic_auth',
+      user_id: user.id,
+      email: user.email,
+      code: '123456',
+      expires_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        email: 'expired@test.com',
+        code: '123456',
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body).toEqual({
+      code: 'one_time_code_expired',
+      message: "One-time code for 'expired@test.com' has expired.",
+    });
   });
 
   // --- Impersonation tests ---
@@ -1693,7 +1750,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(event.data).toMatchObject({
       type: 'oauth',
       status: 'failed',
-      error: { code: 'invalid_code', message: 'Invalid code' },
+      error: { code: 'invalid_grant', message: "The code 'bogus' has expired or is invalid." },
     });
   });
 
