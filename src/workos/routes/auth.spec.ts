@@ -514,6 +514,33 @@ describe('Auth routes', () => {
     });
   });
 
+  // The same hole the refresh_token grant had: an approved code whose user is gone fell through
+  // to the shared lookup and answered a polling client with the one plain 404 this endpoint never
+  // otherwise returns — a body it has no reason to be able to parse.
+  it('fails an approved device code OAuth-style when its user was deleted', async () => {
+    const user = await createUser('devicegone@test.com');
+    const start = await req('/user_management/authorize/device', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: 'client_device' }),
+    });
+    const { device_code } = await json(start);
+
+    const ws = getWorkOSStore(store);
+    const stored = ws.deviceAuthorizations.findOneBy('device_code', device_code)!;
+    ws.deviceAuthorizations.update(stored.id, { user_id: user.id });
+    ws.users.delete(user.id);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ error: 'invalid_grant', error_description: 'Invalid device code.' });
+    // Nothing consumed on a failure the caller cannot fix by polling again.
+    expect(ws.deviceAuthorizations.findOneBy('device_code', device_code)).toBeDefined();
+  });
+
   it('fails an expired magic auth code with the production code string', async () => {
     const user = await createUser('expired@test.com');
     getWorkOSStore(store).magicAuths.insert({

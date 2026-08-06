@@ -135,14 +135,21 @@ export function ssoRoutes(ctx: RouteContext): void {
 
   app.post('/sso/token', async (c) => {
     const body = await parseJsonBody(c);
-    const grantType = body.grant_type as string;
+    const grantType = body.grant_type as string | undefined;
     const code = body.code as string;
 
     // The spec gives /sso/token only OAuth-shaped 400s — invalid_client, unauthorized_client,
     // invalid_grant, unsupported_grant_type — so every failure below is rendered that way,
-    // including the missing-parameter case the spec leaves out and RFC 6749 §5.2 names
-    // invalid_request. A plain envelope there would have made the one failure a client hits
-    // before it has a code the one failure it cannot parse like the rest.
+    // including the missing-parameter cases the spec leaves out and RFC 6749 §5.2 names
+    // invalid_request. A plain envelope there would have made the failures a client hits before
+    // it has a code the ones it cannot parse like the rest.
+    //
+    // Absent and wrong are different failures: an omitted grant_type is a malformed request,
+    // not a request for a grant this endpoint declines to support, and reporting it as
+    // "not supported: undefined" describes neither.
+    if (!grantType) {
+      throw new OauthApiError(400, 'invalid_request', 'grant_type is required.');
+    }
     if (grantType !== 'authorization_code') {
       throw new OauthApiError(400, 'unsupported_grant_type', `The grant type is not supported: ${grantType}`);
     }

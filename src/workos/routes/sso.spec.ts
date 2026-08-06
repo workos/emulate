@@ -337,4 +337,16 @@ describe('SSO authentication events', () => {
     expect(noCode.status).toBe(400);
     expect(await noCode.json()).toEqual({ error: 'invalid_request', error_description: 'code is required.' });
   });
+
+  // Absent is a malformed request, not a request for an unsupported grant — and describing it as
+  // "not supported: undefined" names neither the problem nor anything the caller sent.
+  it('reports an omitted grant type as invalid_request, not unsupported_grant_type', async () => {
+    const res = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'whatever' }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_request', error_description: 'grant_type is required.' });
+  });
 });

@@ -590,11 +590,13 @@ export function authRoutes(ctx: RouteContext): void {
           throw new WorkOSApiError(400, 'device_code is required', 'invalid_request');
         }
 
-        // The spec renders every device-flow code — expired_token, authorization_pending,
-        // slow_down, access_denied — as {error, error_description}. These previously used the
-        // plain envelope while already carrying OAuth error codes, so a polling client matching
-        // `error` saw nothing and one matching `code` worked: the exact inverse of every other
-        // grant here.
+        // The spec renders every device-flow code as {error, error_description}, so the three
+        // this endpoint can reach — invalid_grant, expired_token, authorization_pending — are
+        // rendered that way. (The spec also defines slow_down and access_denied; the emulator
+        // never emits them, having no polling-interval or user-denial surface.) These previously
+        // used the plain envelope while already carrying OAuth error codes, so a polling client
+        // matching `error` saw nothing and one matching `code` worked: the exact inverse of
+        // every other grant here.
         const deviceAuth = ws.deviceAuthorizations.findOneBy('device_code', deviceCode);
         if (!deviceAuth) {
           throw new OauthApiError(400, 'invalid_grant', 'Invalid device code.');
@@ -608,6 +610,14 @@ export function authRoutes(ctx: RouteContext): void {
         }
 
         user = ws.users.get(deviceAuth.user_id);
+        // Mirrors the refresh_token guard: an approved code whose user was deleted is as invalid
+        // as an unknown one, and without this the shared lookup below answers a polling client
+        // with a plain 404 — the one shape this endpoint otherwise never returns, on the grant
+        // whose whole contract is that the client reads `error` to decide whether to keep going.
+        // Thrown before the delete, so nothing is consumed on a failure the caller cannot fix.
+        if (!user) {
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid device code.');
+        }
         ws.deviceAuthorizations.delete(deviceAuth.id);
         authMethod = 'OAuth';
         break;

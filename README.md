@@ -698,6 +698,12 @@ is stable for a pinned key without being pinned separately.
 
 Error hooks let you force the emulator to return non-200 responses so you can test how your app handles WorkOS API failures (422, 500, etc.).
 
+`@workos/emulate/core` exports the two error classes the emulator itself throws, for hooks that need to
+raise a failure rather than describe one: `WorkOSApiError(status, message, code)` renders the plain
+`{code, message}` envelope, and `OauthApiError(status, error, description)` the RFC 6749
+`{error, error_description}` one used by `/sso/token`, `/oauth2/token` and the OAuth-shaped
+`authenticate` grants (see [Authentication failure shapes](#authentication-failure-shapes)).
+
 ### Seed config
 
 Add `errorHooks` to your config file:
