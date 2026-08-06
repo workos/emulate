@@ -462,6 +462,16 @@ describe('Auth routes', () => {
     expect(body.authentication_method).toBe('MagicAuth');
   });
 
+  it('rejects a non-string email on magic auth creation', async () => {
+    const res = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 123 }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body.code).toBe('invalid_request');
+  });
+
   it('creates the user at magic auth code creation for an unknown email', async () => {
     const magicRes = await req('/user_management/magic_auth', {
       method: 'POST',

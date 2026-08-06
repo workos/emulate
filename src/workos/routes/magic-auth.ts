@@ -14,8 +14,8 @@ export function magicAuthRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/magic_auth', async (c) => {
     const body = await parseJsonBody(c);
-    const email = body.email as string | undefined;
-    if (!email) {
+    const email = body.email;
+    if (typeof email !== 'string' || !email) {
       throw new WorkOSApiError(400, 'email is required', 'invalid_request');
     }
 
