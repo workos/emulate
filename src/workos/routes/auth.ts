@@ -15,7 +15,7 @@ import {
   verifyPassword,
   isExpired,
   expiresIn,
-  assertLocalRedirectUri,
+  assertAllowedRedirectUri,
   sealSession,
   AUTH_METHOD_SESSION_VALUES,
   resolveResponseAuthMethod,
@@ -67,7 +67,7 @@ export function authRoutes(ctx: RouteContext): void {
   function resolveAndRedirect(c: any, params: AuthorizeParams) {
     const { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint, clientId } = params;
 
-    assertLocalRedirectUri(redirectUri);
+    assertAllowedRedirectUri(redirectUri, store);
 
     let user;
     if (loginHint) {

@@ -1,6 +1,6 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatSession, assertLocalRedirectUri } from '../helpers.js';
+import { formatSession, assertAllowedRedirectUri } from '../helpers.js';
 
 export function sessionRoutes(ctx: RouteContext): void {
   const { app, store, jwt } = ctx;
@@ -51,7 +51,7 @@ export function sessionRoutes(ctx: RouteContext): void {
     }
 
     if (returnTo) {
-      assertLocalRedirectUri(returnTo);
+      assertAllowedRedirectUri(returnTo, store);
       return c.redirect(returnTo);
     }
     return c.json({ success: true });

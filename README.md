@@ -97,6 +97,7 @@ workos-emulate --port 9100 --json
 workos-emulate --seed workos-emulate.config.yaml
 workos-emulate --interactive          # serve login pages for E2E browser testing
 workos-emulate --signing-key ci-key.pem --issuer https://api.workos.com  # stable JWKS and iss
+workos-emulate --redirect-hosts app.example.test  # allow a non-localhost redirect_uri
 workos-emulate --version
 ```
 
@@ -679,6 +680,48 @@ is stable for a pinned key without being pinned separately.
 > A pinned signing key is a test fixture, not a secret to reuse anywhere real. Never point the
 > emulator at a key your production environment trusts.
 
+## Redirect URI Hosts
+
+The authorize endpoints refuse to redirect anywhere but `localhost`, `127.0.0.1` and `[::1]`, so a
+reachable emulator cannot be turned into an open redirect. If your test environment fakes
+production-like hostnames, list them:
+
+```bash
+workos-emulate --redirect-hosts app.example.test,auth.example.test
+
+# Repeatable, and each occurrence may be a comma-separated list
+workos-emulate --redirect-hosts app.example.test --redirect-hosts auth.example.test
+
+# Any subdomain of example.test (the apex itself is not matched)
+workos-emulate --redirect-hosts '*.example.test'
+
+# Any host at all — the check is off
+workos-emulate --redirect-hosts '*'
+```
+
+`WORKOS_EMULATE_REDIRECT_HOSTS=app.example.test,*.internal.test` is the environment equivalent, for
+a compose file. The flag wins over the environment.
+
+Programmatically:
+
+```ts
+const emulator = await createEmulator({
+  allowedRedirectHosts: ['app.example.test', '*.internal.test'],
+});
+```
+
+Notes:
+
+- Configured hosts **add to** the localhost set rather than replacing it, so existing callbacks keep
+  working.
+- An entry is a hostname (`app.example.test`), a subdomain wildcard (`*.example.test`), or `*`. A
+  whole origin (`https://app.example.test:8443`) is accepted and reduced to its hostname — ports and
+  schemes are never part of the check.
+- The check applies to `redirect_uri` on `/user_management/authorize`, `/sso/authorize` and
+  `/data-integrations/:slug/authorize`, and to `return_to` on `/user_management/sessions/logout`.
+- A host that could never match (`https://`, anything with whitespace) fails at startup rather than
+  silently rejecting every request.
+
 ## Error Hooks
 
 Error hooks let you force the emulator to return non-200 responses so you can test how your app handles WorkOS API failures (422, 500, etc.).
@@ -997,6 +1040,7 @@ The WorkOS Emulator is designed for testing and development environments. When u
 ### Network Security
 
 - **Bind to localhost**: By default, the emulator binds to `localhost`, so its unauthenticated endpoints are only reachable from the local machine. To intentionally expose it to other hosts, pass `--host 0.0.0.0` (CLI) or `hostname: '0.0.0.0'` (`createEmulator`), and protect it with a firewall or VPN.
+- **Open redirect protection**: The authorize endpoints only redirect to localhost by default. `--redirect-hosts` (or `allowedRedirectHosts`) widens that for test environments with production-like hostnames; `--redirect-hosts '*'` disables the check entirely, so only use it on an emulator nothing untrusted can reach. See [Redirect URI Hosts](#redirect-uri-hosts).
 - **No CORS restrictions**: The emulator doesn't enforce CORS. Configure CORS in your application if needed.
 - **No TLS/SSL**: The emulator doesn't provide HTTPS. Use a reverse proxy (nginx, Caddy) for TLS termination in production.
 

@@ -1,6 +1,6 @@
 import { type RouteContext, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { assertLocalRedirectUri, generateVerificationToken, expiresIn, isExpired } from '../helpers.js';
+import { assertAllowedRedirectUri, generateVerificationToken, expiresIn, isExpired } from '../helpers.js';
 
 export function dataIntegrationRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -16,7 +16,7 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
     if (!redirectUri) {
       throw new WorkOSApiError(400, 'redirect_uri is required', 'invalid_request');
     }
-    assertLocalRedirectUri(redirectUri);
+    assertAllowedRedirectUri(redirectUri, store);
 
     const code = generateVerificationToken();
     ws.dataIntegrationAuths.insert({

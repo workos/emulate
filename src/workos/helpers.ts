@@ -1,6 +1,6 @@
 import { randomBytes, createHash, createCipheriv } from 'node:crypto';
-import { WorkOSApiError, generateId, type CursorPaginatedResult, type Entity } from '../core/index.js';
-import { EVENTS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
+import { WorkOSApiError, generateId, type CursorPaginatedResult, type Entity, type Store } from '../core/index.js';
+import { EVENTS, STORE_KEYS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
 import type { WorkOSStore } from './store.js';
 import type { EventBus } from './event-bus.js';
 import type {
@@ -433,27 +433,83 @@ export function formatConnectedAccount(a: WorkOSConnectedAccount): Record<string
   return formatEntity(a);
 }
 
-/** Allowed redirect URI hosts for the emulator's authorize endpoints. */
-const ALLOWED_REDIRECT_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+/** Redirect URI hosts the emulator's authorize endpoints accept with no configuration. */
+export const DEFAULT_ALLOWED_REDIRECT_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+
+/** Configured entry that accepts any redirect host. */
+const ANY_HOST = '*';
 
 /**
- * Validate that a redirect_uri points to a localhost origin.
- * Prevents the emulator from being used as an open redirect.
+ * Normalize a configured redirect host into the form `URL.hostname` produces: lowercase,
+ * no scheme, no port, IPv6 in brackets. Accepts a bare hostname (`app.example.test`), a
+ * subdomain wildcard (`*.example.test`), `*`, or a whole origin
+ * (`https://app.example.test:8443`), since an origin is what people usually have on hand.
+ * Throws on input that would silently never match.
  */
-export function assertLocalRedirectUri(uri: string): void {
+export function normalizeRedirectHost(value: string): string {
+  let host = value.trim().toLowerCase();
+  if (host === ANY_HOST) return host;
+
+  if (host.includes('://')) {
+    try {
+      host = new URL(host).hostname;
+    } catch {
+      host = '';
+    }
+  } else if (host.startsWith('[')) {
+    // Bracketed IPv6, possibly with a port: keep everything through the closing bracket.
+    host = host.slice(0, host.indexOf(']') + 1);
+  } else if (host.includes(':')) {
+    const portIndex = host.lastIndexOf(':');
+    const port = host.slice(portIndex + 1);
+    // `example.test:3000` is a host and port; anything else with colons is bare IPv6.
+    host = /^\d+$/.test(port) && !host.slice(0, portIndex).includes(':') ? host.slice(0, portIndex) : `[${host}]`;
+  }
+
+  if (!host || /\s/.test(host)) {
+    throw new Error(`Invalid redirect host: ${JSON.stringify(value)}`);
+  }
+  return host;
+}
+
+/** Normalize a list of configured redirect hosts, dropping blank entries. */
+export function normalizeRedirectHosts(values: readonly string[]): string[] {
+  return values.filter((value) => value.trim() !== '').map(normalizeRedirectHost);
+}
+
+function hostMatches(hostname: string, pattern: string): boolean {
+  if (pattern === ANY_HOST) return true;
+  // `*.example.test` covers subdomains only, matching how redirect allow-lists usually read.
+  if (pattern.startsWith('*.')) return hostname.endsWith(pattern.slice(1));
+  return hostname === pattern;
+}
+
+/**
+ * Validate that a redirect_uri points to a host the emulator is willing to redirect to.
+ * Prevents the emulator from being used as an open redirect. Localhost is always allowed;
+ * `allowedRedirectHosts` (`--redirect-hosts`) adds to that for test environments that use
+ * production-like hostnames.
+ */
+export function assertAllowedRedirectUri(uri: string, store: Store): void {
   let parsed: URL;
   try {
     parsed = new URL(uri);
   } catch {
     throw new WorkOSApiError(400, 'Invalid redirect_uri', 'invalid_redirect_uri');
   }
-  if (!ALLOWED_REDIRECT_HOSTS.has(parsed.hostname)) {
-    throw new WorkOSApiError(
-      400,
-      `redirect_uri must point to localhost, got ${parsed.hostname}`,
-      'invalid_redirect_uri',
-    );
-  }
+
+  const configured = store.getData<string[]>(STORE_KEYS.allowedRedirectHosts) ?? [];
+  const allowed = [...DEFAULT_ALLOWED_REDIRECT_HOSTS, ...configured];
+  const hostname = parsed.hostname.toLowerCase();
+  if (allowed.some((pattern) => hostMatches(hostname, pattern))) return;
+
+  throw new WorkOSApiError(
+    400,
+    configured.length > 0
+      ? `redirect_uri host ${parsed.hostname} is not allowed; allowed hosts: ${allowed.join(', ')}`
+      : `redirect_uri must point to localhost, got ${parsed.hostname}. Pass --redirect-hosts to allow other hosts.`,
+    'invalid_redirect_uri',
+  );
 }
 
 const AUTH_CHALLENGE_EXCLUDE = new Set([...INTERNAL_FIELDS, 'code']);

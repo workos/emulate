@@ -1,7 +1,13 @@
 import type { Context } from 'hono';
 import { type RouteContext, parseJsonBody, WorkOSApiError, generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatSSOProfile, expiresIn, isExpired, assertLocalRedirectUri, emitAuthenticationEvent } from '../helpers.js';
+import {
+  formatSSOProfile,
+  expiresIn,
+  isExpired,
+  assertAllowedRedirectUri,
+  emitAuthenticationEvent,
+} from '../helpers.js';
 import type { WorkOSConnection } from '../entities.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEY_PREFIXES, STORE_KEYS } from '../constants.js';
@@ -23,7 +29,7 @@ export function ssoRoutes(ctx: RouteContext): void {
   function resolveAndRedirect(c: any, params: SSOAuthorizeParams) {
     const { redirectUri, state, connectionId, organizationId, domainHint, email: loginHint } = params;
 
-    assertLocalRedirectUri(redirectUri);
+    assertAllowedRedirectUri(redirectUri, store);
 
     let connection: WorkOSConnection | undefined;
 

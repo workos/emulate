@@ -5,6 +5,7 @@ export const STORE_KEYS = {
   apiKeyMap: 'apiKeyMap',
   jwtTemplate: 'jwt_template',
   interactiveAuth: 'interactiveAuth',
+  allowedRedirectHosts: 'allowedRedirectHosts',
 } as const;
 
 /** Prefix for dynamic store keys */

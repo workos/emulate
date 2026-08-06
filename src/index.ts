@@ -11,6 +11,7 @@ import {
 } from './core/index.js';
 import { workosPlugin, seedFromConfig, type WorkOSSeedConfig } from './workos/index.js';
 import { STORE_KEYS } from './workos/constants.js';
+import { normalizeRedirectHosts } from './workos/helpers.js';
 import { serve } from '@hono/node-server';
 import { parseJsonBody } from './core/index.js';
 
@@ -64,6 +65,14 @@ export interface EmulatorOptions {
    * or to pre-sign tokens offline with the same key the emulator verifies.
    */
   signingKey?: SigningKeyOptions;
+  /**
+   * Extra hosts a `redirect_uri` (or a session logout `return_to`) may point at. The emulator
+   * refuses to redirect anywhere else so it cannot be used as an open redirect; `localhost`,
+   * `127.0.0.1` and `[::1]` are always allowed. Add the production-like hostnames your test
+   * environment fakes — `['app.example.test']` — or a subdomain wildcard
+   * (`['*.example.test']`). `['*']` allows any host, which turns the check off entirely.
+   */
+  allowedRedirectHosts?: string[];
   interactiveAuth?: boolean;
   webhookRetryConfig?: {
     maxRetries?: number;
@@ -118,6 +127,14 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   if (options.interactiveAuth) {
     store.setData(STORE_KEYS.interactiveAuth, true);
   }
+
+  // Normalized here so a malformed host fails at startup instead of never matching a request.
+  const allowedRedirectHosts = normalizeRedirectHosts(options.allowedRedirectHosts ?? []);
+  // store.reset() drops data entries, so this is re-applied from reset() too.
+  const applyRedirectHosts = () => {
+    if (allowedRedirectHosts.length > 0) store.setData(STORE_KEYS.allowedRedirectHosts, allowedRedirectHosts);
+  };
+  applyRedirectHosts();
 
   if (options.webhookRetryConfig) {
     store.setData('webhookRetryConfig', options.webhookRetryConfig);
@@ -225,6 +242,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
       for (const key of Object.keys(apiKeys)) delete apiKeys[key];
       Object.assign(apiKeys, initialApiKeys);
       store.setData(STORE_KEYS.apiKeyMap, apiKeys);
+      applyRedirectHosts();
       seedFn();
       // Note: EventBus is not re-registered after reset because Hono's router
       // cannot be modified after it's built. Route-level authentication events
