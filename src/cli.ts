@@ -140,7 +140,13 @@ function parseArgs(argv: string[]): CliArgs {
       const value = arg === '--redirect-hosts' ? argv[++i] : arg.slice('--redirect-hosts='.length);
       if (!value) throw new Error('--redirect-hosts requires a value');
       // Repeatable, and each occurrence may itself be a comma-separated list.
-      parsed.redirectHosts = [...(parsed.redirectHosts ?? []), ...splitHosts(value)];
+      const hosts = splitHosts(value);
+      // A value that contributes no entries (',' or '  ') would leave an empty array, which is
+      // not nullish — so it would also discard WORKOS_EMULATE_REDIRECT_HOSTS on the way past.
+      // Two silent no-ops for the price of one, from a flag that was clearly meant to configure
+      // something.
+      if (hosts.length === 0) throw new Error('--redirect-hosts requires at least one host');
+      parsed.redirectHosts = [...(parsed.redirectHosts ?? []), ...hosts];
       continue;
     }
 

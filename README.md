@@ -721,8 +721,14 @@ Notes:
   `/data-integrations/:slug/authorize`, and to `return_to` on `/user_management/sessions/logout`.
 - An internationalized hostname may be written either way: `møller.test` and its punycode
   (`xn--mller-vua.test`) normalize to the same entry, since that is the form a request carries.
+- An IPv6 address may be written any legal way — `[FD00::0001]` and `[fd00:0:0:0:0:0:0:1]` are the
+  same entry as `[fd00::1]` — and a trailing dot is optional (`app.example.test.` matches
+  `app.example.test`). Both sides are reduced to the one form a request carries.
 - A host that could never match (`https://`, anything with whitespace) fails at startup rather than
   silently rejecting every request.
+- A `redirect_uri` carrying an unencoded control character or space is a 400, since URL parsing
+  strips those rather than failing on them: `http://local<TAB>host/` would otherwise validate as
+  localhost and reach the `Location` header raw.
 - `javascript:`, `data:`, `vbscript:`, `blob:` and `file:` redirect URIs are always refused, `*`
   included — `javascript://localhost/…` parses with an allowed hostname it never navigates to.
   Custom app schemes (`myapp://callback`, for native clients) are allowed if their host is.

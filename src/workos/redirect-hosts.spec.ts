@@ -41,6 +41,24 @@ describe('normalizeRedirectHost', () => {
     expect(normalizeRedirectHost('[fd00::1]:3000')).toBe('[fd00::1]');
   });
 
+  // `isIPv6` accepts every legal spelling of an address, but a request only ever arrives in the
+  // one `URL.hostname` produces — so an entry that is not canonicalized starts the emulator and
+  // then matches nothing, the silent no-match this validation exists to prevent.
+  it('canonicalizes IPv6 to the single form a request carries', () => {
+    expect(normalizeRedirectHost('[fd00:0:0:0:0:0:0:1]')).toBe('[fd00::1]');
+    expect(normalizeRedirectHost('[FD00::0001]')).toBe('[fd00::1]');
+    expect(normalizeRedirectHost('fd00:0:0:0:0:0:0:1')).toBe('[fd00::1]');
+    expect(normalizeRedirectHost('[::ffff:127.0.0.1]')).toBe('[::ffff:7f00:1]');
+    expect(normalizeRedirectHost('https://[fd00:0:0:0:0:0:0:1]:8443')).toBe('[fd00::1]');
+  });
+
+  // `URL.hostname` keeps the trailing dot a request carried, so both sides are stripped.
+  it('drops a trailing dot, so an absolute name matches the way it is written', () => {
+    expect(normalizeRedirectHost('app.example.test.')).toBe('app.example.test');
+    expect(normalizeRedirectHost('*.example.test.')).toBe('*.example.test');
+    expect(normalizeRedirectHost('https://app.example.test./cb')).toBe('app.example.test');
+  });
+
   it('passes wildcards through', () => {
     expect(normalizeRedirectHost('*')).toBe('*');
     expect(normalizeRedirectHost('*.example.test')).toBe('*.example.test');
@@ -75,6 +93,8 @@ describe('normalizeRedirectHost', () => {
       '[....]',
       '[fd00::1', // never closed
       'møller.test/path', // punycoding must not smuggle a path through
+      '*..', // stripping the trailing dot must not quietly leave `*.`
+      '.', // nor turn a lone dot into an empty pattern that matches by accident
     ]) {
       expect(() => normalizeRedirectHost(bad)).toThrow('Invalid redirect host');
     }
@@ -112,6 +132,9 @@ describe('redirect host validation (default: localhost only)', () => {
     const body = await json(res);
     expect(body.code).toBe('invalid_redirect_uri');
     expect(body.message).toContain('must point to localhost');
+    // Names both ways in, since a programmatic caller has no flag to pass.
+    expect(body.message).toContain('--redirect-hosts');
+    expect(body.message).toContain('allowedRedirectHosts');
   });
 
   it('rejects a non-localhost SSO redirect_uri', async () => {
@@ -139,6 +162,23 @@ describe('redirect host validation (default: localhost only)', () => {
         redirect: 'manual',
       });
       expect(res.status).toBe(302);
+    }
+  });
+
+  // URL parsing *removes* these instead of failing on them, so `http://local\thost/` used to
+  // validate as localhost and then be handed to the redirect raw — a Location header carrying a
+  // control character, or a 500 where the URI was simply malformed.
+  it('refuses a URI carrying characters URL parsing would strip', async () => {
+    const raws = ['http://local\thost:3000/cb', 'http://localhost:3000/cb\r\nX-Injected: 1', 'http://loc\nalhost/cb'];
+    for (const raw of raws) {
+      const res = await app.request(
+        `/user_management/sessions/logout?session_id=session_x&return_to=${encodeURIComponent(raw)}`,
+        { redirect: 'manual' },
+      );
+      expect(res.status).toBe(400);
+      const body = await json(res);
+      expect(body.code).toBe('invalid_redirect_uri');
+      expect(body.message).toBe('Invalid redirect_uri');
     }
   });
 });
@@ -192,6 +232,27 @@ describe('redirect host validation (configured hosts)', () => {
     const body = await json(res);
     expect(body.code).toBe('invalid_redirect_uri');
     expect(body.message).toContain('app.example.test');
+  });
+
+  // A resolver-absolute name reaches `URL.hostname` with its dot intact, so a host configured
+  // without one has to match it anyway — otherwise the two spellings of the same host disagree.
+  it('matches an absolute (trailing-dot) request host against a dotless entry', async () => {
+    const { app } = createTestApp(['app.example.test']);
+    const res = await app.request('/data-integrations/salesforce/authorize?redirect_uri=https://app.example.test./cb', {
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(302);
+  });
+
+  it('accepts a canonicalized IPv6 host written any legal way', async () => {
+    // Through the real normalization the CLI and createEmulator both use — configuring the
+    // uncanonicalized literal directly is exactly the case that used to match nothing.
+    const { app } = createTestApp(normalizeRedirectHosts(['[FD00:0:0:0:0:0:0:1]']));
+    const res = await app.request(
+      `/data-integrations/salesforce/authorize?redirect_uri=${encodeURIComponent('http://[fd00::1]:3000/cb')}`,
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(302);
   });
 
   it('matches subdomains of a wildcard, but not its apex', async () => {
@@ -381,6 +442,19 @@ describe('--redirect-hosts / WORKOS_EMULATE_REDIRECT_HOSTS', () => {
         expect((await authorize(url, 'env.example.test')).status).toBe(400);
       },
     );
+  }, 20000);
+
+  // An occurrence that contributes nothing left an empty array behind, which is not nullish and
+  // so also discarded the environment variable — a flag that configured nothing, twice over.
+  it('exits rather than accept a flag that contributes no hosts', async () => {
+    const proc = Bun.spawn([process.execPath, CLI, '--port', '0', '--json', '--redirect-hosts', ','], {
+      env: { ...process.env, NO_UPDATE_NOTIFIER: '1', WORKOS_EMULATE_REDIRECT_HOSTS: 'env.example.test' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const stderr = await Bun.readableStreamToText(proc.stderr);
+    expect(await proc.exited).toBe(1);
+    expect(stderr).toContain('--redirect-hosts requires at least one host');
   }, 20000);
 
   it('exits with the validation error rather than starting on an unmatchable host', async () => {

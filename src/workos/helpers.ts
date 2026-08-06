@@ -471,10 +471,42 @@ export function normalizeRedirectHost(value: string): string {
     if (!host.startsWith('[')) host = toAsciiHost(host);
   }
 
+  if (host.startsWith('[')) host = canonicalizeIpv6Host(host);
+  host = stripTrailingDot(host);
+
   if (!isMatchableHostPattern(host)) {
     throw new Error(`Invalid redirect host: ${JSON.stringify(value)}`);
   }
   return host;
+}
+
+/**
+ * Reduce a bracketed IPv6 literal to the one spelling `URL.hostname` produces. `isIPv6` accepts
+ * every legal way of writing an address, but a request for any of them arrives compressed and
+ * zero-stripped: `[fd00:0:0:0:0:0:0:1]` and `[FD00::0001]` both come through as `[fd00::1]`, and
+ * `[::ffff:127.0.0.1]` as `[::ffff:7f00:1]`. Validating without canonicalizing let an ordinary
+ * way of writing an address start the emulator and then match nothing — the same silent no-match
+ * the shape check exists to turn into a loud failure. Returns '' for anything `URL` refuses,
+ * which the shape check then rejects.
+ */
+function canonicalizeIpv6Host(host: string): string {
+  try {
+    return new URL(`http://${host}/`).hostname;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Drop one trailing dot, so an absolute name is configured the way it is written. `URL.hostname`
+ * keeps the dot a request carried, so both sides are stripped and `app.example.test.` and
+ * `app.example.test` name the same host — otherwise neither spelling matched the other.
+ */
+function stripTrailingDot(host: string): string {
+  // Never `*.`, which is a wildcard missing its label rather than an absolute name: stripping
+  // there would turn a pattern that matches nothing into `*`, which matches everything.
+  if (host === `${ANY_HOST}.` || !host.endsWith('.')) return host;
+  return host.slice(0, -1);
 }
 
 /**
@@ -529,6 +561,19 @@ export function normalizeRedirectHosts(values: readonly string[]): string[] {
  */
 const SCRIPT_REDIRECT_SCHEMES = new Set(['javascript:', 'data:', 'vbscript:', 'blob:', 'file:']);
 
+/**
+ * Whether a URI carries a character it may not contain unencoded: a C0 control, a space, or DEL.
+ * Written as a bound rather than a character-class regex, which is the thing a linter rightly
+ * asks about and reads less plainly than the range it stands for.
+ */
+function hasForbiddenUriChar(uri: string): boolean {
+  for (let i = 0; i < uri.length; i++) {
+    const code = uri.charCodeAt(i);
+    if (code <= 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
 function hostMatches(hostname: string, pattern: string): boolean {
   if (pattern === ANY_HOST) return true;
   // `*.example.test` covers subdomains only, matching how redirect allow-lists usually read.
@@ -543,6 +588,14 @@ function hostMatches(hostname: string, pattern: string): boolean {
  * production-like hostnames.
  */
 export function assertAllowedRedirectUri(uri: string, store: Store): void {
+  // Refused before parsing, because parsing *removes* these rather than failing on them: URL
+  // strips tabs and newlines and trims leading control characters, so `http://local\thost/`
+  // validates as localhost and then goes into the Location header raw, control character and
+  // all. Checking the parse result can only ever see the sanitized form.
+  if (hasForbiddenUriChar(uri)) {
+    throw new WorkOSApiError(400, 'Invalid redirect_uri', 'invalid_redirect_uri');
+  }
+
   let parsed: URL;
   try {
     parsed = new URL(uri);
@@ -562,14 +615,17 @@ export function assertAllowedRedirectUri(uri: string, store: Store): void {
 
   const configured = store.getData<string[]>(STORE_KEYS.allowedRedirectHosts) ?? [];
   const allowed = [...DEFAULT_ALLOWED_REDIRECT_HOSTS, ...configured];
-  const hostname = parsed.hostname.toLowerCase();
+  // Stripped on both sides, so an absolute name matches the entry it was configured as.
+  const hostname = stripTrailingDot(parsed.hostname.toLowerCase());
   if (allowed.some((pattern) => hostMatches(hostname, pattern))) return;
 
+  // Names both ways in, since a programmatic caller has no flag to pass.
+  const howToWiden = 'Pass --redirect-hosts (or allowedRedirectHosts) to allow other hosts.';
   throw new WorkOSApiError(
     400,
     configured.length > 0
       ? `redirect_uri host ${parsed.hostname} is not allowed; allowed hosts: ${allowed.join(', ')}`
-      : `redirect_uri must point to localhost, got ${parsed.hostname}. Pass --redirect-hosts to allow other hosts.`,
+      : `redirect_uri must point to localhost, got ${parsed.hostname}. ${howToWiden}`,
     'invalid_redirect_uri',
   );
 }
