@@ -48,8 +48,8 @@ export function directoryRoutes(ctx: RouteContext): void {
   app.get('/directory_users', (c) => {
     const url = new URL(c.req.url);
     const params = parseListParams(url);
-    const directoryId = url.searchParams.get('directory_id') ?? undefined;
-    const groupId = url.searchParams.get('group_id') ?? undefined;
+    const directoryId = url.searchParams.get('directory') ?? undefined;
+    const groupId = url.searchParams.get('group') ?? undefined;
 
     const result = ws.directoryUsers.list({
       ...params,
@@ -74,7 +74,7 @@ export function directoryRoutes(ctx: RouteContext): void {
   app.get('/directory_groups', (c) => {
     const url = new URL(c.req.url);
     const params = parseListParams(url);
-    const directoryId = url.searchParams.get('directory_id') ?? undefined;
+    const directoryId = url.searchParams.get('directory') ?? undefined;
 
     const result = ws.directoryGroups.list({
       ...params,

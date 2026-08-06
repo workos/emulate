@@ -108,18 +108,18 @@ describe('Directory Sync routes', () => {
     expect(await (await req(`/directory_groups/${group.id}`)).status).toBe(404);
   });
 
-  it('lists directory users with directory_id filter', async () => {
+  it('lists directory users with directory filter', async () => {
     const { dir } = seedDirectory();
-    const res = await req(`/directory_users?directory_id=${dir.id}`);
+    const res = await req(`/directory_users?directory=${dir.id}`);
     expect(res.status).toBe(200);
     const list = await json(res);
     expect(list.data).toHaveLength(1);
     expect(list.data[0].email).toBe('jane@acme.com');
   });
 
-  it('lists directory users with group_id filter', async () => {
+  it('lists directory users with group filter', async () => {
     const { group } = seedDirectory();
-    const res = await req(`/directory_users?group_id=${group.id}`);
+    const res = await req(`/directory_users?group=${group.id}`);
     const list = await json(res);
     expect(list.data).toHaveLength(1);
   });
@@ -133,7 +133,7 @@ describe('Directory Sync routes', () => {
 
   it('lists directory groups', async () => {
     const { dir } = seedDirectory();
-    const res = await req(`/directory_groups?directory_id=${dir.id}`);
+    const res = await req(`/directory_groups?directory=${dir.id}`);
     expect(res.status).toBe(200);
     const list = await json(res);
     expect(list.data).toHaveLength(1);
