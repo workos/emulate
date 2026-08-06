@@ -314,4 +314,27 @@ describe('SSO authentication events', () => {
       sso: { organization_id: null, connection_id: null, session_id: null },
     });
   });
+
+  // Every /sso/token failure is OAuth-shaped, including the two a client hits before it has a
+  // code to present — the endpoint has no plain-shaped response for a caller to have to parse.
+  it('rejects a wrong grant type and a missing code OAuth-style', async () => {
+    const wrongGrant = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'client_credentials', code: 'whatever' }),
+    });
+    expect(wrongGrant.status).toBe(400);
+    expect(await wrongGrant.json()).toEqual({
+      error: 'unsupported_grant_type',
+      error_description: 'The grant type is not supported: client_credentials',
+    });
+
+    const noCode = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code' }),
+    });
+    expect(noCode.status).toBe(400);
+    expect(await noCode.json()).toEqual({ error: 'invalid_request', error_description: 'code is required.' });
+  });
 });

@@ -139,12 +139,15 @@ export function ssoRoutes(ctx: RouteContext): void {
     const code = body.code as string;
 
     // The spec gives /sso/token only OAuth-shaped 400s — invalid_client, unauthorized_client,
-    // invalid_grant, unsupported_grant_type — so every failure below is rendered that way.
+    // invalid_grant, unsupported_grant_type — so every failure below is rendered that way,
+    // including the missing-parameter case the spec leaves out and RFC 6749 §5.2 names
+    // invalid_request. A plain envelope there would have made the one failure a client hits
+    // before it has a code the one failure it cannot parse like the rest.
     if (grantType !== 'authorization_code') {
       throw new OauthApiError(400, 'unsupported_grant_type', `The grant type is not supported: ${grantType}`);
     }
     if (!code) {
-      throw new WorkOSApiError(400, 'code is required', 'invalid_request');
+      throw new OauthApiError(400, 'invalid_request', 'code is required.');
     }
 
     const auth = ws.ssoAuthorizations.findOneBy('code', code);

@@ -382,6 +382,23 @@ describe('Auth routes', () => {
     expect(body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
   });
 
+  it('fails an expired refresh token OAuth-style, with its own description', async () => {
+    await createUser('staletoken@test.com');
+    const auth = await json(await signInWithMagicAuth('staletoken@test.com'));
+
+    const ws = getWorkOSStore(store);
+    const stored = ws.refreshTokens.findOneBy('token', auth.refresh_token)!;
+    ws.refreshTokens.update(stored.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: auth.refresh_token }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ error: 'invalid_grant', error_description: 'Refresh token has expired.' });
+  });
+
   it('fails refresh OAuth-style when the user behind the token was deleted', async () => {
     await createUser('deleted@test.com');
     const auth = await json(await signInWithMagicAuth('deleted@test.com'));
@@ -478,6 +495,23 @@ describe('Auth routes', () => {
     });
     expect(unknown.status).toBe(400);
     expect(await json(unknown)).toEqual({ error: 'invalid_grant', error_description: 'Invalid device code.' });
+
+    // The third stage: the user walked away and the code aged out. Its own OAuth code, since a
+    // polling client stops on expired_token where it would keep polling on authorization_pending.
+    const ws = getWorkOSStore(store);
+    const stored = ws.deviceAuthorizations.findOneBy('device_code', device_code)!;
+    ws.deviceAuthorizations.update(stored.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const expired = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code }),
+    });
+    expect(expired.status).toBe(400);
+    expect(await json(expired)).toEqual({
+      error: 'expired_token',
+      error_description: 'The device code has expired.',
+    });
   });
 
   it('fails an expired magic auth code with the production code string', async () => {
