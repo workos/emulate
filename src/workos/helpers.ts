@@ -474,6 +474,14 @@ export function normalizeRedirectHost(value: string): string {
   if (host.startsWith('[')) host = canonicalizeIpv6Host(host);
   host = stripTrailingDot(host);
 
+  // A literal `*` returned above, so arriving at one here means something was stripped off it:
+  // `*:3000` and `https://*` both reduce to the fully-open wildcard, and both read as a
+  // narrowing — ports and schemes are never part of the host check. Refused rather than quietly
+  // widened, the same accident `stripTrailingDot` guards for `*.`.
+  if (host === ANY_HOST) {
+    throw new Error(`Invalid redirect host: ${JSON.stringify(value)} — write "*" to allow any host`);
+  }
+
   if (!isMatchableHostPattern(host)) {
     throw new Error(`Invalid redirect host: ${JSON.stringify(value)}`);
   }
@@ -526,8 +534,13 @@ function toAsciiHost(host: string): string {
   return wildcard ? `*.${ascii}` : ascii;
 }
 
-/** A DNS label: alphanumeric, inner hyphens allowed, dot-separated. */
-const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
+/**
+ * A label as `URL.hostname` may carry it: alphanumeric or underscore, inner hyphens allowed,
+ * dot-separated. Underscore is not DNS-conformant but `URL` passes it through untouched, so a
+ * Docker service name like `my_host` is a host a request really does arrive with — the question
+ * here is whether a pattern can ever equal a `URL.hostname`, not whether a resolver would like it.
+ */
+const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$/;
 
 /**
  * Whether a normalized pattern can ever match a `URL.hostname`. Checking only for emptiness and
@@ -562,14 +575,18 @@ export function normalizeRedirectHosts(values: readonly string[]): string[] {
 const SCRIPT_REDIRECT_SCHEMES = new Set(['javascript:', 'data:', 'vbscript:', 'blob:', 'file:']);
 
 /**
- * Whether a URI carries a character it may not contain unencoded: a C0 control, a space, or DEL.
- * Written as a bound rather than a character-class regex, which is the thing a linter rightly
- * asks about and reads less plainly than the range it stands for.
+ * Whether a URI carries a character it may not contain unencoded: a C0 control or DEL. Written as
+ * a bound rather than a character-class regex, which is the thing a linter rightly asks about and
+ * reads less plainly than the range it stands for.
+ *
+ * Space (0x20) is deliberately outside the bound. It cannot split a header, so it buys nothing
+ * here, and `searchParams.get` decodes `+` to a space — so including it turned an unencoded `+`
+ * in the inner query (base64 state, a `+` in an email) into a 400 on a redirect that had worked.
  */
 function hasForbiddenUriChar(uri: string): boolean {
   for (let i = 0; i < uri.length; i++) {
     const code = uri.charCodeAt(i);
-    if (code <= 0x20 || code === 0x7f) return true;
+    if (code < 0x20 || code === 0x7f) return true;
   }
   return false;
 }
@@ -605,7 +622,19 @@ export function assertAllowedRedirectUri(uri: string, store: Store): void {
 
   // Checked before the host, and regardless of configuration: `*` widens which host may be
   // redirected to, never what a redirect is allowed to execute.
-  if (SCRIPT_REDIRECT_SCHEMES.has(parsed.protocol)) {
+  //
+  // The empty hostname is half of that, and the half a denylist cannot cover. A URI with no
+  // authority is one the host check has nothing to say about, so `*` — which only ever answers
+  // "is this host allowed" — waved `view-source:javascript:alert(1)`, `jar:` and `about:` through
+  // on an authority they never had. Refused by shape, so the guard does not depend on having
+  // enumerated every script-bearing scheme. Custom app schemes keep their host and are
+  // unaffected in the `myapp://callback` form.
+  //
+  // This does refuse RFC 8252's other private-use spelling, the path-only `com.example.app:/cb`,
+  // which has no authority to check either. It has never been allowed here (the localhost-only
+  // guard rejected it too), and allowing it would mean deciding by heuristic which hostless URIs
+  // nest another one — so it stays out until something actually needs it.
+  if (SCRIPT_REDIRECT_SCHEMES.has(parsed.protocol) || parsed.hostname === '') {
     throw new WorkOSApiError(
       400,
       `redirect_uri scheme ${parsed.protocol.slice(0, -1)} is not allowed`,

@@ -100,6 +100,17 @@ describe('normalizeRedirectHost', () => {
     }
   });
 
+  // `*` is the one entry that widens to every host, so it may only be spelled that way. Stripping
+  // a port or a scheme off something else and landing on it turns what reads as a narrowing into
+  // the fully-open wildcard — the accident `stripTrailingDot` already guards for `*.`.
+  it('refuses a wildcard that only became bare `*` by having something stripped off it', () => {
+    for (const bad of ['*:3000', 'https://*', 'https://*:8443', '*:0']) {
+      expect(() => normalizeRedirectHost(bad)).toThrow('write "*" to allow any host');
+    }
+    // The one spelling that does mean every host still works.
+    expect(normalizeRedirectHost('*')).toBe('*');
+  });
+
   it('still accepts the forms it documents', () => {
     for (const good of [
       'localhost',
@@ -112,6 +123,11 @@ describe('normalizeRedirectHost', () => {
       '*.example.test',
       'xn--80ak6aa92e.test', // punycode
       'møller.test', // and the same host written the way its owner spells it
+      // Not DNS-conformant, but `URL` passes underscores through, so a compose service name is a
+      // host a request really arrives with — rejecting it failed loudly on a config that works.
+      'my_host.example.test',
+      '_dmarc.example.test',
+      '*.my_host.example.test',
       '*',
     ]) {
       expect(() => normalizeRedirectHost(good)).not.toThrow();
@@ -181,6 +197,18 @@ describe('redirect host validation (default: localhost only)', () => {
       expect(body.message).toBe('Invalid redirect_uri');
     }
   });
+
+  // Only the characters that can actually split a header are refused. A space cannot, and
+  // `searchParams.get` decodes `+` to one — so rejecting 0x20 turned an unencoded `+` in the
+  // inner query (base64 state, a `+` in an email) into a 400 on a redirect that had worked.
+  it('allows a space where a raw `+` in the inner query decoded to one', async () => {
+    const res = await app.request(
+      '/data-integrations/salesforce/authorize?redirect_uri=http://localhost:3000/cb?token=YWJj+ZGVm',
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toContain('token=YWJj+ZGVm');
+  });
 });
 
 describe('redirect host validation (configured hosts)', () => {
@@ -241,6 +269,19 @@ describe('redirect host validation (configured hosts)', () => {
     const res = await app.request('/data-integrations/salesforce/authorize?redirect_uri=https://app.example.test./cb', {
       redirect: 'manual',
     });
+    expect(res.status).toBe(302);
+  });
+
+  // `URL` passes an underscore through untouched, so a compose service name is a host a request
+  // really does arrive with — refusing to configure it failed loudly on a config that works.
+  it('matches an underscored host, which URL.hostname carries verbatim', async () => {
+    const { app } = createTestApp(normalizeRedirectHosts(['my_host.example.test']));
+    const res = await app.request(
+      '/data-integrations/salesforce/authorize?redirect_uri=http://my_host.example.test/cb',
+      {
+        redirect: 'manual',
+      },
+    );
     expect(res.status).toBe(302);
   });
 
@@ -310,6 +351,27 @@ describe('redirect URI schemes', () => {
       });
       expect(res.status).toBe(400);
       expect((await json(res)).code).toBe('invalid_redirect_uri');
+    }
+  });
+
+  // The denylist covers the schemes it names, and a denylist is always one scheme short. Each of
+  // these parses with an empty hostname, so `*` — which only ever answers "is this host allowed"
+  // — waved them through on an authority they never had. Refused by shape now, not by name.
+  it('refuses a URI with no authority for the host check to speak about', async () => {
+    const { app } = createTestApp(['*']);
+    for (const uri of [
+      'view-source:javascript:alert(1)',
+      'jar:http://localhost/!/x',
+      'about:blank',
+      'mailto:a@b.test',
+    ]) {
+      const res = await app.request(`/data-integrations/salesforce/authorize?redirect_uri=${encodeURIComponent(uri)}`, {
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(400);
+      const body = await json(res);
+      expect(body.code).toBe('invalid_redirect_uri');
+      expect(body.message).toContain('is not allowed');
     }
   });
 

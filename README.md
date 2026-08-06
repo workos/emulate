@@ -724,14 +724,20 @@ Notes:
 - An IPv6 address may be written any legal way — `[FD00::0001]` and `[fd00:0:0:0:0:0:0:1]` are the
   same entry as `[fd00::1]` — and a trailing dot is optional (`app.example.test.` matches
   `app.example.test`). Both sides are reduced to the one form a request carries.
+- An underscore is fine (`my_host.example.test`, the shape a Docker Compose service name takes).
+  It is not DNS-conformant, but a request really does arrive carrying it.
 - A host that could never match (`https://`, anything with whitespace) fails at startup rather than
-  silently rejecting every request.
-- A `redirect_uri` carrying an unencoded control character or space is a 400, since URL parsing
-  strips those rather than failing on them: `http://local<TAB>host/` would otherwise validate as
-  localhost and reach the `Location` header raw.
+  silently rejecting every request. So does an entry that would only reduce to `*` by having
+  something stripped off it (`*:3000`, `https://*`) — `*` means every host, and it may only be
+  spelled that way rather than arrived at by accident.
+- A `redirect_uri` carrying an unencoded control character is a 400, since URL parsing strips those
+  rather than failing on them: `http://local<TAB>host/` would otherwise validate as localhost and
+  reach the `Location` header raw.
 - `javascript:`, `data:`, `vbscript:`, `blob:` and `file:` redirect URIs are always refused, `*`
-  included — `javascript://localhost/…` parses with an allowed hostname it never navigates to.
-  Custom app schemes (`myapp://callback`, for native clients) are allowed if their host is.
+  included — `javascript://localhost/…` parses with an allowed hostname it never navigates to. So
+  is any URI with no authority at all (`view-source:javascript:…`, `jar:`, `about:blank`), which
+  the host check has nothing to say about and `*` would otherwise wave through. Custom app schemes
+  (`myapp://callback`, for native clients) keep their host and are allowed if that host is.
 
 ## Error Hooks
 
@@ -1051,7 +1057,7 @@ The WorkOS Emulator is designed for testing and development environments. When u
 ### Network Security
 
 - **Bind to localhost**: By default, the emulator binds to `localhost`, so its unauthenticated endpoints are only reachable from the local machine. To intentionally expose it to other hosts, pass `--host 0.0.0.0` (CLI) or `hostname: '0.0.0.0'` (`createEmulator`), and protect it with a firewall or VPN.
-- **Open redirect protection**: The authorize endpoints only redirect to localhost by default. `--redirect-hosts` (or `allowedRedirectHosts`) widens that for test environments with production-like hostnames; `--redirect-hosts '*'` disables the host check entirely, so only use it on an emulator nothing untrusted can reach. Script-bearing schemes (`javascript:`, `data:`) are refused regardless. See [Redirect URI Hosts](#redirect-uri-hosts).
+- **Open redirect protection**: The authorize endpoints only redirect to localhost by default. `--redirect-hosts` (or `allowedRedirectHosts`) widens that for test environments with production-like hostnames; `--redirect-hosts '*'` disables the host check entirely, so only use it on an emulator nothing untrusted can reach. Script-bearing schemes (`javascript:`, `data:`) and URIs with no authority for the host check to speak about (`view-source:javascript:…`, `about:`) are refused regardless. See [Redirect URI Hosts](#redirect-uri-hosts).
 - **No CORS restrictions**: The emulator doesn't enforce CORS. Configure CORS in your application if needed.
 - **No TLS/SSL**: The emulator doesn't provide HTTPS. Use a reverse proxy (nginx, Caddy) for TLS termination in production.
 
