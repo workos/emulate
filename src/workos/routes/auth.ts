@@ -364,7 +364,8 @@ export function authRoutes(ctx: RouteContext): void {
         if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
           // Verified live: 400 (not 401) with the email interpolated. `password` is an RFC 6749
           // grant that nonetheless fails with the plain shape, which is why the rule here is an
-          // explicit two-grant allowlist rather than "standard grants fail OAuth-style".
+          // explicit allowlist — authorization_code, refresh_token, device_code — rather than
+          // "standard grants fail OAuth-style".
           failAuth(
             'Password',
             { email, userId: user?.id },

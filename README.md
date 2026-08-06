@@ -517,7 +517,7 @@ The emulator issues a new refresh token on every refresh and invalidates the one
 
 ### Authentication failure shapes
 
-`POST /user_management/authenticate` does not use one error shape for every failure. Two grants fail OAuth-style; everything else keeps the plain shape:
+`POST /user_management/authenticate` does not use one error shape for every failure. Three grants fail OAuth-style; everything else keeps the plain shape:
 
 | Failure                                                         | Body                                                                  | Node SDK raises           |
 | --------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
