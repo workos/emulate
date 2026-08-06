@@ -315,6 +315,46 @@ describe('SSO authentication events', () => {
     });
   });
 
+  // The expired branch is not the invalid one with a different label: it resolves the profile
+  // behind the code first, so the event it emits carries the organization and connection the
+  // unknown-code event has to leave null. Both still answer the caller the same OAuth-shaped
+  // invalid_grant, because production does not distinguish aged-out from never-existed.
+  it('emits authentication.sso_failed with the profile’s org and connection for an expired code', async () => {
+    const { org, conn } = await createOrgWithConnection();
+
+    const authRes = await app.request(
+      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    const ws = getWorkOSStore(store);
+    const stored = ws.ssoAuthorizations.findOneBy('code', code)!;
+    ws.ssoAuthorizations.update(stored.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const res = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'invalid_grant',
+      error_description: `The code '${code}' has expired or is invalid.`,
+    });
+
+    const [event] = eventsNamed('authentication.sso_failed');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'sso',
+      status: 'failed',
+      error: { code: 'invalid_grant', message: `The code '${code}' has expired or is invalid.` },
+      sso: { organization_id: org.id, connection_id: conn.id, session_id: null },
+    });
+
+    // Spent, unlike the unknown-code path — there was a real authorization to consume.
+    expect(ws.ssoAuthorizations.findOneBy('code', code)).toBeUndefined();
+  });
+
   // Every /sso/token failure is OAuth-shaped, including the two a client hits before it has a
   // code to present — the endpoint has no plain-shaped response for a caller to have to parse.
   it('rejects a wrong grant type and a missing code OAuth-style', async () => {

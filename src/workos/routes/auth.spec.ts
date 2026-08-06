@@ -428,6 +428,33 @@ describe('Auth routes', () => {
     });
   });
 
+  // Production does not distinguish unknown from expired here, so a code that was real and aged
+  // out has to be indistinguishable from one that never existed — same OAuth shape, same code,
+  // same description. A client that can tell them apart locally is reading a difference that
+  // production will not give it.
+  it('fails an expired authorization code exactly like an unknown one', async () => {
+    await createUser('stalecode@test.com');
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    const ws = getWorkOSStore(store);
+    const stored = ws.authCodes.findOneBy('code', code)!;
+    ws.authCodes.update(stored.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      error: 'invalid_grant',
+      error_description: `The code '${code}' has expired or is invalid.`,
+    });
+  });
+
   it('fails a wrong magic auth code with the plain shape and production code string', async () => {
     await createUser('wrongcode@test.com');
     const res = await app.request('/user_management/authenticate', {
