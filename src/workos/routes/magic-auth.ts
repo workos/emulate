@@ -19,8 +19,25 @@ export function magicAuthRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, 'email is required', 'invalid_request');
     }
 
-    const user = ws.users.findOneBy('email', email);
-    if (!user) throw notFound('User');
+    // Magic Auth doubles as sign-up: production creates the user at code-creation
+    // time (the response already carries its user_id), not at authenticate.
+    const user =
+      ws.users.findOneBy('email', email) ??
+      ws.users.insert({
+        object: 'user',
+        email,
+        name: null,
+        first_name: null,
+        last_name: null,
+        email_verified: false,
+        profile_picture_url: null,
+        last_sign_in_at: null,
+        external_id: null,
+        metadata: {},
+        locale: null,
+        password_hash: null,
+        impersonator: null,
+      });
 
     const ma = ws.magicAuths.insert({
       object: 'magic_auth',

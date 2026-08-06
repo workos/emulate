@@ -462,6 +462,30 @@ describe('Auth routes', () => {
     expect(body.authentication_method).toBe('MagicAuth');
   });
 
+  it('creates the user at magic auth code creation for an unknown email', async () => {
+    const magicRes = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'signup@test.com' }),
+    });
+    expect(magicRes.status).toBe(201);
+    const magicBody = await json(magicRes);
+    expect(magicBody.user_id).toBeTruthy();
+
+    const usersRes = await req('/user_management/users?email=signup%40test.com');
+    const users = await json(usersRes);
+    expect(users.data).toHaveLength(1);
+    expect(users.data[0].id).toBe(magicBody.user_id);
+    expect(users.data[0].email_verified).toBe(false);
+  });
+
+  it('magic auth sign-up verifies the email and yields an org-less session', async () => {
+    const res = await signInWithMagicAuth('signup2@test.com');
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.user.email_verified).toBe(true);
+    expect(decodeJwt(body.access_token).org_id).toBeUndefined();
+  });
+
   // --- Device code tests ---
 
   it('device authorization + device_code grant flow', async () => {

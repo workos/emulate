@@ -387,6 +387,8 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
 
+        // A redeemed code proves mailbox ownership — production marks the email verified.
+        ws.users.update(magicAuth.user_id, { email_verified: true });
         user = ws.users.get(magicAuth.user_id);
         ws.magicAuths.delete(magicAuth.id);
         authMethod = 'MagicAuth';
