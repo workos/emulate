@@ -488,6 +488,53 @@ describe('Auth routes', () => {
     expect(users.data[0].email_verified).toBe(false);
   });
 
+  it('resolves an existing user case-insensitively instead of forking the account', async () => {
+    const first = await json(
+      await req('/user_management/magic_auth', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'Casing@Test.com' }),
+      }),
+    );
+    const second = await json(
+      await req('/user_management/magic_auth', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'casing@test.com' }),
+      }),
+    );
+
+    expect(second.user_id).toBe(first.user_id);
+    // Stored as first given — production preserves the case it was handed.
+    const users = getWorkOSStore(store).users.all();
+    expect(users).toHaveLength(1);
+    expect(users[0].email).toBe('Casing@Test.com');
+  });
+
+  it('rejects an email that could only be a typo, rather than creating a ghost user', async () => {
+    for (const email of ['', '   ', 'not-an-email', 'a b@test.com', '@test.com', 'nope@']) {
+      const res = await req('/user_management/magic_auth', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+      expect(res.status).toBe(400);
+      expect((await json(res)).code).toBe('invalid_request');
+    }
+    expect(getWorkOSStore(store).users.all()).toHaveLength(0);
+  });
+
+  it('emits one user.updated per magic auth sign-in, and none for a no-op re-verify', async () => {
+    const ws = getWorkOSStore(store);
+    const countUpdates = () => ws.events.all().filter((e: { event: string }) => e.event === 'user.updated').length;
+
+    await signInWithMagicAuth('quiet@test.com');
+    const afterFirst = countUpdates();
+    // The sign-up login both verifies the email and stamps last_sign_in_at — one write.
+    expect(afterFirst).toBe(1);
+
+    await signInWithMagicAuth('quiet@test.com');
+    // The second login only stamps last_sign_in_at; email_verified is already true.
+    expect(countUpdates()).toBe(2);
+  });
+
   it('magic auth sign-up verifies the email and yields an org-less session', async () => {
     const res = await signInWithMagicAuth('signup2@test.com');
     expect(res.status).toBe(200);

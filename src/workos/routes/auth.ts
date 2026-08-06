@@ -387,8 +387,6 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
 
-        // A redeemed code proves mailbox ownership — production marks the email verified.
-        ws.users.update(magicAuth.user_id, { email_verified: true });
         user = ws.users.get(magicAuth.user_id);
         ws.magicAuths.delete(magicAuth.id);
         authMethod = 'MagicAuth';
@@ -682,7 +680,16 @@ export function authRoutes(ctx: RouteContext): void {
     // reuses the existing session, so it emits neither session.created nor an auth event.
     let session;
     if (isFreshLogin) {
-      ws.users.update(user.id, { last_sign_in_at: new Date().toISOString() });
+      // A redeemed magic-auth code proves mailbox ownership, so production marks the email
+      // verified. Folded into the sign-in write rather than done up in the grant: one
+      // user.updated per login instead of two, and nothing is persisted before the template
+      // gate above — which is what keeps a failed render from implying a login that never
+      // completed. Only set when it actually changes, so a repeat sign-in stays quiet.
+      const verifyEmail = authMethod === 'MagicAuth' && !user.email_verified;
+      ws.users.update(user.id, {
+        last_sign_in_at: new Date().toISOString(),
+        ...(verifyEmail ? { email_verified: true } : {}),
+      });
       session = ws.sessions.insert({
         object: 'session',
         user_id: user.id,

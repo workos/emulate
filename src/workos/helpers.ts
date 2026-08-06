@@ -336,6 +336,26 @@ export function generateCode(): string {
 }
 
 /**
+ * Whether a string is shaped enough like an email to be worth storing. Deliberately loose —
+ * the emulator is not an address validator, it just refuses input that could only be a typo.
+ */
+export function isEmailShaped(value: string): boolean {
+  const at = value.indexOf('@');
+  return at > 0 && at === value.lastIndexOf('@') && at < value.length - 1 && !/\s/.test(value);
+}
+
+/**
+ * Look a user up by email, ignoring case. `findOneBy` is an exact-match index lookup, which is
+ * fine for a read but forks the account in two anywhere a miss creates a user instead.
+ */
+export function findUserByEmail(ws: WorkOSStore, email: string): WorkOSUser | undefined {
+  const exact = ws.users.findOneBy('email', email);
+  if (exact) return exact;
+  const normalized = email.toLowerCase();
+  return ws.users.all().find((u) => u.email.toLowerCase() === normalized);
+}
+
+/**
  * Hash password using SHA256.
  * NOTE: This is intentionally weak for emulator/testing only.
  * Production systems should use bcrypt, scrypt, or Argon2 with proper salt and iterations.

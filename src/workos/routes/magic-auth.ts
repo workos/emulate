@@ -1,6 +1,6 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatMagicAuth, generateCode, expiresIn } from '../helpers.js';
+import { formatMagicAuth, generateCode, expiresIn, findUserByEmail, isEmailShaped } from '../helpers.js';
 
 export function magicAuthRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -14,15 +14,21 @@ export function magicAuthRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/magic_auth', async (c) => {
     const body = await parseJsonBody(c);
-    const email = body.email;
-    if (typeof email !== 'string' || !email) {
+    // This handler now creates users, so its input guard is the only thing standing between a
+    // typo and a permanent ghost account. A bare presence check was enough when the endpoint
+    // could only ever read.
+    const email = typeof body.email === 'string' ? body.email.trim() : '';
+    if (!email || !isEmailShaped(email)) {
       throw new WorkOSApiError(400, 'email is required', 'invalid_request');
     }
 
     // Magic Auth doubles as sign-up: production creates the user at code-creation
     // time (the response already carries its user_id), not at authenticate.
+    // The lookup is case-insensitive because the creating branch below is: an exact-match
+    // miss on 'User@x.test' vs 'user@x.test' used to be a harmless 404 and would now fork
+    // the account in two. The address is stored as given — production preserves case.
     const user =
-      ws.users.findOneBy('email', email) ??
+      findUserByEmail(ws, email) ??
       ws.users.insert({
         object: 'user',
         email,
