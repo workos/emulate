@@ -466,10 +466,33 @@ export function normalizeRedirectHost(value: string): string {
     host = /^\d+$/.test(port) && !host.slice(0, portIndex).includes(':') ? host.slice(0, portIndex) : `[${host}]`;
   }
 
-  if (!host || /\s/.test(host)) {
+  if (!isMatchableHostPattern(host)) {
     throw new Error(`Invalid redirect host: ${JSON.stringify(value)}`);
   }
   return host;
+}
+
+/** A DNS label: alphanumeric, inner hyphens allowed, dot-separated. */
+const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
+
+/**
+ * Whether a normalized pattern can ever match a `URL.hostname`. Checking only for emptiness and
+ * whitespace let `*example.test` (wildcard without the dot), `*.` and `app.example.test/path`
+ * through — each accepted at startup and then silently matching nothing, which is exactly the
+ * failure this validation exists to prevent.
+ */
+function isMatchableHostPattern(host: string): boolean {
+  if (host === ANY_HOST) return true;
+  const bare = host.startsWith('*.') ? host.slice(2) : host;
+  if (!bare) return false;
+  if (bare.startsWith('[')) {
+    if (!bare.endsWith(']')) return false;
+    const inner = bare.slice(1, -1);
+    // Hex groups, IPv4-mapped tails, and the `::` elision — but not an arbitrary `host:port`
+    // that only reached this branch because its port was not numeric.
+    return inner.includes(':') && /^[0-9a-f:.]+$/.test(inner);
+  }
+  return HOSTNAME.test(bare);
 }
 
 /** Normalize a list of configured redirect hosts, dropping blank entries. */

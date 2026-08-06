@@ -51,6 +51,38 @@ describe('normalizeRedirectHost', () => {
     expect(() => normalizeRedirectHost('two hosts')).toThrow('Invalid redirect host');
   });
 
+  it('rejects patterns that look plausible but can never match a hostname', () => {
+    for (const bad of [
+      '*example.test', // wildcard without the separating dot
+      '*.', // wildcard with nothing to anchor to
+      'app.example.test/path', // a path is not part of a hostname
+      'app.example.test:notaport', // would otherwise be bracketed as bogus IPv6
+      '-leading.example.test',
+      'trailing-.example.test',
+      'double..dot.test',
+      '*.*.example.test',
+    ]) {
+      expect(() => normalizeRedirectHost(bad)).toThrow('Invalid redirect host');
+    }
+  });
+
+  it('still accepts the forms it documents', () => {
+    for (const good of [
+      'localhost',
+      '127.0.0.1',
+      '[::1]',
+      '[fd00::1]:3000',
+      'app.example.test',
+      'app.example.test:3000',
+      'https://app.example.test:8443/callback',
+      '*.example.test',
+      'xn--80ak6aa92e.test', // punycode
+      '*',
+    ]) {
+      expect(() => normalizeRedirectHost(good)).not.toThrow();
+    }
+  });
+
   it('drops blank entries from a list', () => {
     expect(normalizeRedirectHosts(['app.example.test', '  ', ''])).toEqual(['app.example.test']);
   });
