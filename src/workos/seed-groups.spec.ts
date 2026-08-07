@@ -154,6 +154,19 @@ describe('Seeding groups', () => {
       ],
     };
 
+    it('rejects groups without crashing when memberships is a truthy non-array', () => {
+      // The memberships block records a structured error for this; the groups block must
+      // not then call `.map()` on the invalid value and throw. Returns the memberships
+      // error rather than crashing startup or `--validate-config`.
+      const { valid, errors } = validateSeedConfig({
+        organizations: [{ name: 'Acme', memberships: 'not-an-array' as never, groups: [{ name: 'Eng' }] }],
+      });
+      expect(valid).toBe(false);
+      expect(
+        errors.some((e) => e.path === 'organizations[0].memberships' && e.message.includes('must be an array')),
+      ).toBe(true);
+    });
+
     it('rejects a group without a name', () => {
       const error = findError(
         {

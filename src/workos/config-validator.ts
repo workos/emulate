@@ -262,8 +262,12 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             // membership must be one declared in this org's `memberships` — the only seed
             // path that creates org memberships. Collect those emails to cross-reference,
             // the way `userEmails` cross-references membership emails against users.
+            // Guard against a truthy non-array `memberships`: the memberships block above
+            // already recorded a structured error for that, and falling through to here
+            // would call `.map()` on the invalid value and crash startup instead of
+            // returning that error.
             const orgMembershipEmails = new Set(
-              (org.memberships ?? [])
+              (Array.isArray(org.memberships) ? org.memberships : [])
                 .map((m) => seedEmail(m.email))
                 .filter((r): r is { ok: true; email: string } => r.ok)
                 .map((r) => r.email.toLowerCase()),
