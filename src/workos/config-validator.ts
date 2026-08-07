@@ -273,6 +273,17 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
                 .map((r) => r.email.toLowerCase()),
             );
             org.groups.forEach((group, gIndex) => {
+              // A non-object entry (e.g. `groups: [null]` from a YAML/JSON typo) would
+              // throw on `group.name` below; record a structured error and skip the
+              // property checks rather than crashing startup or `--validate-config`.
+              if (group === null || typeof group !== 'object') {
+                errors.push({
+                  path: `organizations[${index}].groups[${gIndex}]`,
+                  message: 'each group must be an object',
+                  value: group,
+                });
+                return;
+              }
               if (!group.name || typeof group.name !== 'string') {
                 errors.push({
                   path: `organizations[${index}].groups[${gIndex}].name`,

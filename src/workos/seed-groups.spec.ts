@@ -167,6 +167,20 @@ describe('Seeding groups', () => {
       ).toBe(true);
     });
 
+    it('rejects a non-object group entry without crashing', () => {
+      // `groups: [null]` (or any non-object entry) must record a structured error
+      // rather than throw on `group.name` during startup or `--validate-config`.
+      const { valid, errors } = validateSeedConfig({
+        organizations: [{ name: 'Acme', groups: [null as never] }],
+      });
+      expect(valid).toBe(false);
+      expect(
+        errors.some(
+          (e) => e.path === 'organizations[0].groups[0]' && e.message.includes('each group must be an object'),
+        ),
+      ).toBe(true);
+    });
+
     it('rejects a group without a name', () => {
       const error = findError(
         {
