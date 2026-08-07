@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { type RouteContext, generateUlid } from '../../core/index.js';
+import { type RouteContext, OauthApiError, generateUlid } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 
 /**
@@ -22,6 +22,11 @@ import { getWorkOSStore } from '../store.js';
  * SDK reads `payload.scope`), and every token carries a `jti`, without which the SDKs'
  * M2M claim guard rejects an otherwise-valid token. Neither is emulator-flavored: a
  * scopes *array*, or an omitted `jti`, would pass locally and fail in production.
+ *
+ * Failures throw `OauthApiError`, the same RFC 6749 §5.2 renderer `/sso/token` and the
+ * OAuth-shaped authenticate grants use. This endpoint had a local `oauthError()` helper that
+ * built the identical body by hand, which meant the OAuth envelope was defined in two places
+ * and only one of them was reachable from anywhere else.
  */
 
 const TOKEN_TTL_SECONDS = 3600;
@@ -31,11 +36,6 @@ interface TokenParams {
   clientId?: string;
   clientSecret?: string;
   scope?: string;
-}
-
-/** RFC 6749 §5.2 error body. */
-function oauthError(c: Context, status: 400 | 401, error: string, description: string) {
-  return c.json({ error, error_description: description }, status);
 }
 
 /**
@@ -105,21 +105,24 @@ export function oauthRoutes(ctx: RouteContext): void {
     const { grantType, clientId, clientSecret, scope } = await readTokenParams(c);
 
     if (grantType !== 'client_credentials') {
-      return oauthError(c, 400, 'unsupported_grant_type', `The grant type is not supported: ${grantType ?? '(none)'}`);
+      throw new OauthApiError(
+        400,
+        'unsupported_grant_type',
+        `The grant type is not supported: ${grantType ?? '(none)'}`,
+      );
     }
     if (!clientId || !clientSecret) {
-      return oauthError(c, 400, 'invalid_request', 'client_id and client_secret are required.');
+      throw new OauthApiError(400, 'invalid_request', 'client_id and client_secret are required.');
     }
 
     const application = ws.connectApplications.findOneBy('client_id', clientId);
     const secretMatches =
       application && ws.clientSecrets.findBy('application_id', application.id).some((s) => s.value === clientSecret);
     if (!application || !secretMatches) {
-      return oauthError(c, 401, 'invalid_client', 'Invalid client ID or secret.');
+      throw new OauthApiError(401, 'invalid_client', 'Invalid client ID or secret.');
     }
     if (application.application_type !== 'm2m') {
-      return oauthError(
-        c,
+      throw new OauthApiError(
         400,
         'unauthorized_client',
         'The client is not authorized to use the client_credentials grant type.',
@@ -137,8 +140,7 @@ export function oauthRoutes(ctx: RouteContext): void {
       const requested = scope.trim().split(/\s+/);
       const unknown = requested.filter((s) => !appScopes.includes(s));
       if (unknown.length > 0) {
-        return oauthError(
-          c,
+        throw new OauthApiError(
           400,
           'invalid_scope',
           `The application is not granted the requested scope(s): ${unknown.join(', ')}.`,

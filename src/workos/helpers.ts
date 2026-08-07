@@ -1,6 +1,15 @@
 import { randomBytes, createHash, createCipheriv } from 'node:crypto';
-import { WorkOSApiError, generateId, type CursorPaginatedResult, type Entity } from '../core/index.js';
-import { EVENTS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
+import { isIPv6 } from 'node:net';
+import { domainToASCII } from 'node:url';
+import {
+  WorkOSApiError,
+  validationError,
+  generateId,
+  type CursorPaginatedResult,
+  type Entity,
+  type Store,
+} from '../core/index.js';
+import { EVENTS, STORE_KEYS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
 import type { WorkOSStore } from './store.js';
 import type { EventBus } from './event-bus.js';
 import type {
@@ -336,6 +345,106 @@ export function generateCode(): string {
 }
 
 /**
+ * Whether a string is shaped enough like an email to be worth storing. Deliberately loose —
+ * the emulator is not an address validator, it just refuses input that could only be a typo.
+ */
+export function isEmailShaped(value: string): boolean {
+  const at = value.indexOf('@');
+  return at > 0 && at === value.lastIndexOf('@') && at < value.length - 1 && !/\s/.test(value);
+}
+
+/** Why a supplied `email` cannot be used, kept apart so a caller can report which one happened. */
+export type EmailProblem = 'missing' | 'not_a_string' | 'malformed';
+
+const EMAIL_PROBLEM_MESSAGES: Record<EmailProblem, string> = {
+  missing: 'email is required',
+  not_a_string: 'email must be a string',
+  malformed: 'email must be a valid email address',
+};
+
+/** The `errors[].code` each problem carries on the routes that report a 422. */
+const EMAIL_PROBLEM_FIELD_CODES: Record<EmailProblem, string> = {
+  missing: 'required',
+  not_a_string: 'invalid_type',
+  malformed: 'invalid',
+};
+
+export type NormalizedEmail = { ok: true; email: string } | { ok: false; problem: EmailProblem };
+
+/**
+ * Normalize a request's `email` to a trimmed string, or say why it can't be. Not every value
+ * handed to this is normalizable, so the problem comes back as a value rather than an exception:
+ * the routes disagree about how to report it — `validationError`'s 422 on the user-management
+ * CRUD routes, a 400 `invalid_request` on the grants — and only about that.
+ *
+ * Callers used to type-assert instead, which was survivable while a lookup by email could only
+ * miss — `findOneBy` returns undefined for a number as readily as for an unknown address.
+ * Resolving case-insensitively means calling `toLowerCase` on it, so the same assertion throws and
+ * a malformed request comes back a 500 that tells the caller nothing.
+ *
+ * `null` is `missing`, not `not_a_string`: in a JSON body it is how a caller spells absence, and
+ * the guard exists to name what the caller must fix, not what `typeof` says.
+ *
+ * `requireShape` is for the routes that create something from the address rather than look one up.
+ * A read that misses is a 404 the caller can act on; a write that stores a typo is an account or
+ * an invitation nothing can ever reach. Read paths leave it off, so an address that does not
+ * resolve still 404s rather than changing error shape.
+ */
+export function normalizeEmail(value: unknown, opts?: { requireShape?: boolean }): NormalizedEmail {
+  if (value === undefined || value === null) return { ok: false, problem: 'missing' };
+  if (typeof value !== 'string') return { ok: false, problem: 'not_a_string' };
+  const email = value.trim();
+  if (!email) return { ok: false, problem: 'missing' };
+  if (opts?.requireShape && !isEmailShaped(email)) return { ok: false, problem: 'malformed' };
+  return { ok: true, email };
+}
+
+/**
+ * The trimmed `email` from a request body, as a route that reports 400 `invalid_request` wants it.
+ *
+ * Absence comes back as `''` rather than throwing, because the grants name it alongside whatever
+ * else they also require ("code and email are required") — a message that is more use than one
+ * field at a time.
+ */
+export function requireEmailString(value: unknown, opts?: { requireShape?: boolean }): string {
+  const result = normalizeEmail(value, opts);
+  if (result.ok) return result.email;
+  if (result.problem === 'missing') return '';
+  throw new WorkOSApiError(400, EMAIL_PROBLEM_MESSAGES[result.problem], 'invalid_request');
+}
+
+/**
+ * The trimmed `email` from a request body, as the user-management CRUD routes want it: a 422 with
+ * the per-field code, which is the validation shape those routes already answer in.
+ */
+export function requireEmailField(value: unknown, opts?: { requireShape?: boolean }): string {
+  const result = normalizeEmail(value, opts);
+  if (result.ok) return result.email;
+  throw validationError(EMAIL_PROBLEM_MESSAGES[result.problem], [
+    { field: 'email', code: EMAIL_PROBLEM_FIELD_CODES[result.problem] },
+  ]);
+}
+
+/**
+ * Whether two addresses name the same account. Case-insensitive, like every lookup by email, and
+ * trimmed for the same reason storage is: a padded copy of an address names the same person, and a
+ * filter that skipped the trim would not return what creation had just written.
+ */
+export function emailsMatch(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * Look a user up by email, ignoring case. `findOneBy` is an exact-match index lookup, which is
+ * fine for a read but forks the account in two anywhere a miss creates a user instead.
+ */
+export function findUserByEmail(ws: WorkOSStore, email: string): WorkOSUser | undefined {
+  const exact = ws.users.findOneBy('email', email);
+  if (exact) return exact;
+  return ws.users.all().find((u) => emailsMatch(u.email, email));
+}
+
+/**
  * Hash password using SHA256.
  * NOTE: This is intentionally weak for emulator/testing only.
  * Production systems should use bcrypt, scrypt, or Argon2 with proper salt and iterations.
@@ -433,27 +542,260 @@ export function formatConnectedAccount(a: WorkOSConnectedAccount): Record<string
   return formatEntity(a);
 }
 
-/** Allowed redirect URI hosts for the emulator's authorize endpoints. */
-const ALLOWED_REDIRECT_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+/** Redirect URI hosts the emulator's authorize endpoints accept with no configuration. */
+export const DEFAULT_ALLOWED_REDIRECT_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+
+/** Configured entry that accepts any redirect host. */
+const ANY_HOST = '*';
 
 /**
- * Validate that a redirect_uri points to a localhost origin.
- * Prevents the emulator from being used as an open redirect.
+ * Normalize a configured redirect host into the form `URL.hostname` produces: lowercase,
+ * punycode, no scheme, no port, IPv6 in brackets. Accepts a bare hostname
+ * (`app.example.test`), a subdomain wildcard (`*.example.test`), `*`, or a whole origin
+ * (`https://app.example.test:8443`), since an origin is what people usually have on hand.
+ * Throws on input that would silently never match.
  */
-export function assertLocalRedirectUri(uri: string): void {
+export function normalizeRedirectHost(value: string): string {
+  let host = value.trim().toLowerCase();
+  if (host === ANY_HOST) return host;
+
+  if (host.includes('://')) {
+    try {
+      host = new URL(host).hostname;
+    } catch {
+      host = '';
+    }
+  } else if (host.startsWith('[')) {
+    // Bracketed IPv6, possibly with a port: keep everything through the closing bracket.
+    host = host.slice(0, host.indexOf(']') + 1);
+  } else {
+    if (host.includes(':')) {
+      const portIndex = host.lastIndexOf(':');
+      const port = host.slice(portIndex + 1);
+      // `example.test:3000` is a host and port; anything else with colons is bare IPv6.
+      host = /^\d+$/.test(port) && !host.slice(0, portIndex).includes(':') ? host.slice(0, portIndex) : `[${host}]`;
+    }
+    if (!host.startsWith('[')) host = toAsciiHost(host);
+  }
+
+  if (host.startsWith('[')) host = canonicalizeIpv6Host(host);
+  host = stripTrailingDot(host);
+
+  // A literal `*` returned above, so arriving at one here means something was stripped off it:
+  // `*:3000` and `https://*` both reduce to the fully-open wildcard, and both read as a
+  // narrowing — ports and schemes are never part of the host check. Refused rather than quietly
+  // widened, the same accident `stripTrailingDot` guards for `*.`.
+  if (host === ANY_HOST) {
+    throw new Error(`Invalid redirect host: ${JSON.stringify(value)} — write "*" to allow any host`);
+  }
+
+  // Shape first, then canonicalize, then shape again. `URL` drops a path rather than failing on
+  // one, so `app.example.test/path` has to be refused before anything is allowed to reshape it —
+  // and canonicalizing can itself turn a plausible-looking entry into nothing at all.
+  if (!isMatchableHostPattern(host)) throw invalidRedirectHost(value);
+  host = canonicalizeDnsHost(host);
+  if (!isMatchableHostPattern(host)) throw invalidRedirectHost(value);
+  return host;
+}
+
+function invalidRedirectHost(value: string): Error {
+  return new Error(`Invalid redirect host: ${JSON.stringify(value)}`);
+}
+
+/**
+ * Reduce a validated non-bracketed pattern to the one spelling `URL.hostname` produces, the way
+ * `canonicalizeIpv6Host` already does for addresses. `URL` rewrites IPv4 in every shorthand it
+ * accepts — `10.1`, `192.168.001.1`, `0x7f.0.0.1` and `2130706433` all arrive as their dotted-quad
+ * form — so an entry written any of those ways validated by shape, started the emulator and then
+ * matched nothing: the silent no-match the rest of this validation exists to turn into a loud
+ * failure. Only ever called on a pattern `isMatchableHostPattern` has accepted, so there is no path
+ * or port left for `URL` to strip. Returns '' for what `URL` refuses (`999.999.999.999`,
+ * `1.2.3.4.5` — IPv4-shaped and not an address), which the second shape check then rejects.
+ */
+function canonicalizeDnsHost(host: string): string {
+  // Bracketed literals came through `canonicalizeIpv6Host` already.
+  if (host.startsWith('[')) return host;
+  // `*` is not a host `URL` should be asked about, so convert only what it stands in front of.
+  const wildcard = host.startsWith('*.');
+  const bare = wildcard ? host.slice(2) : host;
+  let canonical: string;
+  try {
+    canonical = new URL(`http://${bare}/`).hostname;
+  } catch {
+    return '';
+  }
+  return wildcard ? `*.${canonical}` : canonical;
+}
+
+/**
+ * Reduce a bracketed IPv6 literal to the one spelling `URL.hostname` produces. `isIPv6` accepts
+ * every legal way of writing an address, but a request for any of them arrives compressed and
+ * zero-stripped: `[fd00:0:0:0:0:0:0:1]` and `[FD00::0001]` both come through as `[fd00::1]`, and
+ * `[::ffff:127.0.0.1]` as `[::ffff:7f00:1]`. Validating without canonicalizing let an ordinary
+ * way of writing an address start the emulator and then match nothing — the same silent no-match
+ * the shape check exists to turn into a loud failure. Returns '' for anything `URL` refuses,
+ * which the shape check then rejects.
+ */
+function canonicalizeIpv6Host(host: string): string {
+  try {
+    return new URL(`http://${host}/`).hostname;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Drop one trailing dot, so an absolute name is configured the way it is written. `URL.hostname`
+ * keeps the dot a request carried, so both sides are stripped and `app.example.test.` and
+ * `app.example.test` name the same host — otherwise neither spelling matched the other.
+ */
+function stripTrailingDot(host: string): string {
+  // Never `*.`, which is a wildcard missing its label rather than an absolute name: stripping
+  // there would turn a pattern that matches nothing into `*`, which matches everything.
+  if (host === `${ANY_HOST}.` || !host.endsWith('.')) return host;
+  return host.slice(0, -1);
+}
+
+/**
+ * Convert an internationalized hostname to the punycode `URL.hostname` yields, so `møller.test`
+ * can be configured the way its owner spells it. Without this, only the origin form
+ * (`https://møller.test`) worked — `URL` punycodes on the way through — leaving the bare form
+ * with no spelling that could ever match. Returns '' for input that is not a domain at all,
+ * which the shape check then rejects.
+ */
+function toAsciiHost(host: string): string {
+  // Everything a hostname may legally contain is printable ASCII; anything else needs IDNA.
+  if (!/[^ -~]/.test(host)) return host;
+  const wildcard = host.startsWith('*.');
+  // `*` is not an IDNA label, so convert only what follows it.
+  const ascii = domainToASCII(wildcard ? host.slice(2) : host);
+  if (!ascii) return '';
+  return wildcard ? `*.${ascii}` : ascii;
+}
+
+/**
+ * A label as `URL.hostname` may carry it: alphanumeric or underscore, inner hyphens allowed,
+ * dot-separated. Underscore is not DNS-conformant but `URL` passes it through untouched, so a
+ * Docker service name like `my_host` is a host a request really does arrive with — the question
+ * here is whether a pattern can ever equal a `URL.hostname`, not whether a resolver would like it.
+ */
+const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$/;
+
+/**
+ * Whether a normalized pattern can ever match a `URL.hostname`. Checking only for emptiness and
+ * whitespace let `*example.test` (wildcard without the dot), `*.` and `app.example.test/path`
+ * through — each accepted at startup and then silently matching nothing, which is exactly the
+ * failure this validation exists to prevent.
+ */
+function isMatchableHostPattern(host: string): boolean {
+  if (host === ANY_HOST) return true;
+  const bare = host.startsWith('*.') ? host.slice(2) : host;
+  if (!bare) return false;
+  if (bare.startsWith('[')) {
+    // A real address, not just IPv6-shaped characters: `[:::]` and `[....]` would pass a
+    // character-class check and then match no hostname, the same silent failure as above.
+    return bare.endsWith(']') && isIPv6(bare.slice(1, -1));
+  }
+  return HOSTNAME.test(bare);
+}
+
+/** Normalize a list of configured redirect hosts, dropping blank entries. */
+export function normalizeRedirectHosts(values: readonly string[]): string[] {
+  return values.filter((value) => value.trim() !== '').map(normalizeRedirectHost);
+}
+
+/**
+ * Schemes that run in the page instead of navigating to it. The host check alone does not stop
+ * them: `javascript://localhost/%0aalert(1)` parses with a hostname of `localhost`, so a script
+ * URI reaches the redirect on the strength of an authority it never uses. Custom app schemes
+ * (`myapp://callback`, RFC 8252) stay allowed — they are a real redirect target a native client
+ * tests against, and they carry no script.
+ */
+const SCRIPT_REDIRECT_SCHEMES = new Set(['javascript:', 'data:', 'vbscript:', 'blob:', 'file:']);
+
+/**
+ * Whether a URI carries a character it may not contain unencoded: a C0 control or DEL. Written as
+ * a bound rather than a character-class regex, which is the thing a linter rightly asks about and
+ * reads less plainly than the range it stands for.
+ *
+ * Space (0x20) is deliberately outside the bound. It cannot split a header, so it buys nothing
+ * here, and `searchParams.get` decodes `+` to a space — so including it turned an unencoded `+`
+ * in the inner query (base64 state, a `+` in an email) into a 400 on a redirect that had worked.
+ */
+function hasForbiddenUriChar(uri: string): boolean {
+  for (let i = 0; i < uri.length; i++) {
+    const code = uri.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function hostMatches(hostname: string, pattern: string): boolean {
+  if (pattern === ANY_HOST) return true;
+  // `*.example.test` covers subdomains only, matching how redirect allow-lists usually read.
+  if (pattern.startsWith('*.')) return hostname.endsWith(pattern.slice(1));
+  return hostname === pattern;
+}
+
+/**
+ * Validate that a redirect_uri points to a host the emulator is willing to redirect to.
+ * Prevents the emulator from being used as an open redirect. Localhost is always allowed;
+ * `allowedRedirectHosts` (`--redirect-hosts`) adds to that for test environments that use
+ * production-like hostnames.
+ */
+export function assertAllowedRedirectUri(uri: string, store: Store): void {
+  // Refused before parsing, because parsing *removes* these rather than failing on them: URL
+  // strips tabs and newlines and trims leading control characters, so `http://local\thost/`
+  // validates as localhost and then goes into the Location header raw, control character and
+  // all. Checking the parse result can only ever see the sanitized form.
+  if (hasForbiddenUriChar(uri)) {
+    throw new WorkOSApiError(400, 'Invalid redirect_uri', 'invalid_redirect_uri');
+  }
+
   let parsed: URL;
   try {
     parsed = new URL(uri);
   } catch {
     throw new WorkOSApiError(400, 'Invalid redirect_uri', 'invalid_redirect_uri');
   }
-  if (!ALLOWED_REDIRECT_HOSTS.has(parsed.hostname)) {
+
+  // Checked before the host, and regardless of configuration: `*` widens which host may be
+  // redirected to, never what a redirect is allowed to execute.
+  //
+  // The empty hostname is half of that, and the half a denylist cannot cover. A URI with no
+  // authority is one the host check has nothing to say about, so `*` — which only ever answers
+  // "is this host allowed" — waved `view-source:javascript:alert(1)`, `jar:` and `about:` through
+  // on an authority they never had. Refused by shape, so the guard does not depend on having
+  // enumerated every script-bearing scheme. Custom app schemes keep their host and are
+  // unaffected in the `myapp://callback` form.
+  //
+  // This does refuse RFC 8252's other private-use spelling, the path-only `com.example.app:/cb`,
+  // which has no authority to check either. It has never been allowed here (the localhost-only
+  // guard rejected it too), and allowing it would mean deciding by heuristic which hostless URIs
+  // nest another one — so it stays out until something actually needs it.
+  if (SCRIPT_REDIRECT_SCHEMES.has(parsed.protocol) || parsed.hostname === '') {
     throw new WorkOSApiError(
       400,
-      `redirect_uri must point to localhost, got ${parsed.hostname}`,
+      `redirect_uri scheme ${parsed.protocol.slice(0, -1)} is not allowed`,
       'invalid_redirect_uri',
     );
   }
+
+  const configured = store.getData<string[]>(STORE_KEYS.allowedRedirectHosts) ?? [];
+  const allowed = [...DEFAULT_ALLOWED_REDIRECT_HOSTS, ...configured];
+  // Stripped on both sides, so an absolute name matches the entry it was configured as.
+  const hostname = stripTrailingDot(parsed.hostname.toLowerCase());
+  if (allowed.some((pattern) => hostMatches(hostname, pattern))) return;
+
+  // Names both ways in, since a programmatic caller has no flag to pass.
+  const howToWiden = 'Pass --redirect-hosts (or allowedRedirectHosts) to allow other hosts.';
+  throw new WorkOSApiError(
+    400,
+    configured.length > 0
+      ? `redirect_uri host ${parsed.hostname} is not allowed; allowed hosts: ${allowed.join(', ')}`
+      : `redirect_uri must point to localhost, got ${parsed.hostname}. ${howToWiden}`,
+    'invalid_redirect_uri',
+  );
 }
 
 const AUTH_CHALLENGE_EXCLUDE = new Set([...INTERNAL_FIELDS, 'code']);

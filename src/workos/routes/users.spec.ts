@@ -33,6 +33,79 @@ describe('User routes', () => {
     expect(user.password_hash).toBeUndefined();
   });
 
+  // Held to the same standard as the magic auth handler, which validates for the same reason:
+  // both create users, and an address that could only be a typo becomes an unreachable account.
+  it('rejects an email that could only be a typo', async () => {
+    for (const email of ['', '   ', 'not-an-email', 'a b@test.com', '@test.com', 'nope@', 'two@at@test.com', 123]) {
+      const res = await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+      expect(res.status).toBe(422);
+      expect((await json(res)).code).toBe('unprocessable_entity');
+    }
+    const list = await json(await req('/user_management/users'));
+    expect(list.data).toHaveLength(0);
+  });
+
+  // `null` is how a JSON body spells absence, so it is reported as absence — the same answer the
+  // magic auth handler gives it. Classifying it as a type error instead had the two creation paths
+  // disagreeing about which of the two distinctions this route exists to draw it falls on.
+  it('reports an absent email as absent, including an explicit null', async () => {
+    for (const body of [{}, { email: null }]) {
+      const res = await req('/user_management/users', { method: 'POST', body: JSON.stringify(body) });
+      expect(res.status).toBe(422);
+      const parsed = await json(res);
+      expect(parsed.message).toBe('email is required');
+      expect(parsed.errors[0]).toMatchObject({ field: 'email', code: 'required' });
+    }
+  });
+
+  it('names a non-string email as the wrong type, not as missing', async () => {
+    const res = await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 123 }) });
+    expect(res.status).toBe(422);
+    const body = await json(res);
+    expect(body.message).toBe('email must be a string');
+    expect(body.errors[0]).toMatchObject({ field: 'email', code: 'invalid_type' });
+  });
+
+  // Case-insensitively, like the magic auth handler: two accounts differing only in case left the
+  // two creation paths disagreeing about which one an address names, with magic auth's resolver
+  // settling it by insertion order.
+  it('rejects a duplicate email that differs only in case', async () => {
+    const first = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'User@x.test' }),
+    });
+    expect(first.status).toBe(201);
+
+    const second = await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'user@x.test' }),
+    });
+    expect(second.status).toBe(409);
+    expect((await json(second)).code).toBe('user_already_exists');
+  });
+
+  // This is the lookup an SDK's listUsers({ email }) maps to, so it is how a caller finds the
+  // account a Magic Auth sign-up just made — and sign-up stores whatever case it was handed.
+  // Filtering exactly meant the address the caller had returned nothing for a user that existed.
+  it('filters by email case-insensitively', async () => {
+    const created = await json(
+      await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'Listed@X.test' }) }),
+    );
+
+    for (const query of ['listed%40x.test', 'Listed%40X.test', 'LISTED%40X.TEST']) {
+      const list = await json(await req(`/user_management/users?email=${query}`));
+      expect(list.data).toHaveLength(1);
+      expect(list.data[0].id).toBe(created.id);
+    }
+
+    // Still a filter, not a fuzzy match.
+    const miss = await json(await req('/user_management/users?email=listed%40y.test'));
+    expect(miss.data).toHaveLength(0);
+  });
+
   it('rejects duplicate email', async () => {
     await req('/user_management/users', {
       method: 'POST',

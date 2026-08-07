@@ -63,6 +63,7 @@ import {
   formatApiKeyRecord,
   formatFeatureFlag,
   generateClientId,
+  findUserByEmail,
 } from './helpers.js';
 import type {
   WorkOSConnectionType,
@@ -275,7 +276,10 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       ws.users.insert({
         object: 'user',
         id: userConfig.id,
-        email: userConfig.email,
+        // Trimmed, as both routes that create users store it: a padded seed would otherwise be
+        // written under a spelling no lookup by email resolves. validateSeedConfig normalizes the
+        // same way, so what it cross-referenced is what lands here.
+        email: userConfig.email.trim(),
         name: userConfig.name ?? null,
         first_name: userConfig.first_name ?? null,
         last_name: userConfig.last_name ?? null,
@@ -325,8 +329,8 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
           // insert time, so an id literal in a config could never resolve, and a
           // dangling membership would break membership serialization (which requires
           // a resolvable embedded user). validateSeedConfig guarantees the reference
-          // matches a seeded user.
-          const memberUser = ws.users.findOneBy('email', mm.email);
+          // matches a seeded user — case-insensitively, as it does here.
+          const memberUser = findUserByEmail(ws, mm.email);
           if (!memberUser) {
             throw new Error(`Seed membership references unknown user '${mm.email}' (organization '${orgConfig.name}')`);
           }
@@ -436,7 +440,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       const token = generateVerificationToken();
       ws.invitations.insert({
         object: 'invitation',
-        email: invConfig.email,
+        email: invConfig.email.trim(),
         state: 'pending',
         token,
         accept_invitation_url: `${_baseUrl}/user_management/invitations/accept?token=${token}`,

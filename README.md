@@ -97,6 +97,7 @@ workos-emulate --port 9100 --json
 workos-emulate --seed workos-emulate.config.yaml
 workos-emulate --interactive          # serve login pages for E2E browser testing
 workos-emulate --signing-key ci-key.pem --issuer https://api.workos.com  # stable JWKS and iss
+workos-emulate --redirect-hosts app.example.test  # allow a non-localhost redirect_uri
 workos-emulate --version
 ```
 
@@ -513,7 +514,39 @@ Only `active` memberships count — an unaccepted invitation or a deactivated me
 
 ### Refresh tokens always rotate
 
-The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `invalid_grant`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.
+The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `{"error": "invalid_grant", "error_description": "Invalid refresh token."}`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.
+
+### Authentication failure shapes
+
+`POST /user_management/authenticate` does not use one error shape for every failure. Which shape you get depends on the failure, not only on the grant: any malformed request is OAuth-shaped, and among credential failures three grants are OAuth-shaped and the rest plain.
+
+| Failure                                                          | Body                                                                  | Node SDK raises           |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
+| Malformed request — missing or unrecognized parameter, any grant | `{"error": "invalid_request", "error_description": "…"}`              | `OauthException`          |
+| `authorization_code` — unknown, expired, bad verifier, user gone | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
+| `refresh_token` — unknown, expired, rotated, or user deleted     | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
+| Device code — pending, expired, unknown, or user deleted         | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}` | `OauthException`          |
+| `password` — wrong password                                      | `{"code": "invalid_credentials", "message": "…"}` (400)               | `GenericServerException`  |
+| Magic Auth — wrong or expired code                               | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`         | `GenericServerException`  |
+| Step-up (MFA, org selection, email verification)                 | `{"code": "…", "message": "…"}` (403)                                 | `AuthenticationException` |
+
+`password` is an RFC 6749 grant, but production fails its credentials with the plain shape, so the emulator does too — while a `password` request that omits a parameter still answers `invalid_request` OAuth-style. Both halves come from the spec, whose authenticate 400 lists `invalid_request` and `invalid_grant` only as `{error, error_description}` and `invalid_credentials` and the one-time-code errors only as `{code, message}`. An unrecognized `grant_type` is reported as `invalid_request` rather than `unsupported_grant_type`, which the spec gives to `/sso/token` alone.
+
+`/sso/token` is OAuth-shaped throughout, matching its spec definition.
+
+### Magic Auth doubles as sign-up
+
+`POST /user_management/magic_auth` creates the user when the email has none, so a sign-up flow needs no separate `POST /user_management/users` first. Production does the same at code-creation time rather than at authenticate: the 201 already carries a `user_id`, the user is immediately listable with `email_verified: false`, and the email it sends uses the "Sign up" template.
+
+Redeeming a Magic Auth code sets `email_verified` to `true`, matching the live authenticate response for the same flow. This applies to **any** user who was not already verified, not only ones the endpoint just created, so a fixture seeded `email_verified: false` comes back verified after its first Magic Auth login.
+
+An email is resolved case-insensitively (`User@x.test` and `user@x.test` are the same account, stored under whichever case created it), and one that could only be a typo is rejected rather than turned into an account nothing can reach. `POST /user_management/users` applies both — so it answers 409 for an address that differs from an existing one only in case, rather than creating a second account no lookup can tell apart from the first.
+
+Every lookup by email is case-insensitive, not just Magic Auth's, so an account created by a Magic Auth sign-up is reachable by whatever casing the caller has: the password grant, `login_hint` on the authorize endpoints, `POST /user_management/password_reset`, the `email` filter on `GET /user_management/users` and `GET /user_management/invitations`, accepting an invitation, the `user_id` on SSO authentication events, the profile `/sso/authorize` resolves from a `login_hint`, and the email a seeded organization membership joins its user by. Seeded `users` are held to the same uniqueness the API enforces — two entries differing only in case are a config error, since a seed was otherwise the one way left to produce the pair of accounts no lookup can tell apart.
+
+A field named `email` must be a string wherever it is accepted. A number or object is a `400` (`422` on `POST /user_management/users` and `POST /user_management/invitations`, which keep those routes' validation shape) naming the type, distinct from the `email is required` reported for one that is genuinely absent — which includes an explicit `null`, since that is how a JSON body spells absence. Addresses are trimmed before they are stored or compared, so a padded copy of an address finds the account written under it.
+
+The typo guard applies wherever an address is written rather than looked up: both routes that create users, `POST /user_management/invitations` (acceptance resolves the recipient by email, so a typo is an invitation that is spent without enrolling anyone), and seeded `users`, `invitations`, and organization `memberships`. Read paths are left alone — an address that resolves to nothing is still a `404` you can act on, not a validation error.
 
 ### Emitted events
 
@@ -679,9 +712,75 @@ is stable for a pinned key without being pinned separately.
 > A pinned signing key is a test fixture, not a secret to reuse anywhere real. Never point the
 > emulator at a key your production environment trusts.
 
+## Redirect URI Hosts
+
+The authorize endpoints refuse to redirect anywhere but `localhost`, `127.0.0.1` and `[::1]`, so a
+reachable emulator cannot be turned into an open redirect. If your test environment fakes
+production-like hostnames, list them:
+
+```bash
+workos-emulate --redirect-hosts app.example.test,auth.example.test
+
+# Repeatable, and each occurrence may be a comma-separated list
+workos-emulate --redirect-hosts app.example.test --redirect-hosts auth.example.test
+
+# Any subdomain of example.test (the apex itself is not matched)
+workos-emulate --redirect-hosts '*.example.test'
+
+# Any host at all — the check is off
+workos-emulate --redirect-hosts '*'
+```
+
+`WORKOS_EMULATE_REDIRECT_HOSTS=app.example.test,*.internal.test` is the environment equivalent, for
+a compose file. The flag wins over the environment.
+
+Programmatically:
+
+```ts
+const emulator = await createEmulator({
+  allowedRedirectHosts: ['app.example.test', '*.internal.test'],
+});
+```
+
+Notes:
+
+- Configured hosts **add to** the localhost set rather than replacing it, so existing callbacks keep
+  working.
+- An entry is a hostname (`app.example.test`), a subdomain wildcard (`*.example.test`), or `*`. A
+  whole origin (`https://app.example.test:8443`) is accepted and reduced to its hostname — ports and
+  schemes are never part of the host check.
+- The check applies to `redirect_uri` on `/user_management/authorize`, `/sso/authorize` and
+  `/data-integrations/:slug/authorize`, and to `return_to` on `/user_management/sessions/logout`.
+- An internationalized hostname may be written either way: `møller.test` and its punycode
+  (`xn--mller-vua.test`) normalize to the same entry, since that is the form a request carries.
+- An IP address may be written any legal way. `[FD00::0001]` and `[fd00:0:0:0:0:0:0:1]` are the same
+  entry as `[fd00::1]`; `10.1`, `192.168.001.1` and `2130706433` are the same entries as `10.0.0.1`,
+  `192.168.1.1` and `127.0.0.1`. A trailing dot is optional too (`app.example.test.` matches
+  `app.example.test`). Both sides are reduced to the one form a request carries.
+- An underscore is fine (`my_host.example.test`, the shape a Docker Compose service name takes).
+  It is not DNS-conformant, but a request really does arrive carrying it.
+- A host that could never match (`https://`, anything with whitespace) fails at startup rather than
+  silently rejecting every request. So does an entry that would only reduce to `*` by having
+  something stripped off it (`*:3000`, `https://*`) — `*` means every host, and it may only be
+  spelled that way rather than arrived at by accident.
+- A `redirect_uri` carrying an unencoded control character is a 400, since URL parsing strips those
+  rather than failing on them: `http://local<TAB>host/` would otherwise validate as localhost and
+  reach the `Location` header raw.
+- `javascript:`, `data:`, `vbscript:`, `blob:` and `file:` redirect URIs are always refused, `*`
+  included — `javascript://localhost/…` parses with an allowed hostname it never navigates to. So
+  is any URI with no authority at all (`view-source:javascript:…`, `jar:`, `about:blank`), which
+  the host check has nothing to say about and `*` would otherwise wave through. Custom app schemes
+  (`myapp://callback`, for native clients) keep their host and are allowed if that host is.
+
 ## Error Hooks
 
 Error hooks let you force the emulator to return non-200 responses so you can test how your app handles WorkOS API failures (422, 500, etc.).
+
+`@workos/emulate/core` exports the two error classes the emulator itself throws, for hooks that need to
+raise a failure rather than describe one: `WorkOSApiError(status, message, code)` renders the plain
+`{code, message}` envelope, and `OauthApiError(status, error, description)` the RFC 6749
+`{error, error_description}` one used by `/sso/token`, `/oauth2/token` and the OAuth-shaped
+`authenticate` grants (see [Authentication failure shapes](#authentication-failure-shapes)).
 
 ### Seed config
 
@@ -997,6 +1096,7 @@ The WorkOS Emulator is designed for testing and development environments. When u
 ### Network Security
 
 - **Bind to localhost**: By default, the emulator binds to `localhost`, so its unauthenticated endpoints are only reachable from the local machine. To intentionally expose it to other hosts, pass `--host 0.0.0.0` (CLI) or `hostname: '0.0.0.0'` (`createEmulator`), and protect it with a firewall or VPN.
+- **Open redirect protection**: The authorize endpoints only redirect to localhost by default. `--redirect-hosts` (or `allowedRedirectHosts`) widens that for test environments with production-like hostnames; `--redirect-hosts '*'` disables the host check entirely, so only use it on an emulator nothing untrusted can reach. Script-bearing schemes (`javascript:`, `data:`) and URIs with no authority for the host check to speak about (`view-source:javascript:…`, `about:`) are refused regardless. See [Redirect URI Hosts](#redirect-uri-hosts).
 - **No CORS restrictions**: The emulator doesn't enforce CORS. Configure CORS in your application if needed.
 - **No TLS/SSL**: The emulator doesn't provide HTTPS. Use a reverse proxy (nginx, Caddy) for TLS termination in production.
 

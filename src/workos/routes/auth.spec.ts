@@ -3,6 +3,7 @@ import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
 import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
+import { hashPassword } from '../helpers.js';
 import type { Store } from '../../core/index.js';
 
 const apiKeys: ApiKeyMap = { sk_test_auth: { environment: 'test' } };
@@ -195,7 +196,11 @@ describe('Auth routes', () => {
         password: 'wrong',
       }),
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'invalid_credentials',
+      message: "Invalid credentials for 'bad@test.com'.",
+    });
   });
 
   it('authorization_code grant flow', async () => {
@@ -363,7 +368,8 @@ describe('Auth routes', () => {
     });
     expect(retryRes.status).toBe(400);
     const retryBody = await json(retryRes);
-    expect(retryBody.code).toBe('invalid_grant');
+    expect(retryBody.error).toBe('invalid_grant');
+    expect(retryBody.error_description).toBe('Invalid refresh token.');
   });
 
   it('rejects invalid refresh token', async () => {
@@ -374,7 +380,324 @@ describe('Auth routes', () => {
     });
     expect(res.status).toBe(400);
     const body = await json(res);
-    expect(body.code).toBe('invalid_grant');
+    expect(body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
+  });
+
+  it('fails an expired refresh token OAuth-style, with its own description', async () => {
+    await createUser('staletoken@test.com');
+    const auth = await json(await signInWithMagicAuth('staletoken@test.com'));
+
+    const ws = getWorkOSStore(store);
+    const stored = ws.refreshTokens.findOneBy('token', auth.refresh_token)!;
+    ws.refreshTokens.update(stored.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: auth.refresh_token }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ error: 'invalid_grant', error_description: 'Refresh token has expired.' });
+  });
+
+  it('fails refresh OAuth-style when the user behind the token was deleted', async () => {
+    await createUser('deleted@test.com');
+    const auth = await json(await signInWithMagicAuth('deleted@test.com'));
+    getWorkOSStore(store).users.delete(auth.user.id);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: auth.refresh_token }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
+  });
+
+  it('fails an unknown authorization code OAuth-style', async () => {
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code: 'bogus' }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body).toEqual({
+      error: 'invalid_grant',
+      error_description: "The code 'bogus' has expired or is invalid.",
+    });
+  });
+
+  // Production does not distinguish unknown from expired here, so a code that was real and aged
+  // out has to be indistinguishable from one that never existed — same OAuth shape, same code,
+  // same description. A client that can tell them apart locally is reading a difference that
+  // production will not give it.
+  it('fails an expired authorization code exactly like an unknown one', async () => {
+    await createUser('stalecode@test.com');
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    const ws = getWorkOSStore(store);
+    const stored = ws.authCodes.findOneBy('code', code)!;
+    ws.authCodes.update(stored.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      error: 'invalid_grant',
+      error_description: `The code '${code}' has expired or is invalid.`,
+    });
+  });
+
+  // The third grant to need this, and the one an AuthKit callback takes. Deleting a user does not
+  // cascade to its authorization codes, so the code outlives the user; before the guard the shared
+  // lookup answered a 404, which is the bare {message} the spec shapes 404s as — nothing for a
+  // client matching on invalid_grant, on the path authkit-nextjs uses to end a dead session.
+  it('fails an authorization code OAuth-style when its user was deleted', async () => {
+    const user = await createUser('codegone@test.com');
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    // Through the route, so the test breaks if a future cascade starts collecting auth codes.
+    const del = await req(`/user_management/users/${user.id}`, { method: 'DELETE' });
+    expect(del.status).toBe(204);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      error: 'invalid_grant',
+      error_description: `The code '${code}' has expired or is invalid.`,
+    });
+
+    const ws = getWorkOSStore(store);
+    // Unspent, like the device code's twin of this: polling or retrying cannot fix it, so the
+    // caller should not pay their code for the answer.
+    expect(ws.authCodes.findOneBy('code', code)).toBeDefined();
+    // And it reports the failure, which the 404 path skipped — every other authorization_code
+    // failure emits this event.
+    const [event] = ws.events.all().filter((e) => e.event === 'authentication.oauth_failed');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'oauth',
+      status: 'failed',
+      error: { code: 'invalid_grant', message: `The code '${code}' has expired or is invalid.` },
+    });
+  });
+
+  // The spec's authenticate 400 lists `invalid_request` among its {error, error_description}
+  // variants and never among its {code, message} ones, so a malformed request is OAuth-shaped
+  // whatever grant it names — including the grants whose credential failures are plain. That
+  // makes the envelope a property of the failure, not only of the grant.
+  it('fails a malformed request OAuth-style on every grant, plain-shaped ones included', async () => {
+    const post = (payload: Record<string, unknown>) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+    const noGrant = await post({ code: 'whatever' });
+    expect(noGrant.status).toBe(400);
+    expect(await json(noGrant)).toEqual({ error: 'invalid_request', error_description: 'grant_type is required.' });
+
+    const noCode = await post({ grant_type: 'authorization_code' });
+    expect(noCode.status).toBe(400);
+    expect(await json(noCode)).toEqual({ error: 'invalid_request', error_description: 'code is required.' });
+
+    // `password` renders its *credential* failure plain; a missing parameter is a different
+    // failure and the spec shapes it the other way.
+    const noPassword = await post({ grant_type: 'password', email: 'nobody@test.com' });
+    expect(noPassword.status).toBe(400);
+    expect(await json(noPassword)).toEqual({
+      error: 'invalid_request',
+      error_description: 'email and password are required.',
+    });
+
+    // An unrecognized grant_type fails authenticate's oneOf body validation, so the spec's code
+    // for it is invalid_request — `unsupported_grant_type` appears only under /sso/token.
+    const badGrant = await post({ grant_type: 'urn:workos:oauth:grant-type:nonsense' });
+    expect(badGrant.status).toBe(400);
+    expect(await json(badGrant)).toEqual({
+      error: 'invalid_request',
+      error_description: 'The grant type is not supported: urn:workos:oauth:grant-type:nonsense',
+    });
+  });
+
+  // A PKCE code's two adjacent failures used to answer in two envelopes: a wrong verifier
+  // OAuth-shaped, a missing one plain. Both are OAuth-shaped now, with the codes that name what
+  // went wrong — absent is malformed, wrong is a failed grant.
+  it('separates a missing code_verifier from a wrong one without changing envelope', async () => {
+    const user = await createUser('pkce-missing@test.com');
+    getWorkOSStore(store).authCodes.insert({
+      object: 'authorization_code',
+      code: 'pkce-needs-verifier',
+      user_id: user.id,
+      organization_id: null,
+      client_id: null,
+      code_challenge: 'a-challenge-no-verifier-will-hash-to',
+      code_challenge_method: 'S256',
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+    } as never);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code: 'pkce-needs-verifier' }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ error: 'invalid_request', error_description: 'code_verifier is required.' });
+  });
+
+  it('fails a wrong magic auth code with the plain shape and production code string', async () => {
+    await createUser('wrongcode@test.com');
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        email: 'wrongcode@test.com',
+        code: '000000',
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body).toEqual({ code: 'invalid_one_time_code', message: 'Invalid one-time code' });
+  });
+
+  it('fails a PKCE verifier mismatch OAuth-style, like any other bad authorization code', async () => {
+    const user = await createUser('pkce@test.com');
+    getWorkOSStore(store).authCodes.insert({
+      object: 'authorization_code',
+      code: 'pkce-code',
+      user_id: user.id,
+      organization_id: null,
+      client_id: null,
+      code_challenge: 'a-challenge-no-verifier-will-hash-to',
+      code_challenge_method: 'S256',
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+    } as never);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code: 'pkce-code', code_verifier: 'wrong' }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      error: 'invalid_grant',
+      error_description: "The code 'pkce-code' has expired or is invalid.",
+    });
+  });
+
+  it('fails device-code polling OAuth-style at every stage', async () => {
+    const start = await req('/user_management/authorize/device', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: 'client_device' }),
+    });
+    const { device_code } = await json(start);
+
+    // Nobody has approved it yet.
+    const pending = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code }),
+    });
+    expect(pending.status).toBe(400);
+    expect(await json(pending)).toEqual({
+      error: 'authorization_pending',
+      error_description: 'The authorization request is still pending.',
+    });
+
+    const unknown = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: 'nope' }),
+    });
+    expect(unknown.status).toBe(400);
+    expect(await json(unknown)).toEqual({ error: 'invalid_grant', error_description: 'Invalid device code.' });
+
+    // The third stage: the user walked away and the code aged out. Its own OAuth code, since a
+    // polling client stops on expired_token where it would keep polling on authorization_pending.
+    const ws = getWorkOSStore(store);
+    const stored = ws.deviceAuthorizations.findOneBy('device_code', device_code)!;
+    ws.deviceAuthorizations.update(stored.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const expired = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code }),
+    });
+    expect(expired.status).toBe(400);
+    expect(await json(expired)).toEqual({
+      error: 'expired_token',
+      error_description: 'The device code has expired.',
+    });
+  });
+
+  // The same hole the refresh_token grant had: an approved code whose user is gone fell through
+  // to the shared lookup and answered a polling client with the one plain 404 this endpoint never
+  // otherwise returns — a body it has no reason to be able to parse.
+  it('fails an approved device code OAuth-style when its user was deleted', async () => {
+    const user = await createUser('devicegone@test.com');
+    const start = await req('/user_management/authorize/device', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: 'client_device' }),
+    });
+    const { device_code } = await json(start);
+
+    const ws = getWorkOSStore(store);
+    const stored = ws.deviceAuthorizations.findOneBy('device_code', device_code)!;
+    ws.deviceAuthorizations.update(stored.id, { user_id: user.id });
+    ws.users.delete(user.id);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ error: 'invalid_grant', error_description: 'Invalid device code.' });
+    // Nothing consumed on a failure the caller cannot fix by polling again.
+    expect(ws.deviceAuthorizations.findOneBy('device_code', device_code)).toBeDefined();
+  });
+
+  it('fails an expired magic auth code with the production code string', async () => {
+    const user = await createUser('expired@test.com');
+    getWorkOSStore(store).magicAuths.insert({
+      object: 'magic_auth',
+      user_id: user.id,
+      email: user.email,
+      code: '123456',
+      expires_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        email: 'expired@test.com',
+        code: '123456',
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body).toEqual({
+      code: 'one_time_code_expired',
+      message: "One-time code for 'expired@test.com' has expired.",
+    });
   });
 
   // --- Impersonation tests ---
@@ -460,6 +783,214 @@ describe('Auth routes', () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.authentication_method).toBe('MagicAuth');
+  });
+
+  it('rejects a non-string email on magic auth creation', async () => {
+    const res = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 123 }),
+    });
+    expect(res.status).toBe(400);
+    const body = await json(res);
+    expect(body.code).toBe('invalid_request');
+    // Named for what it is. Routing this into the presence check reported "email is required" for
+    // an address that was supplied — the same backwards message the shape guard exists to avoid.
+    expect(body.message).toBe('email must be a string');
+  });
+
+  // Every one of these paths type-asserted `email` and then lowercased it to resolve the account
+  // case-insensitively, so a non-string arrived at `.toLowerCase()` and came back a 500 —
+  // `server_error` in a consumer's suite reads as an emulator defect, not a malformed request.
+  it('rejects a non-string email with 400 on every grant that resolves one', async () => {
+    const password = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 123, password: 'whatever' }),
+    });
+    expect(password.status).toBe(400);
+    expect((await json(password)).message).toBe('email must be a string');
+
+    const magic = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        code: '123456',
+        email: { not: 'a string' },
+      }),
+    });
+    expect(magic.status).toBe(400);
+    expect((await json(magic)).message).toBe('email must be a string');
+  });
+
+  // Creation trims before storing, so a read that skipped the trim could not find the account
+  // creation had just written under the same address.
+  it('trims a padded address on the paths that resolve one', async () => {
+    const signup = await json(
+      await req('/user_management/magic_auth', {
+        method: 'POST',
+        body: JSON.stringify({ email: '  padded@x.test  ' }),
+      }),
+    );
+    expect(signup.email).toBe('padded@x.test');
+
+    getWorkOSStore(store).users.update(signup.user_id, { password_hash: hashPassword('pw') });
+    const password = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: ' padded@x.test ', password: 'pw' }),
+    });
+    expect(password.status).toBe(200);
+
+    const reset = await req('/user_management/password_reset', {
+      method: 'POST',
+      body: JSON.stringify({ email: ' padded@x.test ' }),
+    });
+    expect(reset.status).toBe(201);
+  });
+
+  it('creates the user at magic auth code creation for an unknown email', async () => {
+    const magicRes = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'signup@test.com' }),
+    });
+    expect(magicRes.status).toBe(201);
+    const magicBody = await json(magicRes);
+    expect(magicBody.user_id).toBeTruthy();
+
+    const usersRes = await req('/user_management/users?email=signup%40test.com');
+    const users = await json(usersRes);
+    expect(users.data).toHaveLength(1);
+    expect(users.data[0].id).toBe(magicBody.user_id);
+    expect(users.data[0].email_verified).toBe(false);
+  });
+
+  // A sign-up that creates a user is a sign-up a webhook consumer expects to hear about, which is
+  // a large part of why this endpoint creating one is useful to test against at all.
+  it('emits user.created for a sign-up, and none when the user already existed', async () => {
+    const ws = getWorkOSStore(store);
+    const created = () =>
+      ws.events.all().filter((e: { event: string; data: Record<string, unknown> }) => e.event === 'user.created');
+
+    const signup = await json(
+      await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email: 'evented@test.com' }) }),
+    );
+    expect(created()).toHaveLength(1);
+    expect(created()[0].data).toMatchObject({ id: signup.user_id, email: 'evented@test.com', email_verified: false });
+
+    // A second code for the same address resolves the existing user, so nothing was created.
+    await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email: 'evented@test.com' }) });
+    expect(created()).toHaveLength(1);
+  });
+
+  it('resolves an existing user case-insensitively instead of forking the account', async () => {
+    const first = await json(
+      await req('/user_management/magic_auth', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'Casing@Test.com' }),
+      }),
+    );
+    const second = await json(
+      await req('/user_management/magic_auth', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'casing@test.com' }),
+      }),
+    );
+
+    expect(second.user_id).toBe(first.user_id);
+    // Stored as first given — production preserves the case it was handed.
+    const users = getWorkOSStore(store).users.all();
+    expect(users).toHaveLength(1);
+    expect(users[0].email).toBe('Casing@Test.com');
+
+    // And the code is redeemable with the address it was requested for, not only the stored
+    // casing. Resolving the user case-insensitively while matching the code exactly would
+    // return a 201 carrying a code that this authenticate call could never spend.
+    const auth = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+        code: second.code,
+        email: 'casing@test.com',
+      }),
+    });
+    expect(auth.status).toBe(200);
+    expect((await json(auth)).user.id).toBe(first.user_id);
+  });
+
+  it('rejects an email that could only be a typo, rather than creating a ghost user', async () => {
+    for (const email of ['', '   ', 'not-an-email', 'a b@test.com', '@test.com', 'nope@']) {
+      const res = await req('/user_management/magic_auth', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+      expect(res.status).toBe(400);
+      expect((await json(res)).code).toBe('invalid_request');
+    }
+    expect(getWorkOSStore(store).users.all()).toHaveLength(0);
+  });
+
+  // Absent and malformed have the same fix only if the caller is told which one happened. `null`
+  // counts as absent — it is how a JSON body spells it, and both creation paths agree on that.
+  it('distinguishes a missing email from an unusable one', async () => {
+    for (const body of [{}, { email: null }]) {
+      const missing = await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify(body) });
+      expect(missing.status).toBe(400);
+      expect((await json(missing)).message).toBe('email is required');
+    }
+
+    const malformed = await req('/user_management/magic_auth', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'not-an-email' }),
+    });
+    expect((await json(malformed)).message).toBe('email must be a valid email address');
+  });
+
+  // Magic Auth stores the case it was handed, so every other way in has to resolve that way too
+  // — otherwise a sign-up creates an account the rest of the API cannot reach.
+  it('reaches a Magic Auth account by any casing of its address', async () => {
+    await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email: 'Mixed@Case.test' }) });
+    const user = getWorkOSStore(store).users.all()[0];
+    getWorkOSStore(store).users.update(user.id, { password_hash: hashPassword('correct horse') });
+
+    const password = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'mixed@case.test', password: 'correct horse' }),
+    });
+    expect(password.status).toBe(200);
+    expect((await json(password)).user.id).toBe(user.id);
+
+    const reset = await req('/user_management/password_reset', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'mixed@case.test' }),
+    });
+    expect(reset.status).toBe(201);
+  });
+
+  it('emits one user.updated per magic auth sign-in, and none for a no-op re-verify', async () => {
+    const ws = getWorkOSStore(store);
+    const countUpdates = () => ws.events.all().filter((e: { event: string }) => e.event === 'user.updated').length;
+
+    await signInWithMagicAuth('quiet@test.com');
+    const afterFirst = countUpdates();
+    // The sign-up login verifies the email (a real attribute change), which emits
+    // user.updated. last_sign_in_at rides along in the same write.
+    expect(afterFirst).toBe(1);
+
+    await signInWithMagicAuth('quiet@test.com');
+    // The second login only stamps last_sign_in_at, which production writes silently via
+    // updateWithSignIn (no user.updated); email_verified is already true. See #55.
+    expect(countUpdates()).toBe(1);
+  });
+
+  it('magic auth sign-up verifies the email and yields an org-less session', async () => {
+    const res = await signInWithMagicAuth('signup2@test.com');
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.user.email_verified).toBe(true);
+    expect(decodeJwt(body.access_token).org_id).toBeUndefined();
   });
 
   // --- Device code tests ---
@@ -1649,7 +2180,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ grant_type: 'password', email: 'evt-fail@test.com', password: 'wrong' }),
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
 
     const [event] = eventsNamed('authentication.password_failed');
     expect(event).toBeDefined();
@@ -1657,7 +2188,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       type: 'password',
       status: 'failed',
       email: 'evt-fail@test.com',
-      error: { code: 'invalid_credentials', message: 'Invalid credentials' },
+      error: { code: 'invalid_credentials', message: "Invalid credentials for 'evt-fail@test.com'." },
     });
   });
 
@@ -1693,7 +2224,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(event.data).toMatchObject({
       type: 'oauth',
       status: 'failed',
-      error: { code: 'invalid_code', message: 'Invalid code' },
+      error: { code: 'invalid_grant', message: "The code 'bogus' has expired or is invalid." },
     });
   });
 
@@ -1763,6 +2294,22 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(event).toBeDefined();
     expect(event.data).toMatchObject({ auth_method: 'password', status: 'active', ended_at: null });
     expect(event.data.expires_at).toBeTruthy();
+  });
+
+  it('sign-in stamps last_sign_in_at without emitting a spurious user.updated', async () => {
+    // Production's sign-in stamps last_sign_in_at via a dedicated, silent updateWithSignIn
+    // path — a raw DB write that bypasses the event-emitting update() — so a login fires
+    // session.created alone, not user.updated. See https://github.com/workos/emulate/issues/55.
+    await registerUser('evt-no-user-updated@test.com', 'secret');
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'evt-no-user-updated@test.com', password: 'secret' }),
+    });
+
+    expect(eventsNamed('session.created')).toHaveLength(1);
+    expect(eventsNamed('user.updated')).toHaveLength(0);
   });
 
   it('MFA session falls back to auth_method: unknown when the pending token records no mapped primary', async () => {

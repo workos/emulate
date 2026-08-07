@@ -1,6 +1,14 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatPasswordReset, generateVerificationToken, hashPassword, expiresIn, isExpired } from '../helpers.js';
+import {
+  formatPasswordReset,
+  generateVerificationToken,
+  hashPassword,
+  expiresIn,
+  isExpired,
+  findUserByEmail,
+  requireEmailString,
+} from '../helpers.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
 import type { EventBus } from '../event-bus.js';
 
@@ -16,12 +24,14 @@ export function passwordResetRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/password_reset', async (c) => {
     const body = await parseJsonBody(c);
-    const email = body.email as string | undefined;
+    const email = requireEmailString(body.email);
     if (!email) {
       throw new WorkOSApiError(400, 'email is required', 'invalid_request');
     }
 
-    const user = ws.users.findOneBy('email', email);
+    // Case-insensitively, like every other lookup by email: an account Magic Auth created as
+    // 'User@x.test' must not be unresettable by the address the caller actually has.
+    const user = findUserByEmail(ws, email);
     if (!user) throw notFound('User');
 
     const pr = ws.passwordResets.insert({

@@ -3,6 +3,20 @@
  */
 import type { WorkOSSeedConfig } from './index.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
+import { normalizeEmail, type NormalizedEmail } from './helpers.js';
+
+/**
+ * A seed is the one creation path that does not go through a route, so it is held to what the
+ * routes enforce: an address is trimmed and is shaped like an address. Anything looser and a seed
+ * is the remaining way to write a user under a spelling no lookup by email resolves — which is the
+ * state all of this exists to prevent.
+ *
+ * Returns the stored form, or the problem for the caller to word in its own terms: each site
+ * already says something more specific than "email" about what the address is for.
+ */
+function seedEmail(value: unknown): NormalizedEmail {
+  return normalizeEmail(value, { requireShape: true });
+}
 
 /**
  * A pinned id is addressed as a single path segment (`/organizations/:id`,
@@ -28,10 +42,17 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
   const errors: ConfigValidationError[] = [];
 
   // Seeded user ids are generated at insert time, so org memberships reference users
-  // by email — collect the emails defined in this config for cross-referencing.
+  // by email — collect the emails defined in this config for cross-referencing. Normalized the way
+  // the store resolves them: lowercased, because every lookup by email is case-insensitive, and
+  // trimmed, because that is the form seeding writes. A membership for 'a@x.test' names the user
+  // seeded as ' A@x.test ', and resolving it any other way would reject a reference the running
+  // emulator then honours.
   const userEmails = new Set(
     Array.isArray(config.users)
-      ? config.users.map((u) => u.email).filter((e): e is string => typeof e === 'string')
+      ? config.users
+          .map((u) => seedEmail(u.email))
+          .filter((r): r is { ok: true; email: string } => r.ok)
+          .map((r) => r.email.toLowerCase())
       : [],
   );
 
@@ -45,10 +66,17 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
       });
     } else {
       config.users.forEach((user, index) => {
-        if (!user.email || typeof user.email !== 'string') {
+        const email = seedEmail(user.email);
+        if (!email.ok) {
           errors.push({
             path: `users[${index}].email`,
-            message: 'email is required and must be a string',
+            message:
+              email.problem === 'malformed'
+                ? // Same standard as the two routes that create users: an address that could only
+                  // be a typo becomes an account nothing can reach, and a seed is the one creation
+                  // path with no route in front of it to say so.
+                  'email must be a valid email address'
+                : 'email is required and must be a string',
             value: user.email,
           });
         }
@@ -76,18 +104,23 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
       });
 
       // Email is the lookup key org memberships join on; duplicates would silently
-      // bind a membership to the first match.
+      // bind a membership to the first match. Compared case-insensitively, matching the
+      // uniqueness the API enforces: `POST /user_management/users` answers 409 for an address
+      // differing only in case, so a seed that got two through would be the one way left to
+      // manufacture the pair of accounts no lookup by email can tell apart.
       const seenEmails = new Set<string>();
       config.users.forEach((user, index) => {
-        if (!user.email || typeof user.email !== 'string') return;
-        if (seenEmails.has(user.email)) {
+        const email = seedEmail(user.email);
+        if (!email.ok) return;
+        const normalized = email.email.toLowerCase();
+        if (seenEmails.has(normalized)) {
           errors.push({
             path: `users[${index}].email`,
             message: 'email must be unique across users',
             value: user.email,
           });
         }
-        seenEmails.add(user.email);
+        seenEmails.add(normalized);
       });
 
       // A pinned user id is the primary key in the store; two users sharing one would
@@ -179,7 +212,8 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
               // The pre-rename key: it read as "pass a user_... id", which can never
               // resolve (ids are generated at startup) — point at `email` instead.
               const legacyUserId = (membership as { user_id?: unknown }).user_id;
-              if (!membership.email || typeof membership.email !== 'string') {
+              const memberEmail = seedEmail(membership.email);
+              if (!memberEmail.ok) {
                 if (legacyUserId !== undefined) {
                   errors.push({
                     path: `organizations[${index}].memberships[${mIndex}].user_id`,
@@ -190,11 +224,14 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
                 } else {
                   errors.push({
                     path: `organizations[${index}].memberships[${mIndex}].email`,
-                    message: 'email is required and must be the email of a user defined in users',
+                    message:
+                      memberEmail.problem === 'malformed'
+                        ? 'email must be a valid email address'
+                        : 'email is required and must be the email of a user defined in users',
                     value: membership.email,
                   });
                 }
-              } else if (!userEmails.has(membership.email)) {
+              } else if (!userEmails.has(memberEmail.email.toLowerCase())) {
                 // A dangling reference would seed a membership whose embedded user
                 // cannot resolve, which membership serialization rejects.
                 errors.push({
@@ -394,10 +431,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
       });
     } else {
       config.invitations.forEach((inv, index) => {
-        if (!inv.email || typeof inv.email !== 'string') {
+        const email = seedEmail(inv.email);
+        if (!email.ok) {
           errors.push({
             path: `invitations[${index}].email`,
-            message: 'email is required and must be a string',
+            message:
+              email.problem === 'malformed'
+                ? // As POST /user_management/invitations now answers: acceptance resolves the
+                  // recipient by this address, so a typo is an invitation that enrolls nobody.
+                  'email must be a valid email address'
+                : 'email is required and must be a string',
             value: inv.email,
           });
         }

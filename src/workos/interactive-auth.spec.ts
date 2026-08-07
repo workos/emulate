@@ -178,3 +178,28 @@ describe('Interactive Auth Mode', () => {
     expect(html).toContain(email);
   });
 });
+
+/**
+ * `store.reset()` drops every data entry, interactive mode's flag included, so the option has to
+ * be re-applied afterwards. Without that, reset() silently returned the emulator to serving
+ * redirects — the option stopped taking effect and nothing said so.
+ */
+describe('Interactive Auth Mode after reset()', () => {
+  it('keeps serving login pages', async () => {
+    const emulator = await createEmulator({ port: 0, interactiveAuth: true });
+    try {
+      const login = () =>
+        fetch(`${emulator.url}/user_management/authorize?redirect_uri=http://localhost:3000/callback`, {
+          redirect: 'manual',
+        });
+
+      expect((await login()).status).toBe(200);
+      emulator.reset();
+      const after = await login();
+      expect(after.status).toBe(200);
+      expect(after.headers.get('content-type')).toContain('text/html');
+    } finally {
+      await emulator.close();
+    }
+  });
+});

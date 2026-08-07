@@ -7,7 +7,15 @@ import {
   parseListParams,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatUser, formatIdentity, hashPassword, formatListResponse } from '../helpers.js';
+import {
+  formatUser,
+  formatIdentity,
+  hashPassword,
+  formatListResponse,
+  findUserByEmail,
+  emailsMatch,
+  requireEmailField,
+} from '../helpers.js';
 
 export function userRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -15,12 +23,18 @@ export function userRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/users', async (c) => {
     const body = await parseJsonBody(c);
-    const email = body.email as string | undefined;
-    if (!email) {
-      throw validationError('email is required', [{ field: 'email', code: 'required' }]);
-    }
+    // The same guard the magic auth handler applies, for the same reason: this route creates
+    // users, and an address that could only be a typo becomes an account nothing can reach.
+    // Holding the two paths to one standard is what stops `{email: 'nope'}` being a 422 on one
+    // and a 201 on the other — shared rather than restated, since a second copy is how the two
+    // drifted over `null` in the first place.
+    const email = requireEmailField(body.email, { requireShape: true });
 
-    const existing = ws.users.findOneBy('email', email);
+    // Case-insensitively, for the same reason the magic auth handler resolves that way: an
+    // exact-match miss on 'User@x.test' vs 'user@x.test' let both be created, and then the two
+    // creation paths disagreed about which account an address names — with magic auth resolving
+    // the ambiguity by insertion order.
+    const existing = findUserByEmail(ws, email);
     if (existing) {
       throw new WorkOSApiError(409, 'A user with this email already exists', 'user_already_exists');
     }
@@ -63,7 +77,10 @@ export function userRoutes(ctx: RouteContext): void {
     const result = ws.users.list({
       ...params,
       filter: (user) => {
-        if (emailFilter && user.email !== emailFilter) return false;
+        // Case-insensitively, like every other lookup by email. This is the lookup an SDK's
+        // listUsers({ email }) reaches for, so it is how a caller finds the account a Magic Auth
+        // sign-up just made — and that account is stored under whatever case created it.
+        if (emailFilter && !emailsMatch(user.email, emailFilter)) return false;
         if (orgUserIds && !orgUserIds.has(user.id)) return false;
         return true;
       },

@@ -45,6 +45,34 @@ describe('Password reset routes', () => {
     return { user, reset };
   }
 
+  // Resolving the account case-insensitively means lowercasing the address, so a type-asserted
+  // non-string reached `.toLowerCase()` and this came back a 500 rather than a named 400.
+  it('rejects a non-string email with 400, not 500', async () => {
+    const res = await req('/user_management/password_reset', {
+      method: 'POST',
+      body: JSON.stringify({ email: 123 }),
+    });
+    expect(res.status).toBe(400);
+    expect((await json(res)).message).toBe('email must be a string');
+  });
+
+  it('still reports an absent email as absent', async () => {
+    const res = await req('/user_management/password_reset', { method: 'POST', body: JSON.stringify({}) });
+    expect(res.status).toBe(400);
+    expect((await json(res)).message).toBe('email is required');
+  });
+
+  it('resolves the account by any casing of its address', async () => {
+    await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'Mixed@Reset.test' }) });
+    const res = await req('/user_management/password_reset', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'mixed@reset.test' }),
+    });
+    expect(res.status).toBe(201);
+    // The reset is recorded against the stored casing, not the one the caller sent.
+    expect((await json(res)).email).toBe('Mixed@Reset.test');
+  });
+
   it('emits password_reset.created when a reset is requested', async () => {
     const { user } = await createUserAndRequestReset();
 

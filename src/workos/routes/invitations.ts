@@ -1,11 +1,4 @@
-import {
-  type RouteContext,
-  notFound,
-  validationError,
-  parseJsonBody,
-  WorkOSApiError,
-  parseListParams,
-} from '../../core/index.js';
+import { type RouteContext, notFound, parseJsonBody, WorkOSApiError, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatInvitation,
@@ -13,6 +6,9 @@ import {
   expiresIn,
   formatListResponse,
   acceptInvitation,
+  findUserByEmail,
+  emailsMatch,
+  requireEmailField,
 } from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
@@ -23,10 +19,13 @@ export function invitationRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/invitations', async (c) => {
     const body = await parseJsonBody(c);
-    const email = body.email as string | undefined;
-    if (!email) {
-      throw validationError('email is required', [{ field: 'email', code: 'required' }]);
-    }
+    // The same guard the two user-creation routes apply, for a related reason. Accepting a
+    // non-string here used to be survivable because everything downstream compared the address
+    // with `!==`; resolving the recipient case-insensitively means calling `toLowerCase` on it,
+    // so a stored number turned both the email filter and accepting the invitation into a 500.
+    // And an address that could only be a typo makes an invitation nobody can accept: acceptance
+    // resolves a user by this email, so a typo is spent silently, enrolling no one.
+    const email = requireEmailField(body.email, { requireShape: true });
 
     const token = generateVerificationToken();
     const inv = ws.invitations.insert({
@@ -53,7 +52,8 @@ export function invitationRoutes(ctx: RouteContext): void {
     const result = ws.invitations.list({
       ...params,
       filter: (inv) => {
-        if (emailFilter && inv.email !== emailFilter) return false;
+        // Case-insensitively, like every other lookup by email.
+        if (emailFilter && !emailsMatch(inv.email, emailFilter)) return false;
         if (orgFilter && inv.organization_id !== orgFilter) return false;
         return true;
       },
@@ -82,7 +82,11 @@ export function invitationRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, `Invitation is ${inv.state}`, 'invalid_invitation_state');
     }
 
-    acceptInvitation(inv, ws.users.findOneBy('email', inv.email), ws, store.getData<EventBus>(STORE_KEYS.eventBus));
+    // Case-insensitively: an exact match here enrolled nobody for an account stored under a
+    // different case, spending the invitation and emitting invitation.accepted with no membership
+    // to show for it. The authenticate flow already compares the two addresses this way, and Magic
+    // Auth sign-up makes accounts under whatever case the caller sent.
+    acceptInvitation(inv, findUserByEmail(ws, inv.email), ws, store.getData<EventBus>(STORE_KEYS.eventBus));
 
     const updated = ws.invitations.get(inv.id)!;
     return c.json(formatInvitation(updated));
