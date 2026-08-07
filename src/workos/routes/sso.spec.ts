@@ -374,14 +374,96 @@ describe('SSO authentication events', () => {
       body: JSON.stringify({ grant_type: 'authorization_code', code: 'sso_bogus' }),
     });
     expect(res.status).toBe(400);
+    // The response is OAuth-shaped, but the event's error object keeps the spec's
+    // {code, message} — OauthApiError reuses those fields, so both stay correct.
+    expect(await res.json()).toEqual({
+      error: 'invalid_grant',
+      error_description: "The code 'sso_bogus' has expired or is invalid.",
+    });
 
     const [event] = eventsNamed('authentication.sso_failed');
     expect(event).toBeDefined();
     expect(event.data).toMatchObject({
       type: 'sso',
       status: 'failed',
-      error: { code: 'invalid_code', message: 'Invalid authorization code' },
+      error: { code: 'invalid_grant', message: "The code 'sso_bogus' has expired or is invalid." },
       sso: { organization_id: null, connection_id: null, session_id: null },
     });
+  });
+
+  // The expired branch is not the invalid one with a different label: it resolves the profile
+  // behind the code first, so the event it emits carries the organization and connection the
+  // unknown-code event has to leave null. Both still answer the caller the same OAuth-shaped
+  // invalid_grant, because production does not distinguish aged-out from never-existed.
+  it('emits authentication.sso_failed with the profile’s org and connection for an expired code', async () => {
+    const { org, conn } = await createOrgWithConnection();
+
+    const authRes = await app.request(
+      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    const ws = getWorkOSStore(store);
+    const stored = ws.ssoAuthorizations.findOneBy('code', code)!;
+    ws.ssoAuthorizations.update(stored.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    const res = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'invalid_grant',
+      error_description: `The code '${code}' has expired or is invalid.`,
+    });
+
+    const [event] = eventsNamed('authentication.sso_failed');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'sso',
+      status: 'failed',
+      error: { code: 'invalid_grant', message: `The code '${code}' has expired or is invalid.` },
+      sso: { organization_id: org.id, connection_id: conn.id, session_id: null },
+    });
+
+    // Spent, unlike the unknown-code path — there was a real authorization to consume.
+    expect(ws.ssoAuthorizations.findOneBy('code', code)).toBeUndefined();
+  });
+
+  // Every /sso/token failure a caller can cause is OAuth-shaped, including the two they hit
+  // before they have a code to present. The only plain body the endpoint can return is the
+  // profile-missing 500, which no request can provoke.
+  it('rejects a wrong grant type and a missing code OAuth-style', async () => {
+    const wrongGrant = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'client_credentials', code: 'whatever' }),
+    });
+    expect(wrongGrant.status).toBe(400);
+    expect(await wrongGrant.json()).toEqual({
+      error: 'unsupported_grant_type',
+      error_description: 'The grant type is not supported: client_credentials',
+    });
+
+    const noCode = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code' }),
+    });
+    expect(noCode.status).toBe(400);
+    expect(await noCode.json()).toEqual({ error: 'invalid_request', error_description: 'code is required.' });
+  });
+
+  // Absent is a malformed request, not a request for an unsupported grant — and describing it as
+  // "not supported: undefined" names neither the problem nor anything the caller sent.
+  it('reports an omitted grant type as invalid_request, not unsupported_grant_type', async () => {
+    const res = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'whatever' }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_request', error_description: 'grant_type is required.' });
   });
 });

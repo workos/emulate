@@ -4,6 +4,7 @@ import {
   notFound,
   parseJsonBody,
   WorkOSApiError,
+  OauthApiError,
   generateId,
   generateUlid,
 } from '../../core/index.js';
@@ -15,7 +16,7 @@ import {
   verifyPassword,
   isExpired,
   expiresIn,
-  assertLocalRedirectUri,
+  assertAllowedRedirectUri,
   sealSession,
   AUTH_METHOD_SESSION_VALUES,
   resolveResponseAuthMethod,
@@ -70,7 +71,7 @@ export function authRoutes(ctx: RouteContext): void {
   function resolveAndRedirect(c: any, params: AuthorizeParams) {
     const { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint, clientId } = params;
 
-    assertLocalRedirectUri(redirectUri);
+    assertAllowedRedirectUri(redirectUri, store);
 
     let user;
     if (loginHint) {
@@ -124,6 +125,11 @@ export function authRoutes(ctx: RouteContext): void {
     if (!redirectUri) {
       throw new WorkOSApiError(400, 'redirect_uri is required', 'invalid_request');
     }
+
+    // Checked before the interactive branch, which renders the redirect_uri into a hidden field
+    // and defers every check to the POST. A host the emulator will not redirect to should fail
+    // here, not after someone has filled the form in.
+    assertAllowedRedirectUri(redirectUri, store);
 
     const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
     if (interactive) {
@@ -195,8 +201,13 @@ export function authRoutes(ctx: RouteContext): void {
     const clientId = body.client_id as string | undefined;
     const clientSecret = body.client_secret as string | undefined;
 
+    // Every malformed-request failure on this endpoint is OAuth-shaped, and not by inference:
+    // the spec's authenticate 400 lists `invalid_request` among its {error, error_description}
+    // variants and nowhere among its {code, message} ones. So the shape here is decided by the
+    // *failure*, not only by the grant — a grant whose credential failures are plain
+    // (`password`, Magic Auth) still reports a missing parameter OAuth-style.
     if (!grantType) {
-      throw new WorkOSApiError(400, 'grant_type is required', 'invalid_request');
+      throw new OauthApiError(400, 'invalid_request', 'grant_type is required.');
     }
 
     const requestIp = c.req.header('x-forwarded-for') ?? null;
@@ -302,22 +313,30 @@ export function authRoutes(ctx: RouteContext): void {
     switch (grantType) {
       case 'authorization_code': {
         const code = body.code as string;
-        if (!code) throw new WorkOSApiError(400, 'code is required', 'invalid_request');
+        if (!code) throw new OauthApiError(400, 'invalid_request', 'code is required.');
 
+        // Production does not distinguish unknown from expired codes: both fail OAuth-style
+        // as invalid_grant with the same description.
         const authCode = ws.authCodes.findOneBy('code', code);
-        if (!authCode) failAuth('OAuth', {}, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
+        if (!authCode) {
+          failAuth(
+            'OAuth',
+            {},
+            new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
+          );
+        }
         if (isExpired(authCode.expires_at)) {
           failAuth(
             'OAuth',
             { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },
-            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+            new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
           );
         }
 
         if (authCode.code_challenge) {
           const codeVerifier = body.code_verifier as string;
           if (!codeVerifier) {
-            throw new WorkOSApiError(400, 'code_verifier is required', 'invalid_request');
+            throw new OauthApiError(400, 'invalid_request', 'code_verifier is required.');
           }
           const method = authCode.code_challenge_method ?? 'S256';
           let challenge: string;
@@ -327,15 +346,34 @@ export function authRoutes(ctx: RouteContext): void {
             challenge = codeVerifier;
           }
           if (challenge !== authCode.code_challenge) {
+            // A failed verifier is a failure of the authorization_code grant, so it fails the
+            // same OAuth-style way an unknown code does (RFC 7636 §4.6). Leaving it plain put
+            // the shape of a failure at odds with the reason for it, on the one path every
+            // PKCE client takes. The spec does enumerate `invalid_grant` for authenticate, as
+            // an {error, error_description} variant, so this is not inference from RFC alone.
             failAuth(
               'OAuth',
               { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },
-              new WorkOSApiError(400, 'Invalid code_verifier', 'invalid_code_verifier'),
+              new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
             );
           }
         }
 
         user = ws.users.get(authCode.user_id);
+        // The third grant to need this guard, and the one an AuthKit callback actually takes:
+        // deleting a user leaves its authorization codes behind (only sessions, memberships,
+        // factors, identities, password resets, email verifications and magic auths cascade),
+        // so a code can outlive its user. Without it the shared lookup below answers with a 404
+        // the spec shapes as a bare {message} — no `error` for the client that is matching on
+        // invalid_grant, and no authentication.oauth_failed event either. Thrown before the
+        // delete, so a failure the caller cannot fix does not also cost them the code.
+        if (!user) {
+          failAuth(
+            'OAuth',
+            { userId: authCode.user_id },
+            new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
+          );
+        }
         organizationId = authCode.organization_id;
         // Bind the token's client_id to the authorization grant, not the unvalidated
         // redemption-time request parameter.
@@ -349,15 +387,21 @@ export function authRoutes(ctx: RouteContext): void {
         const email = requireEmailString(body.email);
         const password = body.password as string;
         if (!email || !password) {
-          throw new WorkOSApiError(400, 'email and password are required', 'invalid_request');
+          throw new OauthApiError(400, 'invalid_request', 'email and password are required.');
         }
 
         user = findUserByEmail(ws, email);
         if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
+          // Verified live: 400 (not 401) with the email interpolated. `password` is an RFC 6749
+          // grant that nonetheless fails with the plain shape, which is why the credential
+          // failures rendered OAuth-style are an explicit allowlist — authorization_code,
+          // refresh_token, device_code — rather than "standard grants fail OAuth-style". The
+          // malformed-request failure just above is a different question, and the spec answers
+          // it the other way for every grant.
           failAuth(
             'Password',
             { email, userId: user?.id },
-            new WorkOSApiError(401, 'Invalid credentials', 'invalid_credentials'),
+            new WorkOSApiError(400, `Invalid credentials for '${email}'.`, 'invalid_credentials'),
           );
         }
         authMethod = 'Password';
@@ -377,7 +421,7 @@ export function authRoutes(ctx: RouteContext): void {
         const code = body.code as string;
         const email = requireEmailString(body.email);
         if (!code || !email) {
-          throw new WorkOSApiError(400, 'code and email are required', 'invalid_request');
+          throw new OauthApiError(400, 'invalid_request', 'code and email are required.');
         }
 
         // Case-insensitively, because code creation resolves the user that way: a code requested
@@ -386,13 +430,13 @@ export function authRoutes(ctx: RouteContext): void {
         // could never redeem.
         const magicAuth = ws.magicAuths.all().find((ma) => ma.code === code && emailsMatch(ma.email, email));
         if (!magicAuth) {
-          failAuth('MagicAuth', { email }, new WorkOSApiError(400, 'Invalid code', 'invalid_code'));
+          failAuth('MagicAuth', { email }, new WorkOSApiError(400, 'Invalid one-time code', 'invalid_one_time_code'));
         }
         if (isExpired(magicAuth.expires_at)) {
           failAuth(
             'MagicAuth',
             { email: magicAuth.email, userId: magicAuth.user_id },
-            new WorkOSApiError(400, 'Code has expired', 'expired_code'),
+            new WorkOSApiError(400, `One-time code for '${magicAuth.email}' has expired.`, 'one_time_code_expired'),
           );
         }
 
@@ -408,7 +452,7 @@ export function authRoutes(ctx: RouteContext): void {
         const code = body.code as string;
         const userId = body.user_id as string;
         if (!code || !userId) {
-          throw new WorkOSApiError(400, 'code and user_id are required', 'invalid_request');
+          throw new OauthApiError(400, 'invalid_request', 'code and user_id are required.');
         }
 
         const ev = ws.emailVerifications.findBy('user_id', userId).find((v) => v.code === code);
@@ -437,19 +481,24 @@ export function authRoutes(ctx: RouteContext): void {
       case 'refresh_token': {
         const token = body.refresh_token as string;
         if (!token) {
-          throw new WorkOSApiError(400, 'refresh_token is required', 'invalid_request');
+          throw new OauthApiError(400, 'invalid_request', 'refresh_token is required.');
         }
 
         const refreshToken = ws.refreshTokens.findOneBy('token', token);
         if (!refreshToken) {
-          throw new WorkOSApiError(400, 'Invalid refresh token', 'invalid_grant');
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
         }
         if (isExpired(refreshToken.expires_at)) {
           ws.refreshTokens.delete(refreshToken.id);
-          throw new WorkOSApiError(400, 'Refresh token has expired', 'invalid_grant');
+          throw new OauthApiError(400, 'invalid_grant', 'Refresh token has expired.');
         }
 
         user = ws.users.get(refreshToken.user_id);
+        // A token whose user was deleted is as invalid as an unknown one — verified live;
+        // without this the shared lookup below would answer with a plain 404.
+        if (!user) {
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
+        }
         // Allow body.organization_id to switch org context (switchToOrganization)
         organizationId = (body.organization_id as string) ?? refreshToken.organization_id;
 
@@ -470,10 +519,10 @@ export function authRoutes(ctx: RouteContext): void {
         const challengeId = body.authentication_challenge_id as string;
 
         if (!code || !pendingToken || !challengeId) {
-          throw new WorkOSApiError(
+          throw new OauthApiError(
             400,
-            'code, pending_authentication_token, and authentication_challenge_id are required',
             'invalid_request',
+            'code, pending_authentication_token, and authentication_challenge_id are required.',
           );
         }
 
@@ -484,7 +533,7 @@ export function authRoutes(ctx: RouteContext): void {
 
         const challenge = ws.authChallenges.get(challengeId);
         if (!challenge) {
-          throw new WorkOSApiError(400, 'Invalid authentication challenge', 'invalid_request');
+          throw new OauthApiError(400, 'invalid_request', 'Invalid authentication challenge.');
         }
         if (isExpired(challenge.expires_at)) {
           ws.authChallenges.delete(challenge.id);
@@ -529,10 +578,10 @@ export function authRoutes(ctx: RouteContext): void {
         const orgId = body.organization_id as string;
 
         if (!pendingToken || !orgId) {
-          throw new WorkOSApiError(
+          throw new OauthApiError(
             400,
-            'pending_authentication_token and organization_id are required',
             'invalid_request',
+            'pending_authentication_token and organization_id are required.',
           );
         }
 
@@ -575,29 +624,50 @@ export function authRoutes(ctx: RouteContext): void {
       case 'urn:ietf:params:oauth:grant-type:device_code': {
         const deviceCode = body.device_code as string;
         if (!deviceCode) {
-          throw new WorkOSApiError(400, 'device_code is required', 'invalid_request');
+          throw new OauthApiError(400, 'invalid_request', 'device_code is required.');
         }
 
+        // The spec renders every device-flow code as {error, error_description}, so the three
+        // this endpoint can reach — invalid_grant, expired_token, authorization_pending — are
+        // rendered that way. (The spec also defines slow_down and access_denied; the emulator
+        // never emits them, having no polling-interval or user-denial surface.) These previously
+        // used the plain envelope while already carrying OAuth error codes, so a polling client
+        // matching `error` saw nothing and one matching `code` worked: the exact inverse of
+        // every other grant here.
         const deviceAuth = ws.deviceAuthorizations.findOneBy('device_code', deviceCode);
         if (!deviceAuth) {
-          throw new WorkOSApiError(400, 'Invalid device code', 'invalid_grant');
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid device code.');
         }
         if (isExpired(deviceAuth.expires_at)) {
           ws.deviceAuthorizations.delete(deviceAuth.id);
-          throw new WorkOSApiError(400, 'Device code has expired', 'expired_token');
+          throw new OauthApiError(400, 'expired_token', 'The device code has expired.');
         }
         if (!deviceAuth.user_id) {
-          throw new WorkOSApiError(400, 'Authorization pending', 'authorization_pending');
+          throw new OauthApiError(400, 'authorization_pending', 'The authorization request is still pending.');
         }
 
         user = ws.users.get(deviceAuth.user_id);
+        // Mirrors the refresh_token guard: an approved code whose user was deleted is as invalid
+        // as an unknown one, and without this the shared lookup below answers a polling client
+        // with a plain 404 — the one shape this endpoint otherwise never returns, on the grant
+        // whose whole contract is that the client reads `error` to decide whether to keep going.
+        // Thrown before the delete, so nothing is consumed on a failure the caller cannot fix.
+        if (!user) {
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid device code.');
+        }
         ws.deviceAuthorizations.delete(deviceAuth.id);
         authMethod = 'OAuth';
         break;
       }
 
+      // `unsupported_grant_type` appears exactly once in the spec, under /sso/token, and nowhere
+      // in authenticate's 400 — which does list `invalid_request`. The asymmetry reads as real
+      // rather than an omission: authenticate's body is a oneOf discriminated on grant_type, so
+      // an unrecognized one fails body validation rather than reaching a grant handler that could
+      // decline it. Keeping the code the spec gives us, and saying what it means in the
+      // description instead of naming a code the endpoint never returns.
       default:
-        throw new WorkOSApiError(400, `Unsupported grant_type: ${grantType}`, 'invalid_request');
+        throw new OauthApiError(400, 'invalid_request', `The grant type is not supported: ${grantType}`);
     }
 
     if (!user) throw notFound('User');
@@ -712,7 +782,7 @@ export function authRoutes(ctx: RouteContext): void {
       });
     } else {
       const existing = refreshSessionId ? ws.sessions.get(refreshSessionId) : undefined;
-      if (!existing) throw new WorkOSApiError(400, 'Invalid refresh token', 'invalid_grant');
+      if (!existing) throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
       session = existing;
     }
     const updatedUser = ws.users.get(user.id)!;

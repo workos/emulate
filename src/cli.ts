@@ -15,6 +15,7 @@ interface CliArgs {
   signingKey?: string;
   kid?: string;
   issuer?: string;
+  redirectHosts?: string[];
   json: boolean;
   help: boolean;
   version: boolean;
@@ -48,6 +49,11 @@ Options:
                       every restart. Pin it to keep the JWKS stable.
   --kid <id>          Key id to advertise in the JWKS (default: derived from the key)
   --issuer <url>      Value to mint as the "iss" claim (default: the emulator's own URL)
+  --redirect-hosts <hosts>
+                      Comma-separated hosts a redirect_uri may point at, on top of localhost
+                      (always allowed). Use for test environments with production-like
+                      hostnames. Accepts subdomain wildcards ("*.example.test") and "*" to
+                      allow any host. Repeatable.
   --interactive, -i   Show login pages for SSO/AuthKit (for E2E browser testing)
   --validate-config   Validate seed config file without starting server
   --json              Print startup details as JSON
@@ -58,6 +64,7 @@ Environment:
   WORKOS_EMULATE_SIGNING_KEY=<path>     Same as --signing-key
   WORKOS_EMULATE_KID=<id>               Same as --kid
   WORKOS_EMULATE_ISSUER=<url>           Same as --issuer
+  WORKOS_EMULATE_REDIRECT_HOSTS=<hosts> Same as --redirect-hosts
   NO_UPDATE_NOTIFIER=1                  Disable update checks
   WORKOS_EMULATE_DISABLE_UPDATE_CHECK=1 Disable update checks
 `);
@@ -129,6 +136,20 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
+    if (arg === '--redirect-hosts' || arg.startsWith('--redirect-hosts=')) {
+      const value = arg === '--redirect-hosts' ? argv[++i] : arg.slice('--redirect-hosts='.length);
+      if (!value) throw new Error('--redirect-hosts requires a value');
+      // Repeatable, and each occurrence may itself be a comma-separated list.
+      const hosts = splitHosts(value);
+      // A value that contributes no entries (',' or '  ') would leave an empty array, which is
+      // not nullish — so it would also discard WORKOS_EMULATE_REDIRECT_HOSTS on the way past.
+      // Two silent no-ops for the price of one, from a flag that was clearly meant to configure
+      // something.
+      if (hosts.length === 0) throw new Error('--redirect-hosts requires at least one host');
+      parsed.redirectHosts = [...(parsed.redirectHosts ?? []), ...hosts];
+      continue;
+    }
+
     if (arg === '--seed' || arg === '-s') {
       const value = argv[++i];
       if (!value) throw new Error(`${arg} requires a value`);
@@ -154,6 +175,13 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   return parsed;
+}
+
+function splitHosts(value: string): string[] {
+  return value
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host !== '');
 }
 
 function parsePort(value: string): number {
@@ -242,6 +270,7 @@ async function main(): Promise<void> {
   const signingKeyPath = argv.signingKey ?? process.env.WORKOS_EMULATE_SIGNING_KEY;
   const kid = argv.kid ?? process.env.WORKOS_EMULATE_KID;
   const issuer = argv.issuer ?? process.env.WORKOS_EMULATE_ISSUER;
+  const allowedRedirectHosts = argv.redirectHosts ?? splitHosts(process.env.WORKOS_EMULATE_REDIRECT_HOSTS ?? '');
 
   const emulator = await createEmulator({
     port: argv.port,
@@ -249,6 +278,7 @@ async function main(): Promise<void> {
     seed: seedConfig,
     issuer,
     signingKey: signingKeyPath || kid ? { privateKey: readSigningKey(signingKeyPath), kid } : undefined,
+    allowedRedirectHosts,
     interactiveAuth: argv.interactive,
   });
 

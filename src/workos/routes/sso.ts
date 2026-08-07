@@ -1,11 +1,11 @@
 import type { Context } from 'hono';
-import { type RouteContext, parseJsonBody, WorkOSApiError, generateId } from '../../core/index.js';
+import { type RouteContext, parseJsonBody, WorkOSApiError, OauthApiError, generateId } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatSSOProfile,
   expiresIn,
   isExpired,
-  assertLocalRedirectUri,
+  assertAllowedRedirectUri,
   emitAuthenticationEvent,
   findUserByEmail,
   emailsMatch,
@@ -31,7 +31,7 @@ export function ssoRoutes(ctx: RouteContext): void {
   function resolveAndRedirect(c: any, params: SSOAuthorizeParams) {
     const { redirectUri, state, connectionId, organizationId, domainHint, email: loginHint } = params;
 
-    assertLocalRedirectUri(redirectUri);
+    assertAllowedRedirectUri(redirectUri, store);
 
     let connection: WorkOSConnection | undefined;
 
@@ -100,6 +100,11 @@ export function ssoRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, 'Missing required parameter: redirect_uri', 'invalid_request');
     }
 
+    // Checked before the interactive branch, which renders the redirect_uri into a hidden field
+    // and defers every check to the POST. A host the emulator will not redirect to should fail
+    // here, not after someone has filled the form in.
+    assertAllowedRedirectUri(redirectUri, store);
+
     const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
     if (interactive) {
       const hiddenFields: Record<string, string> = { redirect_uri: redirectUri };
@@ -148,19 +153,32 @@ export function ssoRoutes(ctx: RouteContext): void {
 
   app.post('/sso/token', async (c) => {
     const body = await parseJsonBody(c);
-    const grantType = body.grant_type as string;
+    const grantType = body.grant_type as string | undefined;
     const code = body.code as string;
 
+    // The spec gives /sso/token only OAuth-shaped 400s — invalid_client, unauthorized_client,
+    // invalid_grant, unsupported_grant_type — so every failure a caller can cause below is
+    // rendered that way, including the missing-parameter cases the spec leaves out and RFC 6749
+    // §5.2 names invalid_request. A plain envelope there would have made the failures a client
+    // hits before it has a code the ones it cannot parse like the rest. What a caller cannot
+    // cause is the profile-missing 500 further down, which stays plain and says why there.
+    //
+    // Absent and wrong are different failures: an omitted grant_type is a malformed request,
+    // not a request for a grant this endpoint declines to support, and reporting it as
+    // "not supported: undefined" describes neither.
+    if (!grantType) {
+      throw new OauthApiError(400, 'invalid_request', 'grant_type is required.');
+    }
     if (grantType !== 'authorization_code') {
-      throw new WorkOSApiError(400, 'Unsupported grant_type', 'invalid_request');
+      throw new OauthApiError(400, 'unsupported_grant_type', `The grant type is not supported: ${grantType}`);
     }
     if (!code) {
-      throw new WorkOSApiError(400, 'code is required', 'invalid_request');
+      throw new OauthApiError(400, 'invalid_request', 'code is required.');
     }
 
     const auth = ws.ssoAuthorizations.findOneBy('code', code);
     if (!auth) {
-      const error = new WorkOSApiError(400, 'Invalid authorization code', 'invalid_code');
+      const error = new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`);
       emitAuthenticationEvent({
         eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
         method: 'SSO',
@@ -179,7 +197,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     if (isExpired(auth.expires_at)) {
       ws.ssoAuthorizations.delete(auth.id);
       const expiredProfile = ws.ssoProfiles.get(auth.profile_id);
-      const error = new WorkOSApiError(400, 'Authorization code has expired', 'expired_code');
+      const error = new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`);
       emitAuthenticationEvent({
         eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
         method: 'SSO',
@@ -199,6 +217,11 @@ export function ssoRoutes(ctx: RouteContext): void {
     }
 
     const profile = ws.ssoProfiles.get(auth.profile_id);
+    // The deliberate exception to the OAuth-shaped rule above, and the reason it says every
+    // *failure a caller can cause*: a stored authorization pointing at a profile that no longer
+    // exists is emulator state gone wrong, not a request anyone can fix by sending something
+    // else. RFC 6749 §5.2's code list covers client errors only — it has no entry to render this
+    // as — so it stays plain, like every other 500 the emulator returns.
     if (!profile) {
       throw new WorkOSApiError(500, 'Profile not found', 'server_error');
     }

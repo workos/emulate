@@ -19,6 +19,7 @@ export { createServer, type ServerOptions } from './server.js';
 export { type ServicePlugin, type RouteContext } from './plugin.js';
 export {
   WorkOSApiError,
+  OauthApiError,
   createApiErrorHandler,
   requestIdMiddleware,
   notFound,

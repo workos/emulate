@@ -1,6 +1,6 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatSession, assertLocalRedirectUri } from '../helpers.js';
+import { formatSession, assertAllowedRedirectUri } from '../helpers.js';
 
 export function sessionRoutes(ctx: RouteContext): void {
   const { app, store, jwt } = ctx;
@@ -51,8 +51,11 @@ export function sessionRoutes(ctx: RouteContext): void {
     }
 
     if (returnTo) {
-      assertLocalRedirectUri(returnTo);
-      return c.redirect(returnTo);
+      assertAllowedRedirectUri(returnTo, store);
+      // Re-serialized rather than echoed, the way the authorize endpoints already emit theirs. A
+      // space is a legal `return_to` character (`searchParams.get` decodes a raw `+` into one) but
+      // not a legal `Location` one, so the raw string would put an unencoded space in the header.
+      return c.redirect(new URL(returnTo).toString());
     }
     return c.json({ success: true });
   });

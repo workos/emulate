@@ -11,6 +11,7 @@ import {
 } from './core/index.js';
 import { workosPlugin, seedFromConfig, type WorkOSSeedConfig } from './workos/index.js';
 import { STORE_KEYS } from './workos/constants.js';
+import { normalizeRedirectHosts } from './workos/helpers.js';
 import { serve } from '@hono/node-server';
 import { parseJsonBody } from './core/index.js';
 
@@ -64,6 +65,14 @@ export interface EmulatorOptions {
    * or to pre-sign tokens offline with the same key the emulator verifies.
    */
   signingKey?: SigningKeyOptions;
+  /**
+   * Extra hosts a `redirect_uri` (or a session logout `return_to`) may point at. The emulator
+   * refuses to redirect anywhere else so it cannot be used as an open redirect; `localhost`,
+   * `127.0.0.1` and `[::1]` are always allowed. Add the production-like hostnames your test
+   * environment fakes — `['app.example.test']` — or a subdomain wildcard
+   * (`['*.example.test']`). `['*']` allows any host, which turns the check off entirely.
+   */
+  allowedRedirectHosts?: string[];
   interactiveAuth?: boolean;
   webhookRetryConfig?: {
     maxRetries?: number;
@@ -115,17 +124,19 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     signingKey: options.signingKey,
   });
 
-  if (options.interactiveAuth) {
-    store.setData(STORE_KEYS.interactiveAuth, true);
-  }
+  // Normalized here so a malformed host fails at startup instead of never matching a request.
+  const allowedRedirectHosts = normalizeRedirectHosts(options.allowedRedirectHosts ?? []);
 
-  if (options.webhookRetryConfig) {
-    store.setData('webhookRetryConfig', options.webhookRetryConfig);
-  }
-
-  if (options.webhookDebugMode) {
-    store.setData('webhookDebugMode', true);
-  }
+  // store.reset() drops every data entry, so anything set from `options` has to be re-applied
+  // from reset() as well. Kept in one place because the failure is silent otherwise: an option
+  // set here and not restored there simply stops taking effect after the first reset.
+  const applyOptionData = () => {
+    if (options.interactiveAuth) store.setData(STORE_KEYS.interactiveAuth, true);
+    if (allowedRedirectHosts.length > 0) store.setData(STORE_KEYS.allowedRedirectHosts, allowedRedirectHosts);
+    if (options.webhookRetryConfig) store.setData('webhookRetryConfig', options.webhookRetryConfig);
+    if (options.webhookDebugMode) store.setData('webhookDebugMode', true);
+  };
+  applyOptionData();
 
   // Health check endpoint
   app.get('/health', (c) => c.json({ status: 'ok' }));
@@ -225,6 +236,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
       for (const key of Object.keys(apiKeys)) delete apiKeys[key];
       Object.assign(apiKeys, initialApiKeys);
       store.setData(STORE_KEYS.apiKeyMap, apiKeys);
+      applyOptionData();
       seedFn();
       // Note: EventBus is not re-registered after reset because Hono's router
       // cannot be modified after it's built. Route-level authentication events
