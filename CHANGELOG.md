@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0](https://github.com/workos/emulate/compare/v0.6.0...v0.7.0) (2026-08-07)
+
+
+### Features
+
+* **groups:** add AuthKit Groups support ([#60](https://github.com/workos/emulate/issues/60)) ([06c1a7f](https://github.com/workos/emulate/commit/06c1a7face47cb6f7d0977c7ae9e9689c2ec97d7))
+* **redirects:** make allowed redirect hosts configurable ([#54](https://github.com/workos/emulate/issues/54)) ([363ef25](https://github.com/workos/emulate/commit/363ef253f605d7150d55f234b2d0d4c37b3221e9))
+
+
+### Bug Fixes
+
+* **auth:** make last_sign_in_at stamp silent on sign-in ([#59](https://github.com/workos/emulate/issues/59)) ([4623a63](https://github.com/workos/emulate/commit/4623a638297538e4d49971182be45023fd875433))
+* **auth:** match production's authenticate failure shape per grant ([#53](https://github.com/workos/emulate/issues/53)) ([9028c0a](https://github.com/workos/emulate/commit/9028c0a45bfba0b041cdec4966a825fec1180253))
+* **auth:** support Magic Auth sign-up for emails without a user ([#52](https://github.com/workos/emulate/issues/52)) ([c6d7707](https://github.com/workos/emulate/commit/c6d7707f14718caee695b37ea76c78d1791f4a79))
+* Directory User Group Filter ([#56](https://github.com/workos/emulate/issues/56)) ([0f2fd2d](https://github.com/workos/emulate/commit/0f2fd2dddcfbbad1c6d11e5c7ab6e8fbee4dae20))
+
 ## [0.6.0](https://github.com/workos/emulate/compare/v0.5.0...v0.6.0) (2026-08-05)
 
 
