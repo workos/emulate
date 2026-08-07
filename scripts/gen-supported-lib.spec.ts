@@ -218,6 +218,11 @@ describe('deriveSetup', () => {
     expect(cell).toEqual({ level: 'none', label: 'none' });
   });
 
+  it('reports seeding via a nested config section that is not a top-level key', () => {
+    const cell = deriveSetup({ name: 'Groups', tags: [], seedVia: 'groups' }, seedKeys, 1);
+    expect(cell).toEqual({ level: 'full', label: 'seed `groups`' });
+  });
+
   it('reports automatic for features whose data is a side effect', () => {
     const cell = deriveSetup({ name: 'Events', tags: [], automatic: true }, seedKeys, 0);
     expect(cell).toEqual({ level: 'full', label: 'automatic' });

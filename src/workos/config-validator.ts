@@ -250,6 +250,75 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             });
           }
         }
+        if (org.groups) {
+          if (!Array.isArray(org.groups)) {
+            errors.push({
+              path: `organizations[${index}].groups`,
+              message: 'groups must be an array if provided',
+              value: org.groups,
+            });
+          } else {
+            // Group members reference an org membership by the user's email, and that
+            // membership must be one declared in this org's `memberships` — the only seed
+            // path that creates org memberships. Collect those emails to cross-reference,
+            // the way `userEmails` cross-references membership emails against users.
+            const orgMembershipEmails = new Set(
+              (org.memberships ?? [])
+                .map((m) => seedEmail(m.email))
+                .filter((r): r is { ok: true; email: string } => r.ok)
+                .map((r) => r.email.toLowerCase()),
+            );
+            org.groups.forEach((group, gIndex) => {
+              if (!group.name || typeof group.name !== 'string') {
+                errors.push({
+                  path: `organizations[${index}].groups[${gIndex}].name`,
+                  message: 'name is required and must be a string',
+                  value: group.name,
+                });
+              }
+              if (
+                group.description !== undefined &&
+                group.description !== null &&
+                typeof group.description !== 'string'
+              ) {
+                errors.push({
+                  path: `organizations[${index}].groups[${gIndex}].description`,
+                  message: 'description must be a string or null if provided',
+                  value: group.description,
+                });
+              }
+              if (group.members) {
+                if (!Array.isArray(group.members)) {
+                  errors.push({
+                    path: `organizations[${index}].groups[${gIndex}].members`,
+                    message: 'members must be an array of emails if provided',
+                    value: group.members,
+                  });
+                } else {
+                  group.members.forEach((email, mIndex) => {
+                    const memberEmail = seedEmail(email);
+                    if (!memberEmail.ok) {
+                      errors.push({
+                        path: `organizations[${index}].groups[${gIndex}].members[${mIndex}]`,
+                        message:
+                          memberEmail.problem === 'malformed'
+                            ? 'must be a valid email address'
+                            : 'each member must be the email of a user',
+                        value: email,
+                      });
+                    } else if (!orgMembershipEmails.has(memberEmail.email.toLowerCase())) {
+                      errors.push({
+                        path: `organizations[${index}].groups[${gIndex}].members[${mIndex}]`,
+                        message: "member email must match a membership defined in this organization's `memberships`",
+                        value: email,
+                      });
+                    }
+                  });
+                }
+              }
+            });
+          }
+        }
       });
 
       // Organization name is the lookup key for connections, connectApplications, and

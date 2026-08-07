@@ -46,6 +46,20 @@ export interface WorkOSOrganizationMembership extends Entity {
   metadata: Record<string, string>;
 }
 
+/** An AuthKit group within an organization (`/organizations/{org}/groups`). */
+export interface WorkOSGroup extends Entity {
+  object: 'group';
+  organization_id: string;
+  name: string;
+  description: string | null;
+}
+
+/** Join between a group and an organization membership. Internal — never serialized by id. */
+export interface WorkOSGroupMembership extends Entity {
+  group_id: string;
+  organization_membership_id: string;
+}
+
 export interface WorkOSUser extends Entity {
   object: 'user';
   email: string;

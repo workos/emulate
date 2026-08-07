@@ -68,6 +68,15 @@ export interface FeatureDef {
    */
   seedKeys?: string[];
   /**
+   * The feature is seedable through a config section that is not a top-level
+   * `EmulatorSeedConfig` key — e.g. `memberships` or `groups` nested under
+   * `organizations` — so it cannot be verified the way `seedKeys` can. When set,
+   * `Set up` reports seeding honestly instead of falling back to "API only";
+   * the note explains where the nested key lives. A top-level `seedKeys` entry,
+   * if present, takes priority.
+   */
+  seedVia?: string;
+  /**
    * Path prefixes for emulator-specific creation routes that have no spec
    * equivalent, e.g. `POST /feature-flags/:slug/enable`. These are excluded
    * from the coverage columns (they are not spec endpoints) but they are still
@@ -110,7 +119,14 @@ export const FEATURES: FeatureDef[] = [
   {
     name: 'Organization Memberships',
     tags: ['user-management.organization-membership', 'user-management.organization-membership.groups'],
-    notes: 'Seeded via `memberships` nested under an organization. Membership groups are not implemented.',
+    seedVia: 'memberships',
+    notes: 'Seeded via `memberships` nested under an organization.',
+  },
+  {
+    name: 'Groups',
+    tags: ['groups'],
+    seedVia: 'groups',
+    notes: 'Seeded via `groups` nested under an organization. Members reference a seeded membership by email.',
   },
   {
     name: 'Invitations',
@@ -136,9 +152,9 @@ export const FEATURES: FeatureDef[] = [
   },
   {
     name: 'FGA / Authorization',
-    tags: ['authorization', 'permissions', 'groups'],
+    tags: ['authorization', 'permissions'],
     seedKeys: ['roles', 'permissions'],
-    notes: 'Warrant/check semantics are partial; group endpoints are not implemented.',
+    notes: 'Warrant/check semantics are partial; group role assignments are not implemented.',
   },
   {
     name: 'Audit Logs',
@@ -473,6 +489,9 @@ export function deriveSetup(feature: FeatureDef, seedConfigKeys: string[], imple
 
   if (seedKeys.length > 0) {
     return { level: 'full', label: `seed \`${seedKeys.join('`, `')}\`` };
+  }
+  if (feature.seedVia) {
+    return { level: 'full', label: `seed \`${feature.seedVia}\`` };
   }
   if (feature.automatic) {
     return { level: 'full', label: 'automatic' };

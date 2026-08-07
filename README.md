@@ -973,6 +973,12 @@ organizations:
       - email: employee@acme.com
         role: member
         status: active
+    groups:
+      # Groups belong to this org; members reference a membership by the same
+      # email join key `memberships` use above.
+      - name: Engineering
+        description: The engineering team
+        members: [employee@acme.com]
 
 roles:
   - slug: admin

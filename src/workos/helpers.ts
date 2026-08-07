@@ -16,6 +16,7 @@ import type {
   WorkOSOrganization,
   WorkOSOrganizationDomain,
   WorkOSOrganizationMembership,
+  WorkOSGroup,
   WorkOSUser,
   WorkOSSession,
   WorkOSEmailVerification,
@@ -146,6 +147,32 @@ export function formatMembershipEvent(m: WorkOSOrganizationMembership): Record<s
     directory_managed: false,
     custom_attributes: {},
   };
+}
+
+/**
+ * The slimmer membership shape `GET .../groups/{groupId}/organization-memberships` returns —
+ * the spec's `UserlandUserOrganizationMembershipBase`: the identifying fields without the
+ * embedded `user` or `roles` the full membership serializer adds. The group-members list
+ * endpoint is the only caller; the full `formatMembership` is wrong there because the base
+ * schema has no `user` or `roles` property.
+ */
+export function formatMembershipBase(m: WorkOSOrganizationMembership): Record<string, unknown> {
+  return {
+    object: 'organization_membership',
+    id: m.id,
+    user_id: m.user_id,
+    organization_id: m.organization_id,
+    status: m.status,
+    directory_managed: false,
+    custom_attributes: {},
+    created_at: m.created_at,
+    updated_at: m.updated_at,
+  };
+}
+
+/** An AuthKit group (`group` object). `formatEntity` yields exactly the spec's `Group` shape. */
+export function formatGroup(g: WorkOSGroup): Record<string, unknown> {
+  return formatEntity(g);
 }
 
 const USER_EXCLUDE = new Set([...INTERNAL_FIELDS, 'impersonator', 'oauth_provider']);

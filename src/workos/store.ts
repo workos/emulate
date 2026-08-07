@@ -4,6 +4,8 @@ import type {
   WorkOSOrganization,
   WorkOSOrganizationDomain,
   WorkOSOrganizationMembership,
+  WorkOSGroup,
+  WorkOSGroupMembership,
   WorkOSUser,
   WorkOSSession,
   WorkOSEmailVerification,
@@ -50,6 +52,8 @@ export interface WorkOSStore {
   organizations: Collection<WorkOSOrganization>;
   organizationDomains: Collection<WorkOSOrganizationDomain>;
   organizationMemberships: Collection<WorkOSOrganizationMembership>;
+  groups: Collection<WorkOSGroup>;
+  groupMemberships: Collection<WorkOSGroupMembership>;
   users: Collection<WorkOSUser>;
   sessions: Collection<WorkOSSession>;
   emailVerifications: Collection<WorkOSEmailVerification>;
@@ -110,6 +114,12 @@ export function getWorkOSStore(store: Store): WorkOSStore {
       'workos.organization_memberships',
       ID_PREFIXES.organization_membership,
       ['organization_id', 'user_id'],
+    ),
+    groups: store.collection<WorkOSGroup>('workos.groups', ID_PREFIXES.group, ['organization_id']),
+    groupMemberships: store.collection<WorkOSGroupMembership>(
+      'workos.group_memberships',
+      ID_PREFIXES.group_membership,
+      ['group_id', 'organization_membership_id'],
     ),
     users: store.collection<WorkOSUser>('workos.users', ID_PREFIXES.user, ['email', 'external_id']),
     sessions: store.collection<WorkOSSession>('workos.sessions', ID_PREFIXES.session, ['user_id']),

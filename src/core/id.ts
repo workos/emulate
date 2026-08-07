@@ -44,6 +44,8 @@ export const ID_PREFIXES = {
   organization: 'org',
   organization_membership: 'om',
   organization_domain: 'org_domain',
+  group: 'group',
+  group_membership: 'gm',
   connection: 'conn',
   connection_domain: 'conn_domain',
   directory: 'directory',

@@ -5,6 +5,7 @@ import { getWorkOSStore } from './store.js';
 import { organizationRoutes } from './routes/organizations.js';
 import { organizationDomainRoutes } from './routes/organization-domains.js';
 import { membershipRoutes } from './routes/memberships.js';
+import { groupRoutes } from './routes/groups.js';
 import { userRoutes } from './routes/users.js';
 import { emailVerificationRoutes } from './routes/email-verification.js';
 import { passwordResetRoutes } from './routes/password-reset.js';
@@ -48,6 +49,7 @@ import {
   formatUser,
   formatOrganization,
   formatMembershipEvent,
+  formatGroup,
   formatConnection,
   formatSession,
   formatInvitation,
@@ -98,6 +100,17 @@ export interface WorkOSSeedOrganization {
     email: string;
     role?: string;
     status?: 'active' | 'inactive' | 'pending';
+  }>;
+  /**
+   * AuthKit groups within this organization. Members reference a membership of this
+   * org by the user's email — the same join key `memberships` use — because org
+   * membership ids are generated at startup, so an id literal could never resolve.
+   */
+  groups?: Array<{
+    name: string;
+    description?: string | null;
+    /** Emails of users that have a membership in this organization. */
+    members?: string[];
   }>;
 }
 
@@ -345,6 +358,44 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
           });
         }
       }
+
+      if (orgConfig.groups) {
+        for (const gg of orgConfig.groups) {
+          const group = ws.groups.insert({
+            object: 'group',
+            organization_id: org.id,
+            name: gg.name,
+            description: gg.description ?? null,
+          });
+
+          if (gg.members) {
+            for (const memberEmail of gg.members) {
+              // Group members reference an org membership by the user's email — the
+              // same join key memberships use. validateSeedConfig guarantees the email
+              // matches a membership of this org; resolving the user then the membership
+              // here is the lookup that turns that guarantee into a join row.
+              const memberUser = findUserByEmail(ws, memberEmail);
+              if (!memberUser) {
+                throw new Error(
+                  `Seed group '${gg.name}' references unknown user '${memberEmail}' (organization '${orgConfig.name}')`,
+                );
+              }
+              const membership = ws.organizationMemberships
+                .findBy('organization_id', org.id)
+                .find((m) => m.user_id === memberUser.id);
+              if (!membership) {
+                throw new Error(
+                  `Seed group '${gg.name}' member '${memberEmail}' has no membership in organization '${orgConfig.name}'`,
+                );
+              }
+              ws.groupMemberships.insert({
+                group_id: group.id,
+                organization_membership_id: membership.id,
+              });
+            }
+          }
+        }
+      }
     }
   }
 
@@ -569,6 +620,7 @@ export const workosPlugin: ServicePlugin = {
     organizationRoutes(ctx);
     organizationDomainRoutes(ctx);
     membershipRoutes(ctx);
+    groupRoutes(ctx);
     userRoutes(ctx);
     emailVerificationRoutes(ctx);
     passwordResetRoutes(ctx);
@@ -638,6 +690,26 @@ export const workosPlugin: ServicePlugin = {
       onInsert: (m) => eventBus.emit({ event: EVENTS.organizationMembershipCreated, data: formatMembershipEvent(m) }),
       onUpdate: (m) => eventBus.emit({ event: EVENTS.organizationMembershipUpdated, data: formatMembershipEvent(m) }),
       onDelete: (m) => eventBus.emit({ event: EVENTS.organizationMembershipDeleted, data: formatMembershipEvent(m) }),
+    });
+    // AuthKit groups. `group.created`/`updated`/`deleted` carry the full Group object the
+    // spec's event data requires; `group.member_added`/`member_removed` carry only the two
+    // ids. Hook-driven (not inline in the routes) so seeded groups fire the same events.
+    ws.groups.setHooks({
+      onInsert: (g) => eventBus.emit({ event: EVENTS.groupCreated, data: formatGroup(g) }),
+      onUpdate: (g) => eventBus.emit({ event: EVENTS.groupUpdated, data: formatGroup(g) }),
+      onDelete: (g) => eventBus.emit({ event: EVENTS.groupDeleted, data: formatGroup(g) }),
+    });
+    ws.groupMemberships.setHooks({
+      onInsert: (gm) =>
+        eventBus.emit({
+          event: EVENTS.groupMemberAdded,
+          data: { group_id: gm.group_id, organization_membership_id: gm.organization_membership_id },
+        }),
+      onDelete: (gm) =>
+        eventBus.emit({
+          event: EVENTS.groupMemberRemoved,
+          data: { group_id: gm.group_id, organization_membership_id: gm.organization_membership_id },
+        }),
     });
     ws.connections.setHooks({
       // The spec has no connection.created/updated — only activation state transitions
