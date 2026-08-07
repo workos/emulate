@@ -759,16 +759,24 @@ export function authRoutes(ctx: RouteContext): void {
     // reuses the existing session, so it emits neither session.created nor an auth event.
     let session;
     if (isFreshLogin) {
-      // A redeemed magic-auth code proves mailbox ownership, so production marks the email
-      // verified. Folded into the sign-in write rather than done up in the grant: one
-      // user.updated per login instead of two, and nothing is persisted before the template
-      // gate above — which is what keeps a failed render from implying a login that never
-      // completed. Only set when it actually changes, so a repeat sign-in stays quiet.
       const verifyEmail = authMethod === 'MagicAuth' && !user.email_verified;
-      ws.users.update(user.id, {
-        last_sign_in_at: new Date().toISOString(),
-        ...(verifyEmail ? { email_verified: true } : {}),
-      });
+      if (verifyEmail) {
+        // A redeemed magic-auth code proves mailbox ownership; production marks the email
+        // verified via the standard update path, which emits user.updated. Folded into the
+        // sign-in write so it is one write, one event, and nothing persists before the
+        // template gate above — which keeps a failed render from implying a login that
+        // never completed.
+        ws.users.update(user.id, {
+          last_sign_in_at: new Date().toISOString(),
+          email_verified: true,
+        });
+      } else {
+        // No real attribute change: production stamps last_sign_in_at via a dedicated,
+        // silent updateWithSignIn path (a raw, debounced DB write) that bypasses the
+        // event-emitting update(), so a login fires session.created without a spurious
+        // user.updated. See https://github.com/workos/emulate/issues/55.
+        ws.users.updateSilent(user.id, { last_sign_in_at: new Date().toISOString() });
+      }
       session = ws.sessions.insert({
         object: 'session',
         user_id: user.id,

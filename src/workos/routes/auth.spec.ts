@@ -975,12 +975,14 @@ describe('Auth routes', () => {
 
     await signInWithMagicAuth('quiet@test.com');
     const afterFirst = countUpdates();
-    // The sign-up login both verifies the email and stamps last_sign_in_at — one write.
+    // The sign-up login verifies the email (a real attribute change), which emits
+    // user.updated. last_sign_in_at rides along in the same write.
     expect(afterFirst).toBe(1);
 
     await signInWithMagicAuth('quiet@test.com');
-    // The second login only stamps last_sign_in_at; email_verified is already true.
-    expect(countUpdates()).toBe(2);
+    // The second login only stamps last_sign_in_at, which production writes silently via
+    // updateWithSignIn (no user.updated); email_verified is already true. See #55.
+    expect(countUpdates()).toBe(1);
   });
 
   it('magic auth sign-up verifies the email and yields an org-less session', async () => {
@@ -2292,6 +2294,22 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(event).toBeDefined();
     expect(event.data).toMatchObject({ auth_method: 'password', status: 'active', ended_at: null });
     expect(event.data.expires_at).toBeTruthy();
+  });
+
+  it('sign-in stamps last_sign_in_at without emitting a spurious user.updated', async () => {
+    // Production's sign-in stamps last_sign_in_at via a dedicated, silent updateWithSignIn
+    // path — a raw DB write that bypasses the event-emitting update() — so a login fires
+    // session.created alone, not user.updated. See https://github.com/workos/emulate/issues/55.
+    await registerUser('evt-no-user-updated@test.com', 'secret');
+
+    await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'evt-no-user-updated@test.com', password: 'secret' }),
+    });
+
+    expect(eventsNamed('session.created')).toHaveLength(1);
+    expect(eventsNamed('user.updated')).toHaveLength(0);
   });
 
   it('MFA session falls back to auth_method: unknown when the pending token records no mapped primary', async () => {

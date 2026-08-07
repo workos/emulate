@@ -105,6 +105,24 @@ export class Collection<T extends Entity> {
     return updated;
   }
 
+  // Like update(), but silent: re-indexes the record without firing onUpdate or bumping
+  // updated_at. Mirrors production's updateWithSignIn — a raw, debounced DB write that
+  // stamps last_sign_in_at on sign-in without emitting a user.updated webhook or treating
+  // the login as a user edit. See https://github.com/workos/emulate/issues/55.
+  updateSilent(id: string, data: Partial<T>): T | undefined {
+    const existing = this.items.get(id);
+    if (!existing) return undefined;
+    this.removeFromIndex(existing);
+    const updated = {
+      ...existing,
+      ...data,
+      id,
+    } as T;
+    this.items.set(id, updated);
+    this.addToIndex(updated);
+    return updated;
+  }
+
   delete(id: string): boolean {
     const existing = this.items.get(id);
     if (!existing) return false;
