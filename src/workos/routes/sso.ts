@@ -8,6 +8,7 @@ import {
   assertLocalRedirectUri,
   emitAuthenticationEvent,
   findUserByEmail,
+  emailsMatch,
 } from '../helpers.js';
 import type { WorkOSConnection } from '../entities.js';
 import type { EventBus } from '../event-bus.js';
@@ -49,8 +50,13 @@ export function ssoRoutes(ctx: RouteContext): void {
     }
 
     const email = loginHint ?? `user@${connection.domains[0]?.domain ?? 'example.com'}`;
-    let profile = ws.ssoProfiles.findOneBy('email', email);
-    if (!profile || profile.connection_id !== connection.id) {
+    // The last exact-match lookup by email, matched on the connection at the same time rather
+    // than after. `findOneBy` returns the first profile for the address whatever connection it
+    // belongs to, so a second connection never matched its own profile and minted another on
+    // every authorize. Case-insensitive for the reason the rest are: a login_hint differing only
+    // in case is the same federated person.
+    let profile = ws.ssoProfiles.all().find((p) => p.connection_id === connection.id && emailsMatch(p.email, email));
+    if (!profile) {
       profile = ws.ssoProfiles.insert({
         object: 'profile',
         connection_id: connection.id,
