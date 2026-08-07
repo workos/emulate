@@ -496,6 +496,70 @@ describe('Auth routes', () => {
     });
   });
 
+  // The spec's authenticate 400 lists `invalid_request` among its {error, error_description}
+  // variants and never among its {code, message} ones, so a malformed request is OAuth-shaped
+  // whatever grant it names — including the grants whose credential failures are plain. That
+  // makes the envelope a property of the failure, not only of the grant.
+  it('fails a malformed request OAuth-style on every grant, plain-shaped ones included', async () => {
+    const post = (payload: Record<string, unknown>) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+    const noGrant = await post({ code: 'whatever' });
+    expect(noGrant.status).toBe(400);
+    expect(await json(noGrant)).toEqual({ error: 'invalid_request', error_description: 'grant_type is required.' });
+
+    const noCode = await post({ grant_type: 'authorization_code' });
+    expect(noCode.status).toBe(400);
+    expect(await json(noCode)).toEqual({ error: 'invalid_request', error_description: 'code is required.' });
+
+    // `password` renders its *credential* failure plain; a missing parameter is a different
+    // failure and the spec shapes it the other way.
+    const noPassword = await post({ grant_type: 'password', email: 'nobody@test.com' });
+    expect(noPassword.status).toBe(400);
+    expect(await json(noPassword)).toEqual({
+      error: 'invalid_request',
+      error_description: 'email and password are required.',
+    });
+
+    // An unrecognized grant_type fails authenticate's oneOf body validation, so the spec's code
+    // for it is invalid_request — `unsupported_grant_type` appears only under /sso/token.
+    const badGrant = await post({ grant_type: 'urn:workos:oauth:grant-type:nonsense' });
+    expect(badGrant.status).toBe(400);
+    expect(await json(badGrant)).toEqual({
+      error: 'invalid_request',
+      error_description: 'The grant type is not supported: urn:workos:oauth:grant-type:nonsense',
+    });
+  });
+
+  // A PKCE code's two adjacent failures used to answer in two envelopes: a wrong verifier
+  // OAuth-shaped, a missing one plain. Both are OAuth-shaped now, with the codes that name what
+  // went wrong — absent is malformed, wrong is a failed grant.
+  it('separates a missing code_verifier from a wrong one without changing envelope', async () => {
+    const user = await createUser('pkce-missing@test.com');
+    getWorkOSStore(store).authCodes.insert({
+      object: 'authorization_code',
+      code: 'pkce-needs-verifier',
+      user_id: user.id,
+      organization_id: null,
+      client_id: null,
+      code_challenge: 'a-challenge-no-verifier-will-hash-to',
+      code_challenge_method: 'S256',
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+    } as never);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code: 'pkce-needs-verifier' }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ error: 'invalid_request', error_description: 'code_verifier is required.' });
+  });
+
   it('fails a wrong magic auth code with the plain shape and production code string', async () => {
     await createUser('wrongcode@test.com');
     const res = await app.request('/user_management/authenticate', {

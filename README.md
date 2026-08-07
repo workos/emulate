@@ -517,18 +517,21 @@ The emulator issues a new refresh token on every refresh and invalidates the one
 
 ### Authentication failure shapes
 
-`POST /user_management/authenticate` does not use one error shape for every failure. Three grants fail OAuth-style; everything else keeps the plain shape:
+`POST /user_management/authenticate` does not use one error shape for every failure. Which shape you get depends on the failure, not only on the grant: any malformed request is OAuth-shaped, and among credential failures three grants are OAuth-shaped and the rest plain.
 
-| Failure                                                         | Body                                                                  | Node SDK raises           |
-| --------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
-| `authorization_code` — unknown, expired, or bad `code_verifier` | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
-| `refresh_token` — unknown, expired, rotated, or user deleted    | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
-| Device code — pending, expired, unknown                         | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}` | `OauthException`          |
-| `password` — wrong password                                     | `{"code": "invalid_credentials", "message": "…"}` (400)               | `GenericServerException`  |
-| Magic Auth — wrong or expired code                              | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`         | `GenericServerException`  |
-| Step-up (MFA, org selection, email verification)                | `{"code": "…", "message": "…"}` (403)                                 | `AuthenticationException` |
+| Failure                                                          | Body                                                                  | Node SDK raises           |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
+| Malformed request — missing or unrecognized parameter, any grant | `{"error": "invalid_request", "error_description": "…"}`              | `OauthException`          |
+| `authorization_code` — unknown, expired, bad verifier, user gone | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
+| `refresh_token` — unknown, expired, rotated, or user deleted     | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
+| Device code — pending, expired, unknown, or user deleted         | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}` | `OauthException`          |
+| `password` — wrong password                                      | `{"code": "invalid_credentials", "message": "…"}` (400)               | `GenericServerException`  |
+| Magic Auth — wrong or expired code                               | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`         | `GenericServerException`  |
+| Step-up (MFA, org selection, email verification)                 | `{"code": "…", "message": "…"}` (403)                                 | `AuthenticationException` |
 
-`password` is an RFC 6749 grant, but production fails it with the plain shape, so the emulator does too. `/sso/token` is OAuth-shaped throughout, matching its spec definition.
+`password` is an RFC 6749 grant, but production fails its credentials with the plain shape, so the emulator does too — while a `password` request that omits a parameter still answers `invalid_request` OAuth-style. Both halves come from the spec, whose authenticate 400 lists `invalid_request` and `invalid_grant` only as `{error, error_description}` and `invalid_credentials` and the one-time-code errors only as `{code, message}`. An unrecognized `grant_type` is reported as `invalid_request` rather than `unsupported_grant_type`, which the spec gives to `/sso/token` alone.
+
+`/sso/token` is OAuth-shaped throughout, matching its spec definition.
 
 ### Emitted events
 
