@@ -1,12 +1,6 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import {
-  formatMagicAuth,
-  generateCode,
-  expiresIn,
-  findUserByEmail,
-  requireEmailString,
-} from '../helpers.js';
+import { formatMagicAuth, generateCode, expiresIn, findUserByEmail, requireEmailString } from '../helpers.js';
 
 export function magicAuthRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
