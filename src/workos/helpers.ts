@@ -1,5 +1,5 @@
 import { randomBytes, createHash, createCipheriv } from 'node:crypto';
-import { WorkOSApiError, generateId, type CursorPaginatedResult, type Entity } from '../core/index.js';
+import { WorkOSApiError, validationError, generateId, type CursorPaginatedResult, type Entity } from '../core/index.js';
 import { EVENTS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
 import type { WorkOSStore } from './store.js';
 import type { EventBus } from './event-bus.js';
@@ -344,30 +344,85 @@ export function isEmailShaped(value: string): boolean {
   return at > 0 && at === value.lastIndexOf('@') && at < value.length - 1 && !/\s/.test(value);
 }
 
+/** Why a supplied `email` cannot be used, kept apart so a caller can report which one happened. */
+export type EmailProblem = 'missing' | 'not_a_string' | 'malformed';
+
+const EMAIL_PROBLEM_MESSAGES: Record<EmailProblem, string> = {
+  missing: 'email is required',
+  not_a_string: 'email must be a string',
+  malformed: 'email must be a valid email address',
+};
+
+/** The `errors[].code` each problem carries on the routes that report a 422. */
+const EMAIL_PROBLEM_FIELD_CODES: Record<EmailProblem, string> = {
+  missing: 'required',
+  not_a_string: 'invalid_type',
+  malformed: 'invalid',
+};
+
+export type NormalizedEmail = { ok: true; email: string } | { ok: false; problem: EmailProblem };
+
 /**
- * Narrow a request's `email` to a trimmed string. Absence is handed back as `''` for the caller to
- * report its own way; a value that is present but not a string is rejected here, because the two
- * have the same fix only if the caller is told which one happened.
+ * Normalize a request's `email` to a trimmed string, or say why it can't be. Not every value
+ * handed to this is normalizable, so the problem comes back as a value rather than an exception:
+ * the routes disagree about how to report it — `validationError`'s 422 on the user-management
+ * CRUD routes, a 400 `invalid_request` on the grants — and only about that.
  *
- * Every caller used to type-assert instead, which was survivable while a lookup by email could
- * only miss — `findOneBy` returns undefined for a number as readily as for an unknown address.
- * Resolving case-insensitively means calling `toLowerCase` on it, so the same assertion now throws
- * and a malformed request comes back a 500 that tells the caller nothing.
+ * Callers used to type-assert instead, which was survivable while a lookup by email could only
+ * miss — `findOneBy` returns undefined for a number as readily as for an unknown address.
+ * Resolving case-insensitively means calling `toLowerCase` on it, so the same assertion throws and
+ * a malformed request comes back a 500 that tells the caller nothing.
  *
- * Trimmed here too: creation stores the trimmed address, so a read that skipped the trim could not
- * find what creation had just written.
+ * `null` is `missing`, not `not_a_string`: in a JSON body it is how a caller spells absence, and
+ * the guard exists to name what the caller must fix, not what `typeof` says.
+ *
+ * `requireShape` is for the routes that create something from the address rather than look one up.
+ * A read that misses is a 404 the caller can act on; a write that stores a typo is an account or
+ * an invitation nothing can ever reach. Read paths leave it off, so an address that does not
+ * resolve still 404s rather than changing error shape.
  */
-export function requireEmailString(value: unknown): string {
-  if (value === undefined || value === null) return '';
-  if (typeof value !== 'string') {
-    throw new WorkOSApiError(400, 'email must be a string', 'invalid_request');
-  }
-  return value.trim();
+export function normalizeEmail(value: unknown, opts?: { requireShape?: boolean }): NormalizedEmail {
+  if (value === undefined || value === null) return { ok: false, problem: 'missing' };
+  if (typeof value !== 'string') return { ok: false, problem: 'not_a_string' };
+  const email = value.trim();
+  if (!email) return { ok: false, problem: 'missing' };
+  if (opts?.requireShape && !isEmailShaped(email)) return { ok: false, problem: 'malformed' };
+  return { ok: true, email };
 }
 
-/** Whether two addresses name the same account. Case-insensitive, like every lookup by email. */
+/**
+ * The trimmed `email` from a request body, as a route that reports 400 `invalid_request` wants it.
+ *
+ * Absence comes back as `''` rather than throwing, because the grants name it alongside whatever
+ * else they also require ("code and email are required") — a message that is more use than one
+ * field at a time.
+ */
+export function requireEmailString(value: unknown, opts?: { requireShape?: boolean }): string {
+  const result = normalizeEmail(value, opts);
+  if (result.ok) return result.email;
+  if (result.problem === 'missing') return '';
+  throw new WorkOSApiError(400, EMAIL_PROBLEM_MESSAGES[result.problem], 'invalid_request');
+}
+
+/**
+ * The trimmed `email` from a request body, as the user-management CRUD routes want it: a 422 with
+ * the per-field code, which is the validation shape those routes already answer in.
+ */
+export function requireEmailField(value: unknown, opts?: { requireShape?: boolean }): string {
+  const result = normalizeEmail(value, opts);
+  if (result.ok) return result.email;
+  throw validationError(EMAIL_PROBLEM_MESSAGES[result.problem], [
+    { field: 'email', code: EMAIL_PROBLEM_FIELD_CODES[result.problem] },
+  ]);
+}
+
+/**
+ * Whether two addresses name the same account. Case-insensitive, like every lookup by email, and
+ * trimmed for the same reason storage is: a padded copy of an address names the same person, and a
+ * filter that skipped the trim would not return what creation had just written.
+ */
 export function emailsMatch(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 /**
@@ -377,8 +432,7 @@ export function emailsMatch(a: string, b: string): boolean {
 export function findUserByEmail(ws: WorkOSStore, email: string): WorkOSUser | undefined {
   const exact = ws.users.findOneBy('email', email);
   if (exact) return exact;
-  const normalized = email.toLowerCase();
-  return ws.users.all().find((u) => u.email.toLowerCase() === normalized);
+  return ws.users.all().find((u) => emailsMatch(u.email, email));
 }
 
 /**

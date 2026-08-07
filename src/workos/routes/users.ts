@@ -12,9 +12,9 @@ import {
   formatIdentity,
   hashPassword,
   formatListResponse,
-  isEmailShaped,
   findUserByEmail,
   emailsMatch,
+  requireEmailField,
 } from '../helpers.js';
 
 export function userRoutes(ctx: RouteContext): void {
@@ -23,20 +23,12 @@ export function userRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/users', async (c) => {
     const body = await parseJsonBody(c);
-    if (body.email !== undefined && typeof body.email !== 'string') {
-      throw validationError('email must be a string', [{ field: 'email', code: 'invalid_type' }]);
-    }
-    const email = body.email?.trim();
-    if (!email) {
-      throw validationError('email is required', [{ field: 'email', code: 'required' }]);
-    }
     // The same guard the magic auth handler applies, for the same reason: this route creates
     // users, and an address that could only be a typo becomes an account nothing can reach.
     // Holding the two paths to one standard is what stops `{email: 'nope'}` being a 422 on one
-    // and a 201 on the other.
-    if (!isEmailShaped(email)) {
-      throw validationError('email must be a valid email address', [{ field: 'email', code: 'invalid' }]);
-    }
+    // and a 201 on the other — shared rather than restated, since a second copy is how the two
+    // drifted over `null` in the first place.
+    const email = requireEmailField(body.email, { requireShape: true });
 
     // Case-insensitively, for the same reason the magic auth handler resolves that way: an
     // exact-match miss on 'User@x.test' vs 'user@x.test' let both be created, and then the two

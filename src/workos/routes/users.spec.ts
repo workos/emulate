@@ -48,6 +48,27 @@ describe('User routes', () => {
     expect(list.data).toHaveLength(0);
   });
 
+  // `null` is how a JSON body spells absence, so it is reported as absence — the same answer the
+  // magic auth handler gives it. Classifying it as a type error instead had the two creation paths
+  // disagreeing about which of the two distinctions this route exists to draw it falls on.
+  it('reports an absent email as absent, including an explicit null', async () => {
+    for (const body of [{}, { email: null }]) {
+      const res = await req('/user_management/users', { method: 'POST', body: JSON.stringify(body) });
+      expect(res.status).toBe(422);
+      const parsed = await json(res);
+      expect(parsed.message).toBe('email is required');
+      expect(parsed.errors[0]).toMatchObject({ field: 'email', code: 'required' });
+    }
+  });
+
+  it('names a non-string email as the wrong type, not as missing', async () => {
+    const res = await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 123 }) });
+    expect(res.status).toBe(422);
+    const body = await json(res);
+    expect(body.message).toBe('email must be a string');
+    expect(body.errors[0]).toMatchObject({ field: 'email', code: 'invalid_type' });
+  });
+
   // Case-insensitively, like the magic auth handler: two accounts differing only in case left the
   // two creation paths disagreeing about which one an address names, with magic auth's resolver
   // settling it by insertion order.

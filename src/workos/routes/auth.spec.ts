@@ -609,10 +609,14 @@ describe('Auth routes', () => {
     expect(getWorkOSStore(store).users.all()).toHaveLength(0);
   });
 
-  // Absent and malformed have the same fix only if the caller is told which one happened.
+  // Absent and malformed have the same fix only if the caller is told which one happened. `null`
+  // counts as absent — it is how a JSON body spells it, and both creation paths agree on that.
   it('distinguishes a missing email from an unusable one', async () => {
-    const missing = await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({}) });
-    expect((await json(missing)).message).toBe('email is required');
+    for (const body of [{}, { email: null }]) {
+      const missing = await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify(body) });
+      expect(missing.status).toBe(400);
+      expect((await json(missing)).message).toBe('email is required');
+    }
 
     const malformed = await req('/user_management/magic_auth', {
       method: 'POST',
