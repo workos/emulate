@@ -69,6 +69,25 @@ describe('Seeding organization memberships', () => {
     expect(list.data[0].user).toMatchObject({ email: 'Admin@Acme.com' });
   });
 
+  // Seeding stores the trimmed address, so a padded seed is reachable by the address the caller
+  // actually has — and the membership that named it joins the same account.
+  it('stores a padded seeded address trimmed', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        users: [{ email: '  padded@acme.com  ' }],
+        organizations: [{ name: 'Acme Corp', memberships: [{ email: 'padded@acme.com', role: 'member' }] }],
+      },
+    });
+
+    const res = await fetch(`${emulator.url}/user_management/users?email=padded%40acme.com`, {
+      headers: auth(emulator.apiKey),
+    });
+    const list = (await res.json()) as any;
+    expect(list.data).toHaveLength(1);
+    expect(list.data[0].email).toBe('padded@acme.com');
+  });
+
   it('rejects startup when a membership references an email with no seeded user', async () => {
     await expect(
       createEmulator({
@@ -119,6 +138,44 @@ describe('Seeding organization memberships', () => {
     // manufacture the pair of accounts no lookup by email can tell apart.
     it('rejects two seeded users whose emails differ only in case', () => {
       const error = findError({ users: [{ email: 'Dup@Acme.com' }, { email: 'dup@acme.com' }] }, 'users[1].email');
+      expect(error.message).toContain('unique across users');
+    });
+
+    // A seed is the one creation path with no route in front of it, so it is the remaining way to
+    // write a user under an address no lookup by email resolves — the state the two routes' typo
+    // guards exist to prevent.
+    it('rejects a seeded user email that could only be a typo', () => {
+      for (const email of ['   ', 'not-an-email', 'a b@acme.com', '@acme.com', 'nope@', 'two@at@acme.com']) {
+        const error = findError({ users: [{ email }] }, 'users[0].email');
+        expect(error.message).toMatch(/email (is required and must be a string|must be a valid email address)/);
+      }
+    });
+
+    it('rejects a seeded invitation email that could only be a typo', () => {
+      const error = findError({ invitations: [{ email: 'not-an-email' }] }, 'invitations[0].email');
+      expect(error.message).toContain('must be a valid email address');
+    });
+
+    it('rejects a membership email that could only be a typo', () => {
+      const error = findError(
+        { users: [{ email: 'admin@acme.com' }], organizations: [{ name: 'Acme', memberships: [{ email: 'nope' }] }] },
+        'organizations[0].memberships[0].email',
+      );
+      expect(error.message).toContain('must be a valid email address');
+    });
+
+    // Seeding trims, so the cross-reference has to: matching the raw value would reject a
+    // membership that resolves fine once both addresses are stored the way the store stores them.
+    it('accepts a membership email padded differently from its user', () => {
+      const { valid } = validateSeedConfig({
+        users: [{ email: '  admin@acme.com' }],
+        organizations: [{ name: 'Acme', memberships: [{ email: 'admin@acme.com  ' }] }],
+      });
+      expect(valid).toBe(true);
+    });
+
+    it('rejects two seeded users whose emails differ only in padding', () => {
+      const error = findError({ users: [{ email: 'dup@acme.com' }, { email: '  dup@acme.com  ' }] }, 'users[1].email');
       expect(error.message).toContain('unique across users');
     });
 

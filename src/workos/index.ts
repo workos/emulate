@@ -276,7 +276,10 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       ws.users.insert({
         object: 'user',
         id: userConfig.id,
-        email: userConfig.email,
+        // Trimmed, as both routes that create users store it: a padded seed would otherwise be
+        // written under a spelling no lookup by email resolves. validateSeedConfig normalizes the
+        // same way, so what it cross-referenced is what lands here.
+        email: userConfig.email.trim(),
         name: userConfig.name ?? null,
         first_name: userConfig.first_name ?? null,
         last_name: userConfig.last_name ?? null,
@@ -437,7 +440,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       const token = generateVerificationToken();
       ws.invitations.insert({
         object: 'invitation',
-        email: invConfig.email,
+        email: invConfig.email.trim(),
         state: 'pending',
         token,
         accept_invitation_url: `${_baseUrl}/user_management/invitations/accept?token=${token}`,
