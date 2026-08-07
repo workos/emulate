@@ -455,6 +455,47 @@ describe('Auth routes', () => {
     });
   });
 
+  // The third grant to need this, and the one an AuthKit callback takes. Deleting a user does not
+  // cascade to its authorization codes, so the code outlives the user; before the guard the shared
+  // lookup answered a 404, which is the bare {message} the spec shapes 404s as — nothing for a
+  // client matching on invalid_grant, on the path authkit-nextjs uses to end a dead session.
+  it('fails an authorization code OAuth-style when its user was deleted', async () => {
+    const user = await createUser('codegone@test.com');
+    const authRes = await app.request(
+      '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code',
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+
+    // Through the route, so the test breaks if a future cascade starts collecting auth codes.
+    const del = await req(`/user_management/users/${user.id}`, { method: 'DELETE' });
+    expect(del.status).toBe(204);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      error: 'invalid_grant',
+      error_description: `The code '${code}' has expired or is invalid.`,
+    });
+
+    const ws = getWorkOSStore(store);
+    // Unspent, like the device code's twin of this: polling or retrying cannot fix it, so the
+    // caller should not pay their code for the answer.
+    expect(ws.authCodes.findOneBy('code', code)).toBeDefined();
+    // And it reports the failure, which the 404 path skipped — every other authorization_code
+    // failure emits this event.
+    const [event] = ws.events.all().filter((e) => e.event === 'authentication.oauth_failed');
+    expect(event).toBeDefined();
+    expect(event.data).toMatchObject({
+      type: 'oauth',
+      status: 'failed',
+      error: { code: 'invalid_grant', message: `The code '${code}' has expired or is invalid.` },
+    });
+  });
+
   it('fails a wrong magic auth code with the plain shape and production code string', async () => {
     await createUser('wrongcode@test.com');
     const res = await app.request('/user_management/authenticate', {

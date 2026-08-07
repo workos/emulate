@@ -344,6 +344,20 @@ export function authRoutes(ctx: RouteContext): void {
         }
 
         user = ws.users.get(authCode.user_id);
+        // The third grant to need this guard, and the one an AuthKit callback actually takes:
+        // deleting a user leaves its authorization codes behind (only sessions, memberships,
+        // factors, identities, password resets, email verifications and magic auths cascade),
+        // so a code can outlive its user. Without it the shared lookup below answers with a 404
+        // the spec shapes as a bare {message} — no `error` for the client that is matching on
+        // invalid_grant, and no authentication.oauth_failed event either. Thrown before the
+        // delete, so a failure the caller cannot fix does not also cost them the code.
+        if (!user) {
+          failAuth(
+            'OAuth',
+            { userId: authCode.user_id },
+            new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
+          );
+        }
         organizationId = authCode.organization_id;
         // Bind the token's client_id to the authorization grant, not the unvalidated
         // redemption-time request parameter.
