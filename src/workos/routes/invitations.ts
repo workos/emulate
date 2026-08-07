@@ -1,11 +1,4 @@
-import {
-  type RouteContext,
-  notFound,
-  validationError,
-  parseJsonBody,
-  WorkOSApiError,
-  parseListParams,
-} from '../../core/index.js';
+import { type RouteContext, notFound, parseJsonBody, WorkOSApiError, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatInvitation,
@@ -15,6 +8,7 @@ import {
   acceptInvitation,
   findUserByEmail,
   emailsMatch,
+  requireEmailField,
 } from '../helpers.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
@@ -25,10 +19,13 @@ export function invitationRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/invitations', async (c) => {
     const body = await parseJsonBody(c);
-    const email = body.email as string | undefined;
-    if (!email) {
-      throw validationError('email is required', [{ field: 'email', code: 'required' }]);
-    }
+    // The same guard the two user-creation routes apply, for a related reason. Accepting a
+    // non-string here used to be survivable because everything downstream compared the address
+    // with `!==`; resolving the recipient case-insensitively means calling `toLowerCase` on it,
+    // so a stored number turned both the email filter and accepting the invitation into a 500.
+    // And an address that could only be a typo makes an invitation nobody can accept: acceptance
+    // resolves a user by this email, so a typo is spent silently, enrolling no one.
+    const email = requireEmailField(body.email, { requireShape: true });
 
     const token = generateVerificationToken();
     const inv = ws.invitations.insert({

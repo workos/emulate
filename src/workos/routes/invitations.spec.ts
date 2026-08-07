@@ -165,6 +165,61 @@ describe('Invitation routes', () => {
     expect(list.data[0].email).toBe('Filter@X.test');
   });
 
+  // A non-string was survivable while every consumer of a stored email compared it with `!==`.
+  // Resolving the recipient case-insensitively means calling `toLowerCase` on it, so accepting a
+  // number here turned both the email filter and accepting the invitation into a 500 — a
+  // `server_error` in a consumer's suite reads as an emulator defect rather than a bad request.
+  it('rejects a non-string email rather than storing one nothing can read back', async () => {
+    for (const email of [123, { not: 'a string' }, ['a@x.test']]) {
+      const res = await req('/user_management/invitations', { method: 'POST', body: JSON.stringify({ email }) });
+      expect(res.status).toBe(422);
+      const body = await json(res);
+      expect(body.code).toBe('unprocessable_entity');
+      expect(body.message).toBe('email must be a string');
+    }
+
+    // The two reads that would have 500d on a stored non-string.
+    expect((await req('/user_management/invitations?email=a%40x.test')).status).toBe(200);
+    expect((await json(await req('/user_management/invitations'))).data).toHaveLength(0);
+  });
+
+  // Acceptance resolves the recipient by this address, so a typo is spent silently: 200, the
+  // invitation marked accepted, invitation.accepted emitted, and nobody enrolled. Held to the same
+  // standard as the two routes that create users, which reject for the same reason.
+  it('rejects an email that could only be a typo', async () => {
+    for (const email of ['', '   ', 'not-an-email', 'a b@test.com', '@test.com', 'nope@', 'two@at@test.com']) {
+      const res = await req('/user_management/invitations', { method: 'POST', body: JSON.stringify({ email }) });
+      expect(res.status).toBe(422);
+      expect((await json(res)).message).toMatch(/email (is required|must be a valid email address)/);
+    }
+    expect((await json(await req('/user_management/invitations'))).data).toHaveLength(0);
+  });
+
+  // Absent and malformed have the same fix only if the caller is told which one happened, and
+  // `null` in a JSON body is how a caller spells absence.
+  it('reports an absent email as absent, including an explicit null', async () => {
+    for (const body of [{}, { email: null }]) {
+      const res = await req('/user_management/invitations', { method: 'POST', body: JSON.stringify(body) });
+      expect(res.status).toBe(422);
+      const parsed = await json(res);
+      expect(parsed.message).toBe('email is required');
+      expect(parsed.errors[0]).toMatchObject({ field: 'email', code: 'required' });
+    }
+  });
+
+  it('trims a padded address before storing it', async () => {
+    const inv = await json(
+      await req('/user_management/invitations', {
+        method: 'POST',
+        body: JSON.stringify({ email: '  padded@x.test  ' }),
+      }),
+    );
+    expect(inv.email).toBe('padded@x.test');
+
+    const list = await json(await req('/user_management/invitations?email=padded%40x.test'));
+    expect(list.data).toHaveLength(1);
+  });
+
   it('revokes an invitation', async () => {
     const created = await json(
       await req('/user_management/invitations', {
