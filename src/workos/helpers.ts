@@ -482,10 +482,42 @@ export function normalizeRedirectHost(value: string): string {
     throw new Error(`Invalid redirect host: ${JSON.stringify(value)} — write "*" to allow any host`);
   }
 
-  if (!isMatchableHostPattern(host)) {
-    throw new Error(`Invalid redirect host: ${JSON.stringify(value)}`);
-  }
+  // Shape first, then canonicalize, then shape again. `URL` drops a path rather than failing on
+  // one, so `app.example.test/path` has to be refused before anything is allowed to reshape it —
+  // and canonicalizing can itself turn a plausible-looking entry into nothing at all.
+  if (!isMatchableHostPattern(host)) throw invalidRedirectHost(value);
+  host = canonicalizeDnsHost(host);
+  if (!isMatchableHostPattern(host)) throw invalidRedirectHost(value);
   return host;
+}
+
+function invalidRedirectHost(value: string): Error {
+  return new Error(`Invalid redirect host: ${JSON.stringify(value)}`);
+}
+
+/**
+ * Reduce a validated non-bracketed pattern to the one spelling `URL.hostname` produces, the way
+ * `canonicalizeIpv6Host` already does for addresses. `URL` rewrites IPv4 in every shorthand it
+ * accepts — `10.1`, `192.168.001.1`, `0x7f.0.0.1` and `2130706433` all arrive as their dotted-quad
+ * form — so an entry written any of those ways validated by shape, started the emulator and then
+ * matched nothing: the silent no-match the rest of this validation exists to turn into a loud
+ * failure. Only ever called on a pattern `isMatchableHostPattern` has accepted, so there is no path
+ * or port left for `URL` to strip. Returns '' for what `URL` refuses (`999.999.999.999`,
+ * `1.2.3.4.5` — IPv4-shaped and not an address), which the second shape check then rejects.
+ */
+function canonicalizeDnsHost(host: string): string {
+  // Bracketed literals came through `canonicalizeIpv6Host` already.
+  if (host.startsWith('[')) return host;
+  // `*` is not a host `URL` should be asked about, so convert only what it stands in front of.
+  const wildcard = host.startsWith('*.');
+  const bare = wildcard ? host.slice(2) : host;
+  let canonical: string;
+  try {
+    canonical = new URL(`http://${bare}/`).hostname;
+  } catch {
+    return '';
+  }
+  return wildcard ? `*.${canonical}` : canonical;
 }
 
 /**

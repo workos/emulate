@@ -52,7 +52,10 @@ export function sessionRoutes(ctx: RouteContext): void {
 
     if (returnTo) {
       assertAllowedRedirectUri(returnTo, store);
-      return c.redirect(returnTo);
+      // Re-serialized rather than echoed, the way the authorize endpoints already emit theirs. A
+      // space is a legal `return_to` character (`searchParams.get` decodes a raw `+` into one) but
+      // not a legal `Location` one, so the raw string would put an unencoded space in the header.
+      return c.redirect(new URL(returnTo).toString());
     }
     return c.json({ success: true });
   });

@@ -721,8 +721,9 @@ Notes:
   `/data-integrations/:slug/authorize`, and to `return_to` on `/user_management/sessions/logout`.
 - An internationalized hostname may be written either way: `møller.test` and its punycode
   (`xn--mller-vua.test`) normalize to the same entry, since that is the form a request carries.
-- An IPv6 address may be written any legal way — `[FD00::0001]` and `[fd00:0:0:0:0:0:0:1]` are the
-  same entry as `[fd00::1]` — and a trailing dot is optional (`app.example.test.` matches
+- An IP address may be written any legal way. `[FD00::0001]` and `[fd00:0:0:0:0:0:0:1]` are the same
+  entry as `[fd00::1]`; `10.1`, `192.168.001.1` and `2130706433` are the same entries as `10.0.0.1`,
+  `192.168.1.1` and `127.0.0.1`. A trailing dot is optional too (`app.example.test.` matches
   `app.example.test`). Both sides are reduced to the one form a request carries.
 - An underscore is fine (`my_host.example.test`, the shape a Docker Compose service name takes).
   It is not DNS-conformant, but a request really does arrive carrying it.

@@ -93,6 +93,11 @@ export function ssoRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, 'Missing required parameter: redirect_uri', 'invalid_request');
     }
 
+    // Checked before the interactive branch, which renders the redirect_uri into a hidden field
+    // and defers every check to the POST. A host the emulator will not redirect to should fail
+    // here, not after someone has filled the form in.
+    assertAllowedRedirectUri(redirectUri, store);
+
     const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
     if (interactive) {
       const hiddenFields: Record<string, string> = { redirect_uri: redirectUri };

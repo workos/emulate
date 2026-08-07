@@ -120,6 +120,11 @@ export function authRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, 'redirect_uri is required', 'invalid_request');
     }
 
+    // Checked before the interactive branch, which renders the redirect_uri into a hidden field
+    // and defers every check to the POST. A host the emulator will not redirect to should fail
+    // here, not after someone has filled the form in.
+    assertAllowedRedirectUri(redirectUri, store);
+
     const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
     if (interactive) {
       const hiddenFields: Record<string, string> = { redirect_uri: redirectUri };

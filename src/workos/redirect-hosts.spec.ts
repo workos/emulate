@@ -52,6 +52,24 @@ describe('normalizeRedirectHost', () => {
     expect(normalizeRedirectHost('https://[fd00:0:0:0:0:0:0:1]:8443')).toBe('[fd00::1]');
   });
 
+  // The same asymmetry as IPv6, in the family people actually type: `URL` rewrites every IPv4
+  // shorthand it accepts, so an entry written any way but dotted-quad matched nothing.
+  it('canonicalizes IPv4 shorthand to the dotted quad a request carries', () => {
+    expect(normalizeRedirectHost('10.1')).toBe('10.0.0.1');
+    expect(normalizeRedirectHost('192.168.001.1')).toBe('192.168.1.1');
+    expect(normalizeRedirectHost('0x7f.0.0.1')).toBe('127.0.0.1');
+    expect(normalizeRedirectHost('2130706433')).toBe('127.0.0.1');
+    expect(normalizeRedirectHost('https://10.1:8443/cb')).toBe('10.0.0.1');
+    expect(normalizeRedirectHost('*.10.1')).toBe('*.10.0.0.1');
+  });
+
+  // IPv4-shaped and not an address: `URL` refuses these, so they can never be a `URL.hostname`.
+  it('rejects an IPv4-shaped host that is not an address', () => {
+    for (const bad of ['999.999.999.999', '1.2.3.4.5', '256.0.0.1']) {
+      expect(() => normalizeRedirectHost(bad)).toThrow('Invalid redirect host');
+    }
+  });
+
   // `URL.hostname` keeps the trailing dot a request carried, so both sides are stripped.
   it('drops a trailing dot, so an absolute name matches the way it is written', () => {
     expect(normalizeRedirectHost('app.example.test.')).toBe('app.example.test');
@@ -209,6 +227,19 @@ describe('redirect host validation (default: localhost only)', () => {
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toContain('token=YWJj+ZGVm');
   });
+
+  // A space is legal in the `return_to` a request carries and not in the `Location` it produces,
+  // so logout re-serializes rather than echoing — the way the authorize endpoints already did.
+  it('encodes a space out of the logout Location instead of echoing it raw', async () => {
+    const res = await app.request(
+      '/user_management/sessions/logout?session_id=session_x&return_to=http://localhost:3000/cb?token=YWJj+ZGVm',
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(302);
+    const location = res.headers.get('Location')!;
+    expect(location).not.toContain(' ');
+    expect(location).toBe('http://localhost:3000/cb?token=YWJj%20ZGVm');
+  });
 });
 
 describe('redirect host validation (configured hosts)', () => {
@@ -294,6 +325,16 @@ describe('redirect host validation (configured hosts)', () => {
       { redirect: 'manual' },
     );
     expect(res.status).toBe(302);
+  });
+
+  it('accepts an IPv4 host written in any shorthand URL accepts', async () => {
+    const { app } = createTestApp(normalizeRedirectHosts(['10.1']));
+    for (const host of ['10.1', '10.0.0.1', '0xa.0.0.1']) {
+      const res = await app.request(`/data-integrations/salesforce/authorize?redirect_uri=http://${host}/cb`, {
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(302);
+    }
   });
 
   it('matches subdomains of a wildcard, but not its apex', async () => {
@@ -383,6 +424,40 @@ describe('redirect URI schemes', () => {
       { redirect: 'manual' },
     );
     expect(res.status).toBe(302);
+  });
+});
+
+/**
+ * Interactive mode renders the redirect_uri into a hidden field and only reaches the host check on
+ * the POST, so a disallowed host used to serve a working sign-in form and fail after the form was
+ * filled in — the same check, arriving a page too late.
+ */
+describe('redirect host validation (interactive mode)', () => {
+  function createInteractiveApp(allowedRedirectHosts?: string[]) {
+    const { app, store } = createTestApp(allowedRedirectHosts);
+    store.setData(STORE_KEYS.interactiveAuth, true);
+    return app;
+  }
+
+  const paths = [
+    '/user_management/authorize?redirect_uri=https://app.example.test/cb',
+    '/sso/authorize?connection=conn_x&redirect_uri=https://app.example.test/cb',
+  ];
+
+  it('refuses a disallowed host at the GET rather than rendering a login page', async () => {
+    for (const path of paths) {
+      const res = await createInteractiveApp().request(path);
+      expect(res.status).toBe(400);
+      expect((await json(res)).code).toBe('invalid_redirect_uri');
+    }
+  });
+
+  it('still renders the login page when the host is allowed', async () => {
+    for (const path of paths) {
+      const res = await createInteractiveApp(['app.example.test']).request(path);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain('value="https://app.example.test/cb"');
+    }
   });
 });
 
