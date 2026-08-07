@@ -51,13 +51,13 @@ export function organizationRoutes(ctx: RouteContext): void {
   app.get('/organizations', (c) => {
     const url = new URL(c.req.url);
     const params = parseListParams(url);
-    const nameFilter = url.searchParams.get('name') ?? undefined;
+    const search = url.searchParams.get('search') ?? undefined;
     const domainsFilter = url.searchParams.get('domains') ?? undefined;
 
     const result = ws.organizations.list({
       ...params,
       filter: (org) => {
-        if (nameFilter && !org.name.toLowerCase().includes(nameFilter.toLowerCase())) {
+        if (search && !org.name.toLowerCase().includes(search.toLowerCase())) {
           return false;
         }
         if (domainsFilter) {

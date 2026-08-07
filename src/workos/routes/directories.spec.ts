@@ -124,6 +124,27 @@ describe('Directory Sync routes', () => {
     expect(list.data).toHaveLength(1);
   });
 
+  it('lists directory users with idp_id filter', async () => {
+    const { dir } = seedDirectory();
+    const res = await req(`/directory_users?directory=${dir.id}&idp_id=idp_usr_1`);
+    expect(res.status).toBe(200);
+    expect((await json(res)).data).toHaveLength(1);
+
+    const miss = await req(`/directory_users?directory=${dir.id}&idp_id=idp_usr_absent`);
+    expect((await json(miss)).data).toHaveLength(0);
+  });
+
+  it('lists directory users with email filter', async () => {
+    const { dir } = seedDirectory();
+    // Email addresses identify the same person whatever their casing.
+    const res = await req(`/directory_users?directory=${dir.id}&email=JANE@ACME.COM`);
+    expect(res.status).toBe(200);
+    expect((await json(res)).data).toHaveLength(1);
+
+    const miss = await req(`/directory_users?directory=${dir.id}&email=nobody@acme.com`);
+    expect((await json(miss)).data).toHaveLength(0);
+  });
+
   it('gets a directory user by id', async () => {
     const { user } = seedDirectory();
     const res = await req(`/directory_users/${user.id}`);
@@ -138,6 +159,31 @@ describe('Directory Sync routes', () => {
     const list = await json(res);
     expect(list.data).toHaveLength(1);
     expect(list.data[0].name).toBe('Engineering');
+  });
+
+  it('lists directory groups with user filter', async () => {
+    const { dir, group, user } = seedDirectory();
+    const ws = getWorkOSStore(store);
+    // A second group in the same directory that the user does not belong to — without it,
+    // an ignored `user` param would return the same single group as a working one.
+    const unrelated = ws.directoryGroups.insert({
+      object: 'directory_group',
+      directory_id: dir.id,
+      organization_id: 'org_123',
+      idp_id: 'idp_grp_2',
+      name: 'Sales',
+      raw_attributes: {},
+    });
+
+    const res = await req(`/directory_groups?user=${user.id}`);
+    expect(res.status).toBe(200);
+    const list = await json(res);
+    expect(list.data).toHaveLength(1);
+    expect(list.data[0].id).toBe(group.id);
+    expect(list.data.map((g: { id: string }) => g.id)).not.toContain(unrelated.id);
+
+    const miss = await req('/directory_groups?user=directory_user_absent');
+    expect((await json(miss)).data).toHaveLength(0);
   });
 
   it('gets a directory group by id', async () => {

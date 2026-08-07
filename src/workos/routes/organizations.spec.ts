@@ -120,6 +120,21 @@ describe('Organization routes', () => {
     expect(getRes.status).toBe(404);
   });
 
+  it('filters organizations by search', async () => {
+    for (const name of ['Acme Corp', 'Globex']) {
+      await req('/organizations', { method: 'POST', body: JSON.stringify({ name }) });
+    }
+
+    const res = await req('/organizations?search=acme');
+    expect(res.status).toBe(200);
+    const list = await json(res);
+    expect(list.data).toHaveLength(1);
+    expect(list.data[0].name).toBe('Acme Corp');
+
+    const miss = await req('/organizations?search=initech');
+    expect((await json(miss)).data).toHaveLength(0);
+  });
+
   it('lists with cursor pagination', async () => {
     for (let i = 1; i <= 5; i++) {
       await req('/organizations', {

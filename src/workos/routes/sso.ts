@@ -313,17 +313,19 @@ export function ssoRoutes(ctx: RouteContext): void {
 
     return c.json({
       logout_token: logoutToken,
-      logout_url: `${ctx.baseUrl}/sso/logout?logout_token=${logoutToken}`,
+      logout_url: `${ctx.baseUrl}/sso/logout?token=${logoutToken}`,
     });
   });
 
   // SSO Single Logout — redirect (public, no auth)
   app.get('/sso/logout', (c) => {
     const url = new URL(c.req.url);
-    const logoutToken = url.searchParams.get('logout_token');
+    // The redirect endpoint reads the token from `token`; only the Logout Authorize
+    // response body names it `logout_token`.
+    const logoutToken = url.searchParams.get('token');
 
     if (!logoutToken) {
-      throw new WorkOSApiError(400, 'logout_token is required', 'invalid_request');
+      throw new WorkOSApiError(400, 'token is required', 'invalid_request');
     }
 
     const profileId = store.getData<string>(`${STORE_KEY_PREFIXES.ssoLogout}${logoutToken}`);

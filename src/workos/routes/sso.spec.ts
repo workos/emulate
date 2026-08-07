@@ -466,4 +466,28 @@ describe('SSO authentication events', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'invalid_request', error_description: 'grant_type is required.' });
   });
+
+  // The redirect endpoint takes `token`; only the Logout Authorize response body names it
+  // `logout_token`. Reading the wrong one made every logout_url the emulator handed out
+  // unusable against the emulator itself.
+  it('single logout accepts the token param and the logout_url it issues', async () => {
+    const { conn } = await createOrgWithConnection();
+    await app.request(
+      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=bye%40sso.example.com`,
+    );
+    const profile = getWorkOSStore(store).ssoProfiles.all()[0];
+
+    const authorize = await json(
+      await req('/sso/logout/authorize', { method: 'POST', body: JSON.stringify({ profile_id: profile.id }) }),
+    );
+    expect(new URL(authorize.logout_url).searchParams.get('token')).toBe(authorize.logout_token);
+
+    // The issued URL works as handed out, and the old param name is not accepted.
+    const stale = await app.request(`/sso/logout?logout_token=${authorize.logout_token}`);
+    expect(stale.status).toBe(400);
+
+    const res = await app.request(new URL(authorize.logout_url).pathname + new URL(authorize.logout_url).search);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true });
+  });
 });

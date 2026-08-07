@@ -50,12 +50,16 @@ export function directoryRoutes(ctx: RouteContext): void {
     const params = parseListParams(url);
     const directoryId = url.searchParams.get('directory') ?? undefined;
     const groupId = url.searchParams.get('group') ?? undefined;
+    const idpId = url.searchParams.get('idp_id') ?? undefined;
+    const email = url.searchParams.get('email') ?? undefined;
 
     const result = ws.directoryUsers.list({
       ...params,
       filter: (u) => {
         if (directoryId && u.directory_id !== directoryId) return false;
         if (groupId && !u.groups.some((g) => g.id === groupId)) return false;
+        if (idpId && u.idp_id !== idpId) return false;
+        if (email && u.email?.toLowerCase() !== email.toLowerCase()) return false;
         return true;
       },
     });
@@ -75,11 +79,17 @@ export function directoryRoutes(ctx: RouteContext): void {
     const url = new URL(c.req.url);
     const params = parseListParams(url);
     const directoryId = url.searchParams.get('directory') ?? undefined;
+    const userId = url.searchParams.get('user') ?? undefined;
+
+    // Resolve the user's group membership once rather than per candidate group. An unknown
+    // user id yields an empty set, so the filter matches nothing.
+    const userGroupIds = userId ? new Set(ws.directoryUsers.get(userId)?.groups.map((g) => g.id) ?? []) : undefined;
 
     const result = ws.directoryGroups.list({
       ...params,
       filter: (g) => {
         if (directoryId && g.directory_id !== directoryId) return false;
+        if (userGroupIds && !userGroupIds.has(g.id)) return false;
         return true;
       },
     });
