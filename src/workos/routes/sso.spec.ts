@@ -355,8 +355,9 @@ describe('SSO authentication events', () => {
     expect(ws.ssoAuthorizations.findOneBy('code', code)).toBeUndefined();
   });
 
-  // Every /sso/token failure is OAuth-shaped, including the two a client hits before it has a
-  // code to present — the endpoint has no plain-shaped response for a caller to have to parse.
+  // Every /sso/token failure a caller can cause is OAuth-shaped, including the two they hit
+  // before they have a code to present. The only plain body the endpoint can return is the
+  // profile-missing 500, which no request can provoke.
   it('rejects a wrong grant type and a missing code OAuth-style', async () => {
     const wrongGrant = await app.request('/sso/token', {
       method: 'POST',

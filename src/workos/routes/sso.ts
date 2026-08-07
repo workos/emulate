@@ -139,10 +139,11 @@ export function ssoRoutes(ctx: RouteContext): void {
     const code = body.code as string;
 
     // The spec gives /sso/token only OAuth-shaped 400s — invalid_client, unauthorized_client,
-    // invalid_grant, unsupported_grant_type — so every failure below is rendered that way,
-    // including the missing-parameter cases the spec leaves out and RFC 6749 §5.2 names
-    // invalid_request. A plain envelope there would have made the failures a client hits before
-    // it has a code the ones it cannot parse like the rest.
+    // invalid_grant, unsupported_grant_type — so every failure a caller can cause below is
+    // rendered that way, including the missing-parameter cases the spec leaves out and RFC 6749
+    // §5.2 names invalid_request. A plain envelope there would have made the failures a client
+    // hits before it has a code the ones it cannot parse like the rest. What a caller cannot
+    // cause is the profile-missing 500 further down, which stays plain and says why there.
     //
     // Absent and wrong are different failures: an omitted grant_type is a malformed request,
     // not a request for a grant this endpoint declines to support, and reporting it as
@@ -198,6 +199,11 @@ export function ssoRoutes(ctx: RouteContext): void {
     }
 
     const profile = ws.ssoProfiles.get(auth.profile_id);
+    // The deliberate exception to the OAuth-shaped rule above, and the reason it says every
+    // *failure a caller can cause*: a stored authorization pointing at a profile that no longer
+    // exists is emulator state gone wrong, not a request anyone can fix by sending something
+    // else. RFC 6749 §5.2's code list covers client errors only — it has no entry to render this
+    // as — so it stays plain, like every other 500 the emulator returns.
     if (!profile) {
       throw new WorkOSApiError(500, 'Profile not found', 'server_error');
     }
