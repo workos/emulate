@@ -438,4 +438,17 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       method: 'DELETE',
     });
   });
+
+  it('device authorization verification_uri resolves to the actual bound port (port: 0)', async () => {
+    // The emulator is booted with port: 0, so its base URL is only known after bind. The
+    // verification_uri must reflect that real port, not the pre-bind http://localhost:0 the
+    // route context started with — otherwise a CLI opening it in a browser cannot connect.
+    const res = await api('/user_management/authorize/device', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: 'client_e2e' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.verification_uri).toBe(`${emulator.url}/user_management/authorize/device/verify`);
+  });
 });

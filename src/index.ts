@@ -116,7 +116,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   // the captured `apiKeys` object to this state (see below).
   const initialApiKeys: ApiKeyMap = { ...apiKeys };
 
-  const { app, store, jwt } = createServer(workosPlugin, {
+  const { app, store, jwt, ctx } = createServer(workosPlugin, {
     port,
     baseUrl,
     apiKeys,
@@ -176,15 +176,16 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
     }
   };
 
-  const seedFn = () => {
-    workosPlugin.seed?.(store, baseUrl);
+  const seedFn = (seedBaseUrl: string) => {
+    workosPlugin.seed?.(store, seedBaseUrl);
     if (options.seed) {
-      seedFromConfig(store, baseUrl, options.seed);
+      seedFromConfig(store, seedBaseUrl, options.seed);
     }
     seedErrorHooks();
   };
 
-  seedFn();
+  // Seeding runs after bind (below) so URLs baked into seeded records — invitation
+  // accept_invitation_urls — use the actual bound port instead of the pre-bind localhost:0.
 
   // Passing an explicit `hostname` makes `listen()` asynchronous, so we await the
   // listening callback (important for port: 0) and reject if the bind fails.
@@ -214,6 +215,13 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   // issuer is left alone — the whole point is that it does not move with the port.
   if (!options.issuer) jwt.issuer = url;
 
+  // Reflect the actual bound URL on the route context too (matters when port: 0), so
+  // per-request URLs like the device verification_uri and SSO logout_url resolve to a
+  // reachable address instead of the pre-bind http://localhost:0. Seed afterward so seeded
+  // invitation accept_invitation_urls are baked with the bound port as well.
+  ctx.baseUrl = url;
+  seedFn(url);
+
   const primaryApiKey = Object.keys(apiKeys)[0];
 
   return {
@@ -237,7 +245,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
       Object.assign(apiKeys, initialApiKeys);
       store.setData(STORE_KEYS.apiKeyMap, apiKeys);
       applyOptionData();
-      seedFn();
+      seedFn(url);
       // Note: EventBus is not re-registered after reset because Hono's router
       // cannot be modified after it's built. Route-level authentication events
       // will not work after reset. This is acceptable for test scenarios where

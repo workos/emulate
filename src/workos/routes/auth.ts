@@ -65,7 +65,7 @@ interface AuthorizeParams {
 }
 
 export function authRoutes(ctx: RouteContext): void {
-  const { app, store, jwt, baseUrl } = ctx;
+  const { app, store, jwt } = ctx;
   const ws = getWorkOSStore(store);
 
   function resolveAndRedirect(c: any, params: AuthorizeParams) {
@@ -204,7 +204,7 @@ export function authRoutes(ctx: RouteContext): void {
       interval: 5,
     });
 
-    return c.json(formatDeviceAuthorization(deviceAuth, baseUrl));
+    return c.json(formatDeviceAuthorization(deviceAuth, ctx.baseUrl));
   });
 
   // AuthKit SDK uses /x/authkit/users/authenticate for the same flow

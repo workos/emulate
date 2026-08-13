@@ -14,7 +14,7 @@ import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
 
 export function invitationRoutes(ctx: RouteContext): void {
-  const { app, store, baseUrl } = ctx;
+  const { app, store } = ctx;
   const ws = getWorkOSStore(store);
 
   app.post('/user_management/invitations', async (c) => {
@@ -33,7 +33,7 @@ export function invitationRoutes(ctx: RouteContext): void {
       email,
       state: 'pending',
       token,
-      accept_invitation_url: `${baseUrl}/user_management/invitations/accept?token=${token}`,
+      accept_invitation_url: `${ctx.baseUrl}/user_management/invitations/accept?token=${token}`,
       organization_id: (body.organization_id as string) ?? null,
       inviter_user_id: (body.inviter_user_id as string) ?? null,
       role_slug: (body.role_slug as string) ?? null,
@@ -114,7 +114,7 @@ export function invitationRoutes(ctx: RouteContext): void {
     const newToken = generateVerificationToken();
     ws.invitations.update(inv.id, {
       token: newToken,
-      accept_invitation_url: `${baseUrl}/user_management/invitations/accept?token=${newToken}`,
+      accept_invitation_url: `${ctx.baseUrl}/user_management/invitations/accept?token=${newToken}`,
       expires_at: expiresIn(72 * 60),
       state: 'pending',
     });
