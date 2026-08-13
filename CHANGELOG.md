@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/workos/emulate/compare/v0.7.0...v0.7.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **auth:** complete device authorization grant support ([#64](https://github.com/workos/emulate/issues/64)) ([524ed5d](https://github.com/workos/emulate/commit/524ed5d0d81127915f36f1d12b90115cbffabfc8))
+
 ## [0.7.0](https://github.com/workos/emulate/compare/v0.6.0...v0.7.0) (2026-08-07)
 
 
