@@ -1023,17 +1023,15 @@ describe('Auth routes', () => {
     expect(tokenBody.user.email).toBe('device@test.com');
   });
 
-  it('device authorization returns a resolvable verification_uri', async () => {
-    await createUser('verifyuri@test.com');
-    const res = await req('/user_management/authorize/device', {
+  it('device authorization derives verification_uri from the server baseUrl', async () => {
+    const local = createServer(workosPlugin, { port: 0, baseUrl: 'http://localhost:9999', apiKeys });
+    const res = await local.app.request('/user_management/authorize/device', {
       method: 'POST',
+      headers,
       body: JSON.stringify({ client_id: 'test_client' }),
     });
     expect(res.status).toBe(200);
-    const body = await json(res);
-    // Points at the running emulator (not the unresolvable localhost:0) and at the served
-    // verify route, so a CLI that opens it in a browser reaches the confirmation page.
-    expect(body.verification_uri).toBe('http://localhost:0/user_management/authorize/device/verify');
+    expect((await json(res)).verification_uri).toBe('http://localhost:9999/user_management/authorize/device/verify');
   });
 
   it('GET /user_management/authorize/device/verify serves an HTML confirmation page', async () => {
@@ -1058,7 +1056,6 @@ describe('Auth routes', () => {
     const body = await json(res);
     expect(body.device_code).toBeDefined();
     expect(body.user_code).toBeDefined();
-    expect(body.verification_uri).toBe('http://localhost:0/user_management/authorize/device/verify');
   });
 
   it('device_code grant accepts form-encoded bodies', async () => {
