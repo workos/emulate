@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   type RouteContext,
   notFound,
-  parseJsonBody,
+  parseOAuthBody,
   WorkOSApiError,
   OauthApiError,
   generateId,
@@ -33,7 +33,7 @@ import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
 import type { WorkOSInvitation } from '../entities.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
-import { renderLoginPage } from '../login-page.js';
+import { renderLoginPage, renderDeviceVerifyPage } from '../login-page.js';
 
 interface PendingAuth {
   user_id: string;
@@ -65,7 +65,7 @@ interface AuthorizeParams {
 }
 
 export function authRoutes(ctx: RouteContext): void {
-  const { app, store, jwt } = ctx;
+  const { app, store, jwt, baseUrl } = ctx;
   const ws = getWorkOSStore(store);
 
   function resolveAndRedirect(c: any, params: AuthorizeParams) {
@@ -170,9 +170,22 @@ export function authRoutes(ctx: RouteContext): void {
     });
   });
 
+  // Device verification page. The emulator auto-approves device authorization with the first
+  // seeded user, so this is a confirmation page rather than a user_code entry form. It exists so
+  // the resolvable verification_uri returned by the authorize endpoint does not 404 in a browser.
+  app.get('/user_management/authorize/device/verify', (c) => {
+    return c.html(
+      renderDeviceVerifyPage({
+        title: 'Device approved',
+        message:
+          'WorkOS Emulate auto-approves device authorization with the first seeded user, so polling /user_management/authenticate will succeed immediately.',
+      }),
+    );
+  });
+
   // Device authorization endpoint
   app.post('/user_management/authorize/device', async (c) => {
-    const body = await parseJsonBody(c);
+    const body = await parseOAuthBody(c);
     const clientId = body.client_id as string;
     if (!clientId) {
       throw new WorkOSApiError(400, 'client_id is required', 'invalid_request');
@@ -191,12 +204,19 @@ export function authRoutes(ctx: RouteContext): void {
       interval: 5,
     });
 
-    return c.json(formatDeviceAuthorization(deviceAuth));
+    return c.json(formatDeviceAuthorization(deviceAuth, baseUrl));
   });
 
   // AuthKit SDK uses /x/authkit/users/authenticate for the same flow
   const authenticateHandler = async (c: any) => {
-    const body = await parseJsonBody(c);
+    // Production's /user_management/authenticate accepts both JSON and
+    // application/x-www-form-urlencoded on every grant (Nest's default urlencoded parser is
+    // active, and the edge proxy documents both media types for this path) -- not just
+    // device_code, despite the docs only showing form-encoded for that grant. RFC 6749 §3.2
+    // requires the form encoding. parseOAuthBody dispatches on Content-Type and returns the
+    // same Record<string, unknown> the grant handlers index into, so every grant parses
+    // identically to production.
+    const body = await parseOAuthBody(c);
     const grantType = body.grant_type as string | undefined;
     const clientId = body.client_id as string | undefined;
     const clientSecret = body.client_secret as string | undefined;

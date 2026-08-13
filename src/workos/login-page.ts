@@ -6,6 +6,41 @@ export interface LoginPageOptions {
   hiddenFields: Record<string, string>;
 }
 
+export interface DeviceVerifyPageOptions {
+  title: string;
+  message: string;
+}
+
+// The emulator auto-approves device authorization with the first seeded user, so this page is a
+// static confirmation rather than a user_code entry form. It matches the login page styling so a
+// CLI that opens verification_uri in a browser lands on something that looks like WorkOS.
+export function renderDeviceVerifyPage(options: DeviceVerifyPageOptions): string {
+  const { title, message } = options;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${esc(title)} — WorkOS Emulate</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f5;display:flex;justify-content:center;align-items:center;min-height:100vh}
+    .card{background:#fff;border-radius:8px;padding:40px;width:400px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+    .badge{display:inline-block;background:#6366f1;color:#fff;font-size:11px;font-weight:600;padding:3px 8px;border-radius:4px;margin-bottom:16px;letter-spacing:.5px}
+    h1{font-size:22px;font-weight:600;margin-bottom:8px}
+    .sub{color:#6b7280;font-size:14px;line-height:1.5}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">WORKOS EMULATE</div>
+    <h1>${esc(title)}</h1>
+    <p class="sub">${esc(message)}</p>
+  </div>
+</body>
+</html>`;
+}
+
 export function renderLoginPage(options: LoginPageOptions): string {
   const { title, subtitle, emailHint, formAction, hiddenFields } = options;
 

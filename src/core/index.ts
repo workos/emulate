@@ -27,6 +27,7 @@ export {
   unauthorized,
   forbidden,
   parseJsonBody,
+  parseOAuthBody,
 } from './middleware/error-handler.js';
 export {
   authMiddleware,

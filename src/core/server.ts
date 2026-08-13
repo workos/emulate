@@ -48,6 +48,9 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
   const PUBLIC_PATHS = new Set([
     '/health',
     '/user_management/authorize',
+    // Browser-facing device verification page; like the authorize login page it cannot carry a
+    // bearer token, so it is public. The POST device-authorization endpoint still requires auth.
+    '/user_management/authorize/device/verify',
     '/user_management/authenticate',
     '/user_management/sessions/logout',
   ]);

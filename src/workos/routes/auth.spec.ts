@@ -1023,6 +1023,91 @@ describe('Auth routes', () => {
     expect(tokenBody.user.email).toBe('device@test.com');
   });
 
+  it('device authorization returns a resolvable verification_uri', async () => {
+    await createUser('verifyuri@test.com');
+    const res = await req('/user_management/authorize/device', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: 'test_client' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    // Points at the running emulator (not the unresolvable localhost:0) and at the served
+    // verify route, so a CLI that opens it in a browser reaches the confirmation page.
+    expect(body.verification_uri).toBe('http://localhost:0/user_management/authorize/device/verify');
+  });
+
+  it('GET /user_management/authorize/device/verify serves an HTML confirmation page', async () => {
+    const res = await app.request('/user_management/authorize/device/verify');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    const html = await res.text();
+    expect(html).toContain('Device approved');
+  });
+
+  it('device authorization accepts form-encoded bodies', async () => {
+    await createUser('formdevice@test.com');
+    const res = await app.request('/user_management/authorize/device', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer sk_test_auth',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ client_id: 'test_client' }).toString(),
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.device_code).toBeDefined();
+    expect(body.user_code).toBeDefined();
+    expect(body.verification_uri).toBe('http://localhost:0/user_management/authorize/device/verify');
+  });
+
+  it('device_code grant accepts form-encoded bodies', async () => {
+    await createUser('formgrant@test.com');
+    const start = await req('/user_management/authorize/device', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: 'test_client' }),
+    });
+    const { device_code } = await json(start);
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code,
+      }).toString(),
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.access_token).toBeDefined();
+    expect(body.user.email).toBe('formgrant@test.com');
+  });
+
+  it('password grant accepts form-encoded bodies', async () => {
+    await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'formpass@test.com', password: 'secret' }),
+    });
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'password',
+        email: 'formpass@test.com',
+        password: 'secret',
+      }).toString(),
+    });
+    // Production accepts form-encoded on every /authenticate grant (Nest's default urlencoded
+    // parser is active), not just device_code, so the emulator mirrors that rather than being
+    // more restrictive and producing a false failure.
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.access_token).toBeDefined();
+    expect(body.user.email).toBe('formpass@test.com');
+    expect(body.authentication_method).toBe('Password');
+  });
+
   // --- Organization selection grant tests ---
 
   it('organization-selection grant scopes session to selected org', async () => {
