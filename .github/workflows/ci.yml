@@ -126,3 +126,29 @@ jobs:
           # connection-refused (curl 7). The container is created before the
           # Node app finishes binding :4100, so the first probe can hit a RST.
           curl --retry 10 --retry-delay 1 --retry-all-errors --fail http://localhost:4100/health
+
+  docker-arm64:
+    name: Docker build (arm64)
+    # Native ARM runner — builds the arm64 image the release workflow publishes
+    # to GHCR, without QEMU emulation. Mirrors `docker` above on ubuntu-24.04-arm
+    # (the same runner the standalone-binary smoke tests use for arm64).
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: false
+          load: true
+          tags: emulate:ci
+
+      - name: Container smoke test
+        shell: bash
+        run: |
+          docker run --rm -d -p 4100:4100 --name emulate-ci emulate:ci
+          trap 'docker stop emulate-ci 2>/dev/null || true' EXIT
+          # `--retry-all-errors` retries on TCP reset (curl 56) too, not just
+          # connection-refused (curl 7). The container is created before the
+          # Node app finishes binding :4100, so the first probe can hit a RST.
+          curl --retry 10 --retry-delay 1 --retry-all-errors --fail http://localhost:4100/health

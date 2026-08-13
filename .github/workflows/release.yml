@@ -272,9 +272,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # QEMU + Buildx let a single amd64 runner build and push a multi-arch
+      # manifest list (amd64 + arm64) so ARM hosts pull a native image. The
+      # Dockerfile's base images (oven/bun, node:22-alpine) are already
+      # multi-arch, so no Dockerfile changes are needed.
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
 
