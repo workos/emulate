@@ -359,8 +359,36 @@ export function formatAuthFactor(f: WorkOSAuthenticationFactor): Record<string, 
   return formatEntity(f);
 }
 
+/**
+ * The spec's identity is the three federated fields and nothing else — no `object`, no `id`, no
+ * timestamps — and its endpoint returns a bare array rather than a list envelope, which is what
+ * the SDKs deserialize (`getUserIdentities` maps the response body directly).
+ */
 export function formatIdentity(i: WorkOSIdentity): Record<string, unknown> {
-  return formatEntity(i);
+  return { idp_id: i.idp_id, type: i.type, provider: i.provider };
+}
+
+/**
+ * Record that `user` signs in through `provider`, idempotently: an identity is a link, and a
+ * second login through the same provider is the same link, not another one. Callers pass the
+ * provider as a spec-valid AuthenticateResponse value ('GoogleOAuth', 'MicrosoftOAuth', …),
+ * which is also what the identity `provider` enum holds.
+ */
+export function linkOAuthIdentity(
+  ws: WorkOSStore,
+  userId: string,
+  provider: string,
+  idpId: string,
+): WorkOSIdentity | undefined {
+  const existing = ws.identities.findBy('user_id', userId).find((i) => i.provider === provider);
+  if (existing) return existing;
+  return ws.identities.insert({
+    object: 'identity',
+    user_id: userId,
+    provider,
+    idp_id: idpId,
+    type: 'OAuth',
+  });
 }
 
 export function generateVerificationToken(): string {

@@ -304,7 +304,27 @@ report their own method and need no configuration.)
 users:
   - email: alice@acme.com
     oauth_provider: GoogleOAuth # reported as authentication_method for this user's OAuth logins
+    oauth_idp_id: 108872335 # the user's id at the provider; generated if omitted
 ```
+
+### Linked OAuth identities
+
+`oauth_provider` also links an OAuth identity, so the user is reported by
+`GET /user_management/users/{id}/identities` — a bare array of `{idp_id, type, provider}`, which is
+what the SDKs' `getUserIdentities` deserializes:
+
+```json
+[{ "idp_id": "108872335", "type": "OAuth", "provider": "GoogleOAuth" }]
+```
+
+Completing a login through an OAuth `connection` (`GoogleOAuth`, `MicrosoftOAuth`, `GitHubOAuth`,
+`AppleOAuth`) links one too, carrying the profile's `idp_id`. SAML connections do not: the spec's
+identity `provider` enum is OAuth-only. A second login through the same provider is the same link,
+not another one.
+
+A JWT template reads the same fact as `user.identities` — a provider→`idp_id` map, `null` for every
+provider the user has not linked, so `{{ user.identities.GoogleOAuth }}` renders the id and an
+unlinked provider renders a claim the emulator drops.
 
 ### Machine-to-Machine (M2M) Applications
 

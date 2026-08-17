@@ -9,11 +9,24 @@ import {
   emitAuthenticationEvent,
   findUserByEmail,
   emailsMatch,
+  linkOAuthIdentity,
 } from '../helpers.js';
-import type { WorkOSConnection } from '../entities.js';
+import type { WorkOSConnection, WorkOSConnectionType } from '../entities.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEY_PREFIXES, STORE_KEYS } from '../constants.js';
 import { renderLoginPage } from '../login-page.js';
+
+/**
+ * The connection types that federate through OAuth rather than SAML. Their names are exactly the
+ * spec's identity `provider` values, which is why a login through one can be recorded as a linked
+ * identity and a SAML login cannot.
+ */
+const OAUTH_CONNECTION_TYPES = new Set<WorkOSConnectionType>([
+  'AppleOAuth',
+  'GitHubOAuth',
+  'GoogleOAuth',
+  'MicrosoftOAuth',
+]);
 
 interface SSOAuthorizeParams {
   redirectUri: string;
@@ -239,12 +252,22 @@ export function ssoRoutes(ctx: RouteContext): void {
     // SSO is profile-based; a user-management user may not exist for this email. Resolved
     // case-insensitively, like every other lookup by email, so the event carries the id of an
     // account stored under a different case rather than reporting none.
+    const authenticatedUser = findUserByEmail(ws, profile.email);
+
+    // A completed login through an OAuth connection is what identity linking records, so this is
+    // where the identity the users endpoint reports comes from. SAML connections are skipped: the
+    // spec's identity `provider` enum is OAuth-only, and "currently only OAuth identities are
+    // supported".
+    if (authenticatedUser && OAUTH_CONNECTION_TYPES.has(profile.connection_type)) {
+      linkOAuthIdentity(ws, authenticatedUser.id, profile.connection_type, profile.idp_id);
+    }
+
     emitAuthenticationEvent({
       eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
       method: 'SSO',
       status: 'succeeded',
       email: profile.email,
-      userId: findUserByEmail(ws, profile.email)?.id ?? null,
+      userId: authenticatedUser?.id ?? null,
       ipAddress: c.req.header('x-forwarded-for') ?? null,
       userAgent: c.req.header('user-agent') ?? null,
       sso: {

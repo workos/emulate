@@ -66,6 +66,7 @@ import {
   formatFeatureFlag,
   generateClientId,
   findUserByEmail,
+  linkOAuthIdentity,
 } from './helpers.js';
 import type {
   WorkOSConnectionType,
@@ -135,8 +136,18 @@ export interface WorkOSSeedUser {
    * OAuth-based grants (authorization_code, refresh_token, device_code). Must be a spec-valid
    * value such as 'GoogleOAuth' or 'MicrosoftOAuth'. When omitted the emulator leaves
    * authentication_method off the response rather than guessing a provider.
+   *
+   * Setting it also links an OAuth identity, so the user is returned by
+   * `GET /user_management/users/{id}/identities` and readable as `user.identities` in a JWT
+   * template.
    */
   oauth_provider?: string;
+  /**
+   * The user's id at `oauth_provider`, reported as the linked identity's `idp_id`. Generated if
+   * omitted. Pin it to match what your real WorkOS environment emits. Ignored without
+   * `oauth_provider` — there is no identity to put it on.
+   */
+  oauth_idp_id?: string;
 }
 
 export interface WorkOSSeedConnection {
@@ -286,7 +297,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
 
   if (config.users) {
     for (const userConfig of config.users) {
-      ws.users.insert({
+      const user = ws.users.insert({
         object: 'user',
         id: userConfig.id,
         // Trimmed, as both routes that create users store it: a padded seed would otherwise be
@@ -306,6 +317,18 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         impersonator: userConfig.impersonator ?? null,
         oauth_provider: userConfig.oauth_provider ?? null,
       });
+
+      // Being told a user authenticates with an OAuth provider is being told they have a linked
+      // identity: it is the same fact `GET /user_management/users/{id}/identities` reports, so a
+      // seed that sets one no longer has to also be an account with no identities at all.
+      if (userConfig.oauth_provider) {
+        linkOAuthIdentity(
+          ws,
+          user.id,
+          userConfig.oauth_provider,
+          userConfig.oauth_idp_id ?? `idp_${generateId('usr')}`,
+        );
+      }
     }
   }
 
