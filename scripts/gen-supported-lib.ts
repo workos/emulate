@@ -187,6 +187,7 @@ export const FEATURES: FeatureDef[] = [
     name: 'Pipes / Connected Apps',
     tags: ['pipes', 'pipes.provider', 'user-management.data-providers'],
     emulatorCreateRoutes: ['/pipes'],
+    seedKeys: ['connectedAccounts'],
     notes: 'Connection CRUD and access-token minting are emulator-specific routes under `/pipes/connections`.',
   },
   {
@@ -324,6 +325,7 @@ export function parseEmulatorRoutes(sources: string[]): EmulatorRoute[] {
   const routes: EmulatorRoute[] = [];
   const literalPattern = /app\.(get|post|put|patch|delete)\('([^']+)'/g;
   const templatePattern = /app\.(get|post|put|patch|delete)\(`([^`]+)`/g;
+  const identifierPattern = /app\.(get|post|put|patch|delete)\((\w+)\s*,/g;
   const helperPattern = /pathPrefix:\s*([^,}\n]+)/g;
 
   for (const source of sources) {
@@ -346,7 +348,13 @@ export function parseEmulatorRoutes(sources: string[]): EmulatorRoute[] {
       routes.push({ method: match[1].toUpperCase(), path: raw });
     }
 
-    // 3. registerRoleRoutes helper — expand the known routes from pathPrefix
+    // 3. Bare identifier routes — a shared `const PATH = '...'` registered on several verbs
+    for (const match of source.matchAll(identifierPattern)) {
+      const path = vars.get(match[2]);
+      if (path) routes.push({ method: match[1].toUpperCase(), path });
+    }
+
+    // 4. registerRoleRoutes helper — expand the known routes from pathPrefix
     for (const match of source.matchAll(helperPattern)) {
       let prefix = match[1].trim();
       if (prefix.startsWith("'") && prefix.endsWith("'")) {

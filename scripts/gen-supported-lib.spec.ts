@@ -128,6 +128,28 @@ describe('parseEmulatorRoutes', () => {
     });
   });
 
+  it('resolves bare identifier paths declared as const strings', () => {
+    const source = [
+      `const ACCOUNT_PATH = '/user_management/users/:user_id/connected_accounts/:slug';`,
+      `app.get(ACCOUNT_PATH, (c) => {});`,
+      `app.post(ACCOUNT_PATH, async (c) => {});`,
+      `app.put(ACCOUNT_PATH, async (c) => {});`,
+      `app.delete(ACCOUNT_PATH, (c) => {});`,
+    ].join('\n');
+    const routes = parseEmulatorRoutes([source]);
+    expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /user_management/users/:user_id/connected_accounts/:slug',
+      'POST /user_management/users/:user_id/connected_accounts/:slug',
+      'PUT /user_management/users/:user_id/connected_accounts/:slug',
+      'DELETE /user_management/users/:user_id/connected_accounts/:slug',
+    ]);
+  });
+
+  it('ignores bare identifiers with no matching const declaration', () => {
+    const routes = parseEmulatorRoutes([`app.get(unknownPath, (c) => {});`]);
+    expect(routes).toHaveLength(0);
+  });
+
   it('skips template literals with unresolved interpolations', () => {
     const source = `app.get(\`${'${unknown}'}/path\`, (c) => {});`;
     const routes = parseEmulatorRoutes([source]);

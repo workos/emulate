@@ -32,6 +32,7 @@ export interface EmulatorSeedConfig {
   organizations?: WorkOSSeedConfig['organizations'];
   users?: WorkOSSeedConfig['users'];
   connections?: WorkOSSeedConfig['connections'];
+  connectedAccounts?: WorkOSSeedConfig['connectedAccounts'];
   invitations?: WorkOSSeedConfig['invitations'];
   roles?: WorkOSSeedConfig['roles'];
   permissions?: WorkOSSeedConfig['permissions'];
