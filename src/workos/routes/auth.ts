@@ -569,10 +569,8 @@ export function authRoutes(ctx: RouteContext): void {
         ws.emailVerifications.delete(ev.id);
         if (pendingToken) store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, undefined);
         user = ws.users.get(userId);
-        if (pending) {
-          organizationId = pending.organization_id;
-          invitation = deferredInvitation;
-        }
+        organizationId = pending?.organization_id ?? null;
+        invitation = deferredInvitation;
         // Event is authentication.email_verification_succeeded; the session records the method
         // that was gated (e.g. 'password'), since verification is a gate rather than a way to
         // sign in. Without a pending token there is nothing to record, and the session falls
