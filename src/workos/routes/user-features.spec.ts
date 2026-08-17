@@ -75,31 +75,6 @@ describe('User feature routes', () => {
     });
   });
 
-  describe('Connected Accounts', () => {
-    it('gets connected account by provider slug', async () => {
-      const user = await createUser('connected@test.com');
-      const ws = getWorkOSStore(store);
-      ws.connectedAccounts.insert({
-        object: 'connected_account',
-        user_id: user.id,
-        provider: 'github',
-        provider_id: 'gh_123',
-      });
-
-      const res = await req(`/user_management/users/${user.id}/connected_accounts/github`);
-      expect(res.status).toBe(200);
-      const data = await json(res);
-      expect(data.provider).toBe('github');
-      expect(data.provider_id).toBe('gh_123');
-    });
-
-    it('returns 404 for unknown provider', async () => {
-      const user = await createUser('no-provider@test.com');
-      const res = await req(`/user_management/users/${user.id}/connected_accounts/unknown`);
-      expect(res.status).toBe(404);
-    });
-  });
-
   describe('Data Providers', () => {
     it('lists data providers from pipe connections', async () => {
       const user = await createUser('pipes@test.com');

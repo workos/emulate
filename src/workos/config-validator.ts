@@ -403,6 +403,106 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
     }
   }
 
+  // Validate connected accounts
+  if (config.connectedAccounts) {
+    if (!Array.isArray(config.connectedAccounts)) {
+      errors.push({
+        path: 'connectedAccounts',
+        message: 'connectedAccounts must be an array',
+        value: config.connectedAccounts,
+      });
+    } else {
+      // Organization name is the join key, the same one connections use.
+      const orgNames = new Set(
+        Array.isArray(config.organizations)
+          ? config.organizations.map((o) => o.name).filter((n): n is string => typeof n === 'string')
+          : [],
+      );
+      // (user, provider, organization) is the key requests address; a duplicate would seed
+      // the pair POST answers 409 for, and every lookup would only ever resolve the first.
+      const seenAccounts = new Set<string>();
+      config.connectedAccounts.forEach((account, index) => {
+        // A non-object entry (e.g. `connectedAccounts: [null]` from a YAML typo) would throw
+        // on the property reads below; record a structured error instead of crashing startup.
+        if (account === null || typeof account !== 'object') {
+          errors.push({
+            path: `connectedAccounts[${index}]`,
+            message: 'each connected account must be an object',
+            value: account,
+          });
+          return;
+        }
+        const email = seedEmail(account.email);
+        if (!email.ok) {
+          errors.push({
+            path: `connectedAccounts[${index}].email`,
+            message:
+              email.problem === 'malformed'
+                ? 'email must be a valid email address'
+                : 'email is required and must be the email of a user defined in users',
+            value: account.email,
+          });
+        } else if (!userEmails.has(email.email.toLowerCase())) {
+          errors.push({
+            path: `connectedAccounts[${index}].email`,
+            message: 'email must match a user defined in users',
+            value: account.email,
+          });
+        }
+        if (!account.provider || typeof account.provider !== 'string') {
+          errors.push({
+            path: `connectedAccounts[${index}].provider`,
+            message: 'provider is required and must be a non-empty string (the slug requests address, e.g. "github")',
+            value: account.provider,
+          });
+        }
+        if (
+          account.organization !== undefined &&
+          (typeof account.organization !== 'string' || !orgNames.has(account.organization))
+        ) {
+          errors.push({
+            path: `connectedAccounts[${index}].organization`,
+            message: 'organization must name an organization defined in organizations',
+            value: account.organization,
+          });
+        }
+        if (
+          account.scopes !== undefined &&
+          (!Array.isArray(account.scopes) || account.scopes.some((s) => typeof s !== 'string'))
+        ) {
+          errors.push({
+            path: `connectedAccounts[${index}].scopes`,
+            message: 'scopes must be an array of strings if provided',
+            value: account.scopes,
+          });
+        }
+        if (account.state && !['connected', 'needs_reauthorization'].includes(account.state)) {
+          errors.push({
+            path: `connectedAccounts[${index}].state`,
+            message:
+              'state must be "connected" or "needs_reauthorization" if provided — a disconnected account is a deleted one, so it cannot be seeded',
+            value: account.state,
+          });
+        }
+        if (email.ok && typeof account.provider === 'string' && account.provider) {
+          const key = [
+            email.email.toLowerCase(),
+            account.provider,
+            typeof account.organization === 'string' ? account.organization : '',
+          ].join('\u0000');
+          if (seenAccounts.has(key)) {
+            errors.push({
+              path: `connectedAccounts[${index}]`,
+              message: 'duplicate connected account for this user, provider, and organization',
+              value: { email: account.email, provider: account.provider, organization: account.organization },
+            });
+          }
+          seenAccounts.add(key);
+        }
+      });
+    }
+  }
+
   // Validate roles
   if (config.roles) {
     if (!Array.isArray(config.roles)) {

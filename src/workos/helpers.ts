@@ -5,6 +5,7 @@ import {
   WorkOSApiError,
   validationError,
   generateId,
+  ID_PREFIXES,
   type CursorPaginatedResult,
   type Entity,
   type Store,
@@ -32,6 +33,7 @@ import type {
   WorkOSCorsOrigin,
   WorkOSAuthorizedApplication,
   WorkOSConnectedAccount,
+  ConnectedAccountState,
   WorkOSAuthenticationChallenge,
   WorkOSDeviceAuthorization,
   WorkOSRole,
@@ -565,8 +567,46 @@ export function formatAuthorizedApplication(a: WorkOSAuthorizedApplication): Rec
   return formatEntity(a);
 }
 
+// The spec's ConnectedAccount names the provider only in the request path; the slug, the
+// integration id, and any imported tokens are the emulator's own bookkeeping.
+const CONNECTED_ACCOUNT_INTERNAL_FIELDS = new Set<string>([
+  'provider',
+  'data_integration_id',
+  'access_token',
+  'refresh_token',
+  'token_expires_at',
+]);
+
 export function formatConnectedAccount(a: WorkOSConnectedAccount): Record<string, unknown> {
-  return formatEntity(a);
+  return formatEntity(a, { exclude: CONNECTED_ACCOUNT_INTERNAL_FIELDS });
+}
+
+/**
+ * `pipes.connected_account.*` event payloads carry two fields the REST shape does not — the
+ * provider slug and the data integration id. `state` is overridable because `disconnected`
+ * exists only in the event a deletion emits; a stored row never holds it.
+ */
+export function formatConnectedAccountEvent(
+  a: WorkOSConnectedAccount,
+  state: ConnectedAccountState | 'disconnected' = a.state,
+): Record<string, unknown> {
+  return {
+    ...formatConnectedAccount(a),
+    state,
+    provider_slug: a.provider,
+    data_integration_id: a.data_integration_id,
+  };
+}
+
+/**
+ * One data integration per provider slug: an account is an installation of the environment's
+ * integration for that provider, so every account of one slug shares the id. Reused from any
+ * live account before minting, keeping the id stable for as long as any account of the slug
+ * exists rather than inventing a fresh integration per install.
+ */
+export function dataIntegrationIdFor(ws: WorkOSStore, slug: string): string {
+  const existing = ws.connectedAccounts.findBy('provider', slug)[0];
+  return existing?.data_integration_id ?? generateId(ID_PREFIXES.data_integration);
 }
 
 /** Redirect URI hosts the emulator's authorize endpoints accept with no configuration. */

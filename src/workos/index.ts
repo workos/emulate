@@ -16,6 +16,7 @@ import { authRoutes } from './routes/auth.js';
 import { connectionRoutes } from './routes/connections.js';
 import { ssoRoutes } from './routes/sso.js';
 import { pipeRoutes } from './routes/pipes.js';
+import { connectedAccountRoutes } from './routes/connected-accounts.js';
 import { authChallengeRoutes } from './routes/auth-challenges.js';
 import { invitationRoutes } from './routes/invitations.js';
 import { configRoutes } from './routes/config.js';
@@ -66,11 +67,14 @@ import {
   formatFeatureFlag,
   generateClientId,
   findUserByEmail,
+  formatConnectedAccountEvent,
+  dataIntegrationIdFor,
 } from './helpers.js';
 import type {
   WorkOSConnectionType,
   PipeProvider,
   PipeConnectionStatus,
+  ConnectedAccountState,
   WorkOSApiKeyOwner,
   WorkOSJwtTemplate,
 } from './entities.js';
@@ -160,6 +164,30 @@ export interface WorkOSSeedPipeConnection {
   scopes: string[];
   status?: PipeConnectionStatus;
   external_account_id?: string;
+}
+
+export interface WorkOSSeedConnectedAccount {
+  /**
+   * Email of a user defined in `users` — the same join key memberships use, because seeded
+   * user ids are generated at startup unless pinned.
+   */
+  email: string;
+  /** Provider slug the account is addressed by in the API path (`github`, `slack`, `notion`, …). */
+  provider: string;
+  /**
+   * Name of an organization defined in `organizations`, for a connection scoped to one.
+   * Requests must then carry the same scope (`?organization_id=…`) — an unscoped lookup
+   * does not resolve an org-scoped account, matching the API's keying.
+   */
+  organization?: string;
+  /** OAuth scopes granted for the connection. */
+  scopes?: string[];
+  /**
+   * Defaults to `connected` — saying a user has a connected account is saying it is
+   * connected. `disconnected` is not seedable: a disconnected account is a deleted one,
+   * observable only in the event stream.
+   */
+  state?: ConnectedAccountState;
 }
 
 export interface WorkOSSeedInvitation {
@@ -257,6 +285,8 @@ export interface WorkOSSeedConfig {
   users?: WorkOSSeedUser[];
   connections?: WorkOSSeedConnection[];
   pipeConnections?: WorkOSSeedPipeConnection[];
+  /** Pipes connected accounts, served by `/user_management/users/{id}/connected_accounts/{slug}`. */
+  connectedAccounts?: WorkOSSeedConnectedAccount[];
   invitations?: WorkOSSeedInvitation[];
   roles?: WorkOSSeedRole[];
   permissions?: WorkOSSeedPermission[];
@@ -451,6 +481,31 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
     }
   }
 
+  if (config.connectedAccounts) {
+    for (const ca of config.connectedAccounts) {
+      // Both references were cross-checked by validateSeedConfig against this same config,
+      // so they resolve; the guards only keep a future validator gap from crashing startup.
+      const user = findUserByEmail(ws, ca.email);
+      if (!user) continue;
+      const org = ca.organization ? ws.organizations.findOneBy('name', ca.organization) : undefined;
+      if (ca.organization && !org) continue;
+      ws.connectedAccounts.insert({
+        object: 'connected_account',
+        user_id: user.id,
+        organization_id: org?.id ?? null,
+        provider: ca.provider,
+        data_integration_id: dataIntegrationIdFor(ws, ca.provider),
+        scopes: ca.scopes ?? [],
+        auth_method: 'oauth',
+        api_key_last_4: null,
+        state: ca.state ?? 'connected',
+        access_token: null,
+        refresh_token: null,
+        token_expires_at: null,
+      });
+    }
+  }
+
   if (config.permissions) {
     for (const permConfig of config.permissions) {
       ws.permissions.insert({
@@ -632,6 +687,7 @@ export const workosPlugin: ServicePlugin = {
     connectionRoutes(ctx);
     ssoRoutes(ctx);
     pipeRoutes(ctx);
+    connectedAccountRoutes(ctx);
     invitationRoutes(ctx);
     configRoutes(ctx);
     userFeatureRoutes(ctx);
@@ -709,6 +765,24 @@ export const workosPlugin: ServicePlugin = {
         eventBus.emit({
           event: EVENTS.groupMemberRemoved,
           data: { group_id: gm.group_id, organization_membership_id: gm.organization_membership_id },
+        }),
+    });
+    // Pipes connected accounts. The event is named by the state the row lands in, so the
+    // pair cannot drift; deletion is the only way an account disconnects, so onDelete emits
+    // the `disconnected` payload for a value no stored row ever holds. Hook-driven so seeded
+    // accounts fire the same events.
+    const connectedAccountEvent = (state: ConnectedAccountState) =>
+      state === 'connected' ? EVENTS.pipesConnectedAccountConnected : EVENTS.pipesConnectedAccountReauthorizationNeeded;
+    ws.connectedAccounts.setHooks({
+      onInsert: (a) => eventBus.emit({ event: connectedAccountEvent(a.state), data: formatConnectedAccountEvent(a) }),
+      onUpdate: (a, prev) => {
+        if (a.state === prev.state) return;
+        eventBus.emit({ event: connectedAccountEvent(a.state), data: formatConnectedAccountEvent(a) });
+      },
+      onDelete: (a) =>
+        eventBus.emit({
+          event: EVENTS.pipesConnectedAccountDisconnected,
+          data: formatConnectedAccountEvent(a, 'disconnected'),
         }),
     });
     ws.connections.setHooks({

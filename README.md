@@ -306,6 +306,36 @@ users:
     oauth_provider: GoogleOAuth # reported as authentication_method for this user's OAuth logins
 ```
 
+### Pipes connected accounts
+
+`GET|POST|PUT|DELETE /user_management/users/{id}/connected_accounts/{slug}` serve a user's
+[connected accounts](https://workos.com/docs/reference/pipes/connected-account). Seed them
+with `connectedAccounts`, referencing a user by email (the same join key memberships use)
+and, for an org-scoped connection, an organization by name:
+
+```yaml
+users:
+  - email: alice@acme.com
+organizations:
+  - name: Acme Corp
+connectedAccounts:
+  - email: alice@acme.com
+    provider: github # the slug requests address
+    scopes: [repo, user:email]
+  - email: alice@acme.com
+    provider: slack
+    organization: Acme Corp # resolvable only with ?organization_id=<its id>
+    state: needs_reauthorization # defaults to connected
+```
+
+Accounts are keyed by (user, provider, organization scope), exactly as the API addresses
+them. `POST` imports an account from OAuth tokens — an omitted `state` is derived from the
+token combination (an expired access token with no refresh token is `needs_reauthorization`) —
+and answers `409` for a duplicate. `DELETE` disconnects by removing the account and its stored
+tokens, so a later import is a fresh `201`. State changes emit the spec's
+`pipes.connected_account.connected` / `reauthorization_needed` / `disconnected` events,
+including for seeded accounts.
+
 ### Machine-to-Machine (M2M) Applications
 
 Seed M2M Connect Applications so a service has a known `client_id` / client secret pair on

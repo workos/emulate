@@ -152,6 +152,11 @@ export function userRoutes(ctx: RouteContext): void {
     for (const ma of ws.magicAuths.findBy('user_id', user.id)) {
       ws.magicAuths.delete(ma.id);
     }
+    // Through the delete hook this also emits pipes.connected_account.disconnected for each:
+    // the accounts stop existing with the user, and their stored tokens go with them.
+    for (const ca of ws.connectedAccounts.findBy('user_id', user.id)) {
+      ws.connectedAccounts.delete(ca.id);
+    }
 
     ws.users.delete(user.id);
     return c.body(null, 204);

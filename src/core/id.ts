@@ -70,7 +70,10 @@ export const ID_PREFIXES = {
   redirect_uri: 'redir',
   cors_origin: 'cors',
   authorized_application: 'auth_app',
-  connected_account: 'conn_acct',
+  // Production connected-account ids are data installations (`data_installation_01…`), and
+  // every account of one provider installs the same environment-level data integration.
+  connected_account: 'data_installation',
+  data_integration: 'data_integration',
   role: 'role',
   permission: 'perm',
   role_permission: 'rp',

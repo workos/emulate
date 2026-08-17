@@ -232,11 +232,31 @@ export interface WorkOSAuthorizedApplication extends Entity {
   redirect_uri: string;
 }
 
+/**
+ * States a stored connected account can hold. The spec's enum also has `disconnected`, but
+ * disconnecting an account is deleting it — that value is observable only in the
+ * `pipes.connected_account.disconnected` event a deletion emits, never on a stored row,
+ * so a fresh import after a disconnect can't be answered 409 by a row that no longer works.
+ */
+export type ConnectedAccountState = 'connected' | 'needs_reauthorization';
+
 export interface WorkOSConnectedAccount extends Entity {
   object: 'connected_account';
   user_id: string;
+  organization_id: string | null;
+  /** Provider slug the account is addressed by (`github`, `slack`, …). Not part of the spec's REST shape — requests carry it in the path, events as `provider_slug`. */
   provider: string;
-  provider_id: string;
+  /** The environment's integration for this provider; every account of one slug shares it. */
+  data_integration_id: string;
+  scopes: string[];
+  /** The import DTO and seed only describe OAuth connections, so this is the one value the emulator can be told. */
+  auth_method: 'oauth';
+  api_key_last_4: null;
+  state: ConnectedAccountState;
+  /** Tokens the import/update endpoints were given. Kept because deleting the account is specified to remove them; never serialized. */
+  access_token: string | null;
+  refresh_token: string | null;
+  token_expires_at: string | null;
 }
 
 export type PipeProvider = 'github' | 'slack' | 'google' | 'salesforce';

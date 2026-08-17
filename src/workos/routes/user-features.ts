@@ -1,6 +1,6 @@
 import { type RouteContext, notFound } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatAuthorizedApplication, formatConnectedAccount, formatPipeConnection } from '../helpers.js';
+import { formatAuthorizedApplication, formatPipeConnection } from '../helpers.js';
 
 export function userFeatureRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -27,17 +27,6 @@ export function userFeatureRoutes(ctx: RouteContext): void {
 
     ws.authorizedApplications.delete(appItem.id);
     return c.body(null, 204);
-  });
-
-  app.get('/user_management/users/:user_id/connected_accounts/:slug', (c) => {
-    const user = ws.users.get(c.req.param('user_id'));
-    if (!user) throw notFound('User');
-
-    const slug = c.req.param('slug');
-    const account = ws.connectedAccounts.findBy('user_id', user.id).find((a) => a.provider === slug);
-
-    if (!account) throw notFound('Connected Account');
-    return c.json(formatConnectedAccount(account));
   });
 
   app.get('/user_management/users/:user_id/data_providers', (c) => {
