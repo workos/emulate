@@ -374,15 +374,9 @@ export function formatIdentity(i: WorkOSIdentity): Record<string, unknown> {
  * provider as a spec-valid AuthenticateResponse value ('GoogleOAuth', 'MicrosoftOAuth', …),
  * which is also what the identity `provider` enum holds.
  */
-export function linkOAuthIdentity(
-  ws: WorkOSStore,
-  userId: string,
-  provider: string,
-  idpId: string,
-): WorkOSIdentity | undefined {
-  const existing = ws.identities.findBy('user_id', userId).find((i) => i.provider === provider);
-  if (existing) return existing;
-  return ws.identities.insert({
+export function linkOAuthIdentity(ws: WorkOSStore, userId: string, provider: string, idpId: string): void {
+  if (ws.identities.findBy('user_id', userId).some((i) => i.provider === provider)) return;
+  ws.identities.insert({
     object: 'identity',
     user_id: userId,
     provider,
