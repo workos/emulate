@@ -145,10 +145,20 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
     if (!account) throw notFound('Connected Account');
 
     const dto = parseDto(await parseJsonBody(c));
-    // Without an explicit state, only an update that carries tokens re-derives it — a
+    // Without an explicit state, an update touching the credentials re-derives it from the
+    // merged token set — the DTO alone cannot see a retained refresh token — while a
     // scopes-only update must not silently reconnect a needs_reauthorization account.
-    const tokensProvided = dto.access_token !== undefined || dto.refresh_token !== undefined;
-    const state = dto.state ?? (tokensProvided ? deriveState(dto) : account.state);
+    const credentialsTouched =
+      dto.access_token !== undefined || dto.refresh_token !== undefined || dto.expires_at !== undefined;
+    const merged: ConnectedAccountDto = {
+      access_token: dto.access_token ?? account.access_token ?? undefined,
+      refresh_token: dto.refresh_token ?? account.refresh_token ?? undefined,
+      // An expiry describes its access token: a replacement token sent without one is unexpired.
+      expires_at:
+        dto.expires_at ?? (dto.access_token === undefined ? (account.token_expires_at ?? undefined) : undefined),
+    };
+    const canDerive = merged.access_token !== undefined || merged.refresh_token !== undefined;
+    const state = dto.state ?? (credentialsTouched && canDerive ? deriveState(merged) : account.state);
 
     const updated = ws.connectedAccounts.update(account.id, {
       ...(dto.scopes !== undefined ? { scopes: dto.scopes } : {}),

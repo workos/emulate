@@ -307,6 +307,37 @@ describe('Connected account routes', () => {
       expect(eventsNamed('pipes.connected_account.connected')).toHaveLength(1);
     });
 
+    it('keeps a retained refresh token in view when an update re-derives state', async () => {
+      const user = await createUser('retained@test.com');
+      await req(`/user_management/users/${user.id}/connected_accounts/github`, {
+        method: 'POST',
+        body: JSON.stringify({ access_token: 'gho_1', refresh_token: 'ghr_1' }),
+      });
+
+      // The replacement access token is already expired, but the stored refresh token still refreshes it.
+      const res = await req(`/user_management/users/${user.id}/connected_accounts/github`, {
+        method: 'PUT',
+        body: JSON.stringify({ access_token: 'gho_2', expires_at: '2020-01-01T00:00:00.000Z' }),
+      });
+      expect((await json(res)).state).toBe('connected');
+      expect(eventsNamed('pipes.connected_account.reauthorization_needed')).toHaveLength(0);
+    });
+
+    it('derives needs_reauthorization from an expiry-only update that leaves no working token', async () => {
+      const user = await createUser('expiry@test.com');
+      await req(`/user_management/users/${user.id}/connected_accounts/github`, {
+        method: 'POST',
+        body: JSON.stringify({ access_token: 'gho_1' }),
+      });
+
+      const res = await req(`/user_management/users/${user.id}/connected_accounts/github`, {
+        method: 'PUT',
+        body: JSON.stringify({ expires_at: '2020-01-01T00:00:00.000Z' }),
+      });
+      expect((await json(res)).state).toBe('needs_reauthorization');
+      expect(eventsNamed('pipes.connected_account.reauthorization_needed')).toHaveLength(1);
+    });
+
     it('404s an update for an account that does not exist', async () => {
       const user = await createUser('noacct@test.com');
       const res = await req(`/user_management/users/${user.id}/connected_accounts/github`, {
