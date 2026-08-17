@@ -284,6 +284,12 @@ export function authRoutes(ctx: RouteContext): void {
      * when the federated profile has no account yet — AuthKit does the same on a first SSO login,
      * and /sso/authorize mints a profile for any address it is handed, so refusing here would
      * report a code the emulator had just issued as invalid.
+     *
+     * Provisioning deliberately lands before the shared template gate below: a JWT template that
+     * cannot render fails the request but keeps the user, the same way the gate already keeps the
+     * membership acceptInvitation persists. Both are real domain progress — the user is the exact
+     * record a successful retry would create — and the burned code matches what a template failure
+     * costs every other one-time grant.
      */
     const redeemSsoAuthorization = (ssoAuth: WorkOSSSOAuthorization, code: string): WorkOSUser => {
       const profile = ws.ssoProfiles.get(ssoAuth.profile_id);
