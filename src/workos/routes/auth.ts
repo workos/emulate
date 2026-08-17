@@ -294,7 +294,7 @@ export function authRoutes(ctx: RouteContext): void {
           'SSO',
           {
             email: profile?.email,
-            userId: profile ? findUserByEmail(ws, profile.email)?.id : null,
+            userId: findUserByEmail(ws, profile?.email ?? '')?.id ?? null,
             sso: {
               organization_id: ssoAuth.organization_id,
               connection_id: ssoAuth.connection_id,
