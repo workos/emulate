@@ -310,6 +310,19 @@ export function authRoutes(ctx: RouteContext): void {
       // something else, so it stays plain rather than OAuth-shaped.
       if (!profile) throw new WorkOSApiError(500, 'Profile not found', 'server_error');
 
+      // The shared recipient check below runs only after the grant, and by then this helper has
+      // spent the one-time authorization and possibly provisioned an account — a mismatched
+      // invitation would fail the request yet leave a user behind with no session. The profile
+      // already names who is signing in, so ask before anything is consumed; a rejected caller
+      // keeps the code and retries without the invitation.
+      if (invitation && !emailsMatch(invitation.email, profile.email)) {
+        throw new WorkOSApiError(
+          400,
+          'The invitation was issued for a different email address',
+          'invitation_cannot_be_used_for_email',
+        );
+      }
+
       ws.ssoAuthorizations.delete(ssoAuth.id);
 
       const existing = findUserByEmail(ws, profile.email);

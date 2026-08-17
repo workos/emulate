@@ -117,11 +117,11 @@ describe('SSO routes', () => {
       return new URL(res.headers.get('location')!).searchParams.get('code')!;
     }
 
-    const authenticate = (code: string) =>
+    const authenticate = (code: string, extra?: Record<string, unknown>) =>
       app.request('/user_management/authenticate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'client_x' }),
+        body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'client_x', ...extra }),
       });
 
     it('signs the profile in, keying the session to sso', async () => {
@@ -199,6 +199,26 @@ describe('SSO routes', () => {
         email: 'stale@sso.example.com',
         sso: { organization_id: org.id, connection_id: conn.id, session_id: null },
       });
+    });
+
+    it('rejects a mismatched invitation before the code is spent or a user provisioned', async () => {
+      const { org, conn } = await createOrgWithConnection();
+      const invitation = await json(
+        await req('/user_management/invitations', {
+          method: 'POST',
+          body: JSON.stringify({ email: 'recipient@sso.example.com', organization_id: org.id }),
+        }),
+      );
+
+      const code = await ssoCode(conn.id, 'interloper@sso.example.com');
+      const res = await authenticate(code, { invitation_token: invitation.token });
+
+      expect(res.status).toBe(400);
+      expect((await json(res)).code).toBe('invitation_cannot_be_used_for_email');
+      // Nothing was consumed: no account was provisioned for the interloper, and the same code
+      // still signs in once the invitation is dropped.
+      expect(getWorkOSStore(store).users.all()).toHaveLength(0);
+      expect((await authenticate(code)).status).toBe(200);
     });
   });
 
