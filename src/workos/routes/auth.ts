@@ -311,6 +311,48 @@ export function authRoutes(ctx: RouteContext): void {
       );
     };
 
+    /**
+     * Gate a sign-in whose credential proves nothing about the mailbox. Production answers an
+     * unverified user with `email_verification_required` instead of a session, and that response
+     * is what sends them to a verification screen. A fresh email_verification is created, so the
+     * code reaches a test the way every other emulator flow delivers one — on the
+     * `email_verification.created` webhook — and the pending token carries the primary method
+     * (so the eventual session reports it rather than 'unknown') plus any still-unspent
+     * invitation, on the same deferral rule the MFA challenge uses.
+     */
+    const issueEmailVerification = (
+      unverified: { id: string; email: string },
+      orgId: string | null,
+      primaryMethod: string,
+    ) => {
+      const pendingToken = generateId('pending');
+      store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, {
+        user_id: unverified.id,
+        organization_id: orgId,
+        auth_method: primaryMethod,
+        invitation_token: invitation?.token ?? null,
+      });
+      const verification = ws.emailVerifications.insert({
+        object: 'email_verification',
+        user_id: unverified.id,
+        email: unverified.email,
+        code: generateCode(),
+        expires_at: expiresIn(10),
+      });
+      // 403 with {code, message}, like mfa_challenge and organization_selection_required: the
+      // spec lists all three as authenticate's step-up codes under 403, never under its 400.
+      return c.json(
+        {
+          code: 'email_verification_required',
+          message: 'Email ownership must be verified before authentication.',
+          pending_authentication_token: pendingToken,
+          email_verification_id: verification.id,
+          email: unverified.email,
+        },
+        403,
+      );
+    };
+
     let user;
     let organizationId: string | null = null;
     let authMethod: string;
@@ -426,6 +468,13 @@ export function authRoutes(ctx: RouteContext): void {
         }
         authMethod = 'Password';
 
+        // Checked before the factor challenge below: an unverified mailbox is the earlier gate,
+        // and challenging a second factor for an account whose first contact detail is unproven
+        // would hand out a challenge production never issues.
+        if (!user.email_verified) {
+          return issueEmailVerification(user, organizationId, 'Password');
+        }
+
         // A user with enrolled factors must clear a second factor before a session is issued:
         // hand back a pending token (recording 'Password' as the primary method) and a challenge.
         const passwordFactors = ws.authFactors.findBy('user_id', user.id);
@@ -470,9 +519,29 @@ export function authRoutes(ctx: RouteContext): void {
       case 'urn:workos:oauth:grant-type:email-verification':
       case 'urn:workos:oauth:grant-type:email-verification:code': {
         const code = body.code as string;
-        const userId = body.user_id as string;
+        // The SDKs send `pending_authentication_token` and nothing else identifying the user
+        // (`serializeAuthenticateWithEmailVerificationOptions` in @workos-inc/node), which is the
+        // token the password grant's gate above hands out. `user_id` stays accepted for callers
+        // already driving this grant the emulator's old way.
+        const pendingToken = body.pending_authentication_token as string | undefined;
+        let pending: PendingAuth | undefined;
+        if (pendingToken) {
+          pending = store.getData<PendingAuth>(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`);
+          if (!pending) {
+            throw new WorkOSApiError(
+              400,
+              'Invalid pending authentication token',
+              'invalid_pending_authentication_token',
+            );
+          }
+        }
+        const userId = pending?.user_id ?? (body.user_id as string);
         if (!code || !userId) {
-          throw new OauthApiError(400, 'invalid_request', 'code and user_id are required.');
+          throw new OauthApiError(
+            400,
+            'invalid_request',
+            'code and pending_authentication_token (or user_id) are required.',
+          );
         }
 
         const ev = ws.emailVerifications.findBy('user_id', userId).find((v) => v.code === code);
@@ -491,10 +560,25 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
 
+        // Revalidated before the pending token is consumed, on the same rule the MFA grant
+        // states: an invitation revoked mid-flow fails the request without destroying the state
+        // behind it, so a retry still reports invitation_invalid.
+        const deferredInvitation = pending?.invitation_token ? resolveInvitation(pending.invitation_token) : null;
+
         ws.users.update(userId, { email_verified: true });
         ws.emailVerifications.delete(ev.id);
+        if (pendingToken) store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, undefined);
         user = ws.users.get(userId);
+        if (pending) {
+          organizationId = pending.organization_id;
+          invitation = deferredInvitation;
+        }
+        // Event is authentication.email_verification_succeeded; the session records the method
+        // that was gated (e.g. 'password'), since verification is a gate rather than a way to
+        // sign in. Without a pending token there is nothing to record, and the session falls
+        // back to 'unknown' as before.
         authMethod = 'EmailVerification';
+        sessionAuthMethod = pending?.auth_method;
         break;
       }
 

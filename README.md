@@ -512,6 +512,30 @@ curl -X POST http://localhost:4100/user_management/authenticate \
 
 Only `active` memberships count — an unaccepted invitation or a deactivated member is never selected. Passing `invitation_token` to the `authorization_code`, `password`, or Magic Auth grants accepts the invitation as part of the login, joining the user to the invited organization and scoping the session to it, so there is no selection step; a token that is unknown, expired, or already used is rejected with `invitation_invalid`, and one addressed to somebody else with `invitation_cannot_be_used_for_email`. Once a session exists, only an explicit `organization_id` on a refresh (`switchToOrganization`) moves it between organizations.
 
+### Email verification gates the password grant
+
+A password sign-in by a user whose `email_verified` is `false` does not return a session. Production answers `email_verification_required`, and that response is what sends the user to a verification screen — so the emulator does too:
+
+```json
+{
+  "code": "email_verification_required",
+  "message": "Email ownership must be verified before authentication.",
+  "pending_authentication_token": "pending_...",
+  "email_verification_id": "email_verification_...",
+  "email": "bob@example.com"
+}
+```
+
+The gate creates an email verification, so the code arrives on the `email_verification.created` webhook like every other emailed code. Finish the sign-in with the token and the code — exactly what the SDKs' `authenticateWithEmailVerification` sends:
+
+```bash
+curl -X POST http://localhost:4100/user_management/authenticate \
+  -H "Content-Type: application/json" \
+  -d '{"grant_type":"urn:workos:oauth:grant-type:email-verification:code","pending_authentication_token":"pending_...","code":"123456"}'
+```
+
+The resulting session records the method that was gated (`password`), not the verification step. Driving the grant with `user_id` instead of a pending token still works, and that session reports `unknown` — there is no primary method to recover. Fixtures that sign in with a password want `email_verified: true`, in a seed file or on `POST /user_management/users`.
+
 ### Refresh tokens always rotate
 
 The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `{"error": "invalid_grant", "error_description": "Invalid refresh token."}`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.

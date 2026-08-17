@@ -33,7 +33,7 @@ describe('Password reset routes', () => {
     const user = await json(
       await req('/user_management/users', {
         method: 'POST',
-        body: JSON.stringify({ email: 'reset@test.com', password: 'oldpassword' }),
+        body: JSON.stringify({ email: 'reset@test.com', password: 'oldpassword', email_verified: true }),
       }),
     );
     const reset = await json(
