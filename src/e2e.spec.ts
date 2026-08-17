@@ -139,7 +139,12 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
 
     const res = await api('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email, password: 'correct horse battery staple', first_name: 'Alice' }),
+      body: JSON.stringify({
+        email,
+        password: 'correct horse battery staple',
+        first_name: 'Alice',
+        email_verified: true,
+      }),
     });
     expect(res.status).toBe(201);
     userId = ((await res.json()) as any).id;

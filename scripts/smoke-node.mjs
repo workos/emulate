@@ -51,6 +51,8 @@ try {
       password: 'correct horse battery staple',
       first_name: 'Node',
       last_name: 'Compatibility',
+      // The password grant gates an unverified mailbox with email_verification_required.
+      email_verified: true,
     }),
   });
   assert.equal(userResponse.status, 201);
