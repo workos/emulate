@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, afterEach } from 'bun:test';
 import { createEmulator, type Emulator } from '../index.js';
+import { validateSeedConfig } from './config-validator.js';
 
 describe('User identities', () => {
   let emulator: Emulator | undefined;
@@ -112,6 +113,23 @@ describe('User identities', () => {
     const profile = await ssoLogin('saml@acme.test');
     expect(profile.profile.idp_id).toBeString();
     expect(await identitiesOf('user_saml')).toEqual([]);
+  });
+
+  // Both fields are serialized straight onto the identity, so a seed only YAML or JSON could have
+  // written must not be the way a non-string reaches the endpoint's declared shape.
+  it('rejects a seeded provider or idp_id that is not a string', () => {
+    const { valid, errors } = validateSeedConfig({
+      users: [
+        {
+          email: 'bad@acme.test',
+          oauth_provider: 42 as unknown as string,
+          oauth_idp_id: '' as unknown as string,
+        },
+      ],
+    });
+
+    expect(valid).toBe(false);
+    expect(errors.map((e) => e.path)).toEqual(['users[0].oauth_provider', 'users[0].oauth_idp_id']);
   });
 
   it('lets a JWT template read a linked identity', async () => {

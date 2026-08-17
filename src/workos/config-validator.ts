@@ -101,6 +101,25 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: user.email_verified,
           });
         }
+        // Both are serialized straight onto the identity the users endpoint returns and the
+        // `user.identities` map a template reads, so a non-string here is a contract the emulator
+        // would break on behalf of a config only YAML or JSON could have written. The provider is
+        // not checked against the spec's enum — `connections[].connection_type` is not either, and
+        // a list baked in here would reject a provider WorkOS adds later.
+        if (user.oauth_provider !== undefined && (typeof user.oauth_provider !== 'string' || !user.oauth_provider)) {
+          errors.push({
+            path: `users[${index}].oauth_provider`,
+            message: 'oauth_provider must be a non-empty string if provided',
+            value: user.oauth_provider,
+          });
+        }
+        if (user.oauth_idp_id !== undefined && (typeof user.oauth_idp_id !== 'string' || !user.oauth_idp_id)) {
+          errors.push({
+            path: `users[${index}].oauth_idp_id`,
+            message: 'oauth_idp_id must be a non-empty string if provided',
+            value: user.oauth_idp_id,
+          });
+        }
       });
 
       // Email is the lookup key org memberships join on; duplicates would silently
