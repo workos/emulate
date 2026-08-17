@@ -512,6 +512,12 @@ curl -X POST http://localhost:4100/user_management/authenticate \
 
 Only `active` memberships count — an unaccepted invitation or a deactivated member is never selected. Passing `invitation_token` to the `authorization_code`, `password`, or Magic Auth grants accepts the invitation as part of the login, joining the user to the invited organization and scoping the session to it, so there is no selection step; a token that is unknown, expired, or already used is rejected with `invitation_invalid`, and one addressed to somebody else with `invitation_cannot_be_used_for_email`. Once a session exists, only an explicit `organization_id` on a refresh (`switchToOrganization`) moves it between organizations.
 
+### SSO logins produce a session
+
+A code from `GET /sso/authorize` redeems at `POST /user_management/authenticate` with `grant_type=authorization_code`, so an app that sends people straight to their IdP with `sso.getAuthorizationUrl` and finishes at AuthKit's callback gets a real session — one whose `auth_method` is `sso`, so authorization code that hides password management for federated users can be exercised. `POST /sso/token` still redeems the same code for a bare profile and access token, which is the standalone SSO product and creates no session; a code is spent by whichever endpoint gets it first.
+
+The session is scoped to the connection's organization. A profile with no user-management account yet gets one, verified — the IdP asserted the address — the way AuthKit provisions on a first SSO login.
+
 ### Refresh tokens always rotate
 
 The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `{"error": "invalid_grant", "error_description": "Invalid refresh token."}`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.

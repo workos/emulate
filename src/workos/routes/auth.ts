@@ -31,7 +31,7 @@ import {
 } from '../helpers.js';
 import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
-import type { WorkOSInvitation } from '../entities.js';
+import type { WorkOSInvitation, WorkOSSSOAuthorization, WorkOSUser } from '../entities.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
 import { renderLoginPage, renderDeviceVerifyPage } from '../login-page.js';
 
@@ -257,7 +257,12 @@ export function authRoutes(ctx: RouteContext): void {
     /** Emit the spec's authentication.*_failed event for a credential failure, then throw. */
     const failAuth: (
       method: string,
-      info: { email?: string | null; userId?: string | null },
+      info: {
+        email?: string | null;
+        userId?: string | null;
+        /** Required on every authentication.sso_* event, per the spec's event data. */
+        sso?: { organization_id: string | null; connection_id: string | null; session_id: string | null };
+      },
       error: WorkOSApiError,
     ) => never = (method, info, error) => {
       emitAuthenticationEvent({
@@ -269,8 +274,62 @@ export function authRoutes(ctx: RouteContext): void {
         ipAddress: requestIp,
         userAgent: requestUserAgent,
         error: { code: error.code, message: error.message },
+        sso: info.sso,
       });
       throw error;
+    };
+
+    /**
+     * Redeem an /sso/authorize code into the user-management user it signs in, provisioning one
+     * when the federated profile has no account yet — AuthKit does the same on a first SSO login,
+     * and /sso/authorize mints a profile for any address it is handed, so refusing here would
+     * report a code the emulator had just issued as invalid.
+     */
+    const redeemSsoAuthorization = (ssoAuth: WorkOSSSOAuthorization, code: string): WorkOSUser => {
+      const profile = ws.ssoProfiles.get(ssoAuth.profile_id);
+
+      if (isExpired(ssoAuth.expires_at)) {
+        ws.ssoAuthorizations.delete(ssoAuth.id);
+        failAuth(
+          'SSO',
+          {
+            email: profile?.email,
+            userId: profile ? findUserByEmail(ws, profile.email)?.id : null,
+            sso: {
+              organization_id: ssoAuth.organization_id,
+              connection_id: ssoAuth.connection_id,
+              session_id: null,
+            },
+          },
+          new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
+        );
+      }
+
+      // The same emulator-state failure /sso/token names, for the same reason: an authorization
+      // pointing at a profile that no longer exists is not a request anyone can fix by sending
+      // something else, so it stays plain rather than OAuth-shaped.
+      if (!profile) throw new WorkOSApiError(500, 'Profile not found', 'server_error');
+
+      ws.ssoAuthorizations.delete(ssoAuth.id);
+
+      const existing = findUserByEmail(ws, profile.email);
+      if (existing) return existing;
+      return ws.users.insert({
+        object: 'user',
+        email: profile.email,
+        name: null,
+        first_name: profile.first_name,
+        last_name: profile.last_name,
+        // The IdP asserted the address, which is what verification proves.
+        email_verified: true,
+        profile_picture_url: null,
+        last_sign_in_at: null,
+        external_id: null,
+        metadata: {},
+        locale: null,
+        password_hash: null,
+        impersonator: null,
+      });
     };
 
     /**
@@ -329,6 +388,9 @@ export function authRoutes(ctx: RouteContext): void {
     // a leniency production doesn't permit — store null. In both cases the redemption request
     // is the only client identity the emulator ever has.
     let grantClientId: string | undefined;
+    // The connection an SSO sign-in came through, carried to the authentication.sso_succeeded
+    // event, whose spec payload requires an `sso` block. Null for every other grant.
+    let ssoContext: { organization_id: string | null; connection_id: string | null } | null = null;
 
     switch (grantType) {
       case 'authorization_code': {
@@ -339,6 +401,23 @@ export function authRoutes(ctx: RouteContext): void {
         // as invalid_grant with the same description.
         const authCode = ws.authCodes.findOneBy('code', code);
         if (!authCode) {
+          // A code minted by /sso/authorize is redeemable here too. The two endpoints wrote to
+          // different stores, so an app that starts SSO with `sso.getAuthorizationUrl` — sending
+          // people straight to their IdP rather than through a hosted screen — and finishes at
+          // AuthKit's callback got invalid_grant for a code the emulator had just issued.
+          // /sso/token still redeems the same code for a bare profile; this is the path that
+          // produces a session, and the only one that records auth_method 'sso'.
+          const ssoAuth = ws.ssoAuthorizations.findOneBy('code', code);
+          if (ssoAuth) {
+            user = redeemSsoAuthorization(ssoAuth, code);
+            organizationId = ssoAuth.organization_id;
+            ssoContext = { organization_id: ssoAuth.organization_id, connection_id: ssoAuth.connection_id };
+            // An SSO authorization records no client_id, so the redeeming request is the only
+            // client identity there is — the same fallback a client-less /authorize gets.
+            grantClientId = clientId;
+            authMethod = 'SSO';
+            break;
+          }
           failAuth(
             'OAuth',
             {},
@@ -906,6 +985,9 @@ export function authRoutes(ctx: RouteContext): void {
         email: updatedUser.email,
         ipAddress: session.ip_address,
         userAgent: session.user_agent,
+        // Required on authentication.sso_* by the spec's event data. This is the only SSO path
+        // that reaches a session, so it is also the only one that can report a session_id.
+        sso: ssoContext ? { ...ssoContext, session_id: session.id } : undefined,
       });
     }
 

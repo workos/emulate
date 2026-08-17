@@ -107,6 +107,101 @@ describe('SSO routes', () => {
     expect(new Set(profiles.map((p) => p.connection_id))).toEqual(new Set([conn.id, conn2.id]));
   });
 
+  describe('SSO code redeemed for a user-management session', () => {
+    /** Start SSO through `conn` and return the code the redirect carries. */
+    async function ssoCode(connId: string, loginHint?: string) {
+      const res = await app.request(
+        `/sso/authorize?connection=${connId}&redirect_uri=http://localhost:3000/callback` +
+          (loginHint ? `&login_hint=${encodeURIComponent(loginHint)}` : ''),
+      );
+      return new URL(res.headers.get('location')!).searchParams.get('code')!;
+    }
+
+    const authenticate = (code: string) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'client_x' }),
+      });
+
+    it('signs the profile in, keying the session to sso', async () => {
+      const { org, conn } = await createOrgWithConnection();
+      const ws = getWorkOSStore(store);
+      const user = ws.users.insert({
+        object: 'user',
+        email: 'alice@sso.example.com',
+        name: null,
+        first_name: null,
+        last_name: null,
+        email_verified: true,
+        profile_picture_url: null,
+        last_sign_in_at: null,
+        external_id: null,
+        metadata: {},
+        locale: null,
+        password_hash: null,
+        impersonator: null,
+      });
+
+      const res = await authenticate(await ssoCode(conn.id, 'alice@sso.example.com'));
+
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.user.id).toBe(user.id);
+      expect(body.organization_id).toBe(org.id);
+      expect(body.authentication_method).toBe('SSO');
+      const [session] = ws.sessions.findBy('user_id', user.id);
+      expect(session.auth_method).toBe('sso');
+
+      // The spec requires an `sso` block on authentication.sso_succeeded; this is the only SSO
+      // path that reaches a session, so it is the only one that can fill in session_id.
+      const [event] = ws.events.all().filter((e) => e.event === 'authentication.sso_succeeded');
+      expect(event.data).toMatchObject({
+        type: 'sso',
+        status: 'succeeded',
+        user_id: user.id,
+        sso: { organization_id: org.id, connection_id: conn.id, session_id: session.id },
+      });
+    });
+
+    it('provisions a user the federated profile has no account for', async () => {
+      const { conn } = await createOrgWithConnection();
+
+      const body = await json(await authenticate(await ssoCode(conn.id, 'newcomer@sso.example.com')));
+
+      expect(body.user.email).toBe('newcomer@sso.example.com');
+      // The IdP asserted the address, which is what verification proves.
+      expect(body.user.email_verified).toBe(true);
+      expect(getWorkOSStore(store).users.all()).toHaveLength(1);
+    });
+
+    it('spends the code once, and reports an expired one as invalid_grant', async () => {
+      const { org, conn } = await createOrgWithConnection();
+      const ws = getWorkOSStore(store);
+
+      const code = await ssoCode(conn.id, 'once@sso.example.com');
+      expect((await authenticate(code)).status).toBe(200);
+      const replay = await authenticate(code);
+      expect(replay.status).toBe(400);
+      expect((await json(replay)).error).toBe('invalid_grant');
+
+      const expired = await ssoCode(conn.id, 'stale@sso.example.com');
+      const stored = ws.ssoAuthorizations.findOneBy('code', expired)!;
+      ws.ssoAuthorizations.update(stored.id, { expires_at: new Date(Date.now() - 1000).toISOString() });
+
+      const res = await authenticate(expired);
+      expect(res.status).toBe(400);
+      expect((await json(res)).error).toBe('invalid_grant');
+      const [failed] = ws.events.all().filter((e) => e.event === 'authentication.sso_failed');
+      expect(failed.data).toMatchObject({
+        type: 'sso',
+        status: 'failed',
+        email: 'stale@sso.example.com',
+        sso: { organization_id: org.id, connection_id: conn.id, session_id: null },
+      });
+    });
+  });
+
   it('sso token exchange returns profile and access_token', async () => {
     const { conn } = await createOrgWithConnection();
 
