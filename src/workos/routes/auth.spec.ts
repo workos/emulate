@@ -26,9 +26,12 @@ describe('Auth routes', () => {
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
   const json = (res: Response) => res.json() as Promise<any>;
 
+  // Verified by default: the password grant gates an unverified mailbox with
+  // email_verification_required, so a fixture for anything other than that gate is a user who
+  // has already been through it.
   async function createUser(
     email: string,
-    opts?: { password?: string; impersonator?: { email: string; reason: string } },
+    opts?: { password?: string; impersonator?: { email: string; reason: string }; email_verified?: boolean },
   ) {
     const ws = getWorkOSStore(store);
     return ws.users.insert({
@@ -37,7 +40,7 @@ describe('Auth routes', () => {
       email,
       first_name: null,
       last_name: null,
-      email_verified: false,
+      email_verified: opts?.email_verified ?? true,
       profile_picture_url: null,
       last_sign_in_at: null,
       external_id: null,
@@ -162,7 +165,7 @@ describe('Auth routes', () => {
   it('authenticate with password grant', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'pass@test.com', password: 'secret' }),
+      body: JSON.stringify({ email: 'pass@test.com', password: 'secret', email_verified: true }),
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -184,7 +187,7 @@ describe('Auth routes', () => {
   it('rejects invalid password', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'bad@test.com', password: 'correct' }),
+      body: JSON.stringify({ email: 'bad@test.com', password: 'correct', email_verified: true }),
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -200,6 +203,109 @@ describe('Auth routes', () => {
     expect(await json(res)).toEqual({
       code: 'invalid_credentials',
       message: "Invalid credentials for 'bad@test.com'.",
+    });
+  });
+
+  describe('email verification gate', () => {
+    const post = (body: unknown) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    /** Sign up unverified and take the password grant's 403 to the verification step. */
+    async function gatedSignIn(email: string, extra?: Record<string, unknown>) {
+      const user = await json(
+        await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email, password: 'pw' }) }),
+      );
+      const res = await post({ grant_type: 'password', email, password: 'pw', ...extra });
+      return { user, res, body: await json(res) };
+    }
+
+    it('refuses an unverified password sign-in with email_verification_required', async () => {
+      const { user, res, body } = await gatedSignIn('unverified@test.com');
+
+      expect(res.status).toBe(403);
+      expect(body).toMatchObject({
+        code: 'email_verification_required',
+        pending_authentication_token: expect.any(String),
+        email_verification_id: expect.any(String),
+        email: 'unverified@test.com',
+      });
+      // No session, and the user is still unverified: the gate is not a login.
+      expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(0);
+      expect((await json(await req(`/user_management/users/${user.id}`))).email_verified).toBe(false);
+    });
+
+    it('redeems the pending token with the code the SDK sends, keying the session to password', async () => {
+      const { user, body } = await gatedSignIn('verify-me@test.com');
+      const verification = await json(await req(`/user_management/email_verification/${body.email_verification_id}`));
+
+      // Exactly what serializeAuthenticateWithEmailVerificationOptions sends: no user_id.
+      const res = await post({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        pending_authentication_token: body.pending_authentication_token,
+        code: verification.code,
+      });
+
+      expect(res.status).toBe(200);
+      const authenticated = await json(res);
+      expect(authenticated.access_token).toBeDefined();
+      expect(authenticated.user.email_verified).toBe(true);
+      const [session] = getWorkOSStore(store).sessions.findBy('user_id', user.id);
+      expect(session.auth_method).toBe('password');
+
+      // The token is one-time: a replay finds nothing to resolve the user from.
+      const replay = await post({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        pending_authentication_token: body.pending_authentication_token,
+        code: verification.code,
+      });
+      expect(replay.status).toBe(400);
+      expect((await json(replay)).code).toBe('invalid_pending_authentication_token');
+    });
+
+    it('carries an invitation across the gate', async () => {
+      const org = createOrg('Gated Corp');
+      const invitation = await invite('invited@test.com', org.id, 'admin');
+      const { user, body } = await gatedSignIn('invited@test.com', { invitation_token: invitation.token });
+
+      // Not spent by the gate — the client may never come back from a 403.
+      expect((await readInvitation(invitation.token)).state).toBe('pending');
+
+      const verification = await json(await req(`/user_management/email_verification/${body.email_verification_id}`));
+      const res = await post({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        pending_authentication_token: body.pending_authentication_token,
+        code: verification.code,
+      });
+
+      expect(res.status).toBe(200);
+      expect((await json(res)).organization_id).toBe(org.id);
+      expect((await readInvitation(invitation.token)).state).toBe('accepted');
+      expect((await membershipsIn(org.id)).map((m: any) => m.user_id)).toEqual([user.id]);
+    });
+
+    it('still accepts user_id, and names both ways in when neither is sent', async () => {
+      const user = await createUser('by-id@test.com', { email_verified: false });
+      const verification = await json(
+        await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' }),
+      );
+
+      const missing = await post({ grant_type: 'urn:workos:oauth:grant-type:email-verification:code', code: '123456' });
+      expect(missing.status).toBe(400);
+      expect(await json(missing)).toEqual({
+        error: 'invalid_request',
+        error_description: 'code and pending_authentication_token (or user_id) are required.',
+      });
+
+      const res = await post({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        user_id: user.id,
+        code: verification.code,
+      });
+      expect(res.status).toBe(200);
     });
   });
 
@@ -331,7 +437,7 @@ describe('Auth routes', () => {
   it('refresh_token grant returns new tokens and invalidates old', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'refresh@test.com', password: 'pw' }),
+      body: JSON.stringify({ email: 'refresh@test.com', password: 'pw', email_verified: true }),
     });
 
     // Authenticate to get a refresh token
@@ -738,7 +844,7 @@ describe('Auth routes', () => {
   it('returns sealed_session when client_secret provided', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'sealed@test.com', password: 'pw' }),
+      body: JSON.stringify({ email: 'sealed@test.com', password: 'pw', email_verified: true }),
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -834,7 +940,7 @@ describe('Auth routes', () => {
     );
     expect(signup.email).toBe('padded@x.test');
 
-    getWorkOSStore(store).users.update(signup.user_id, { password_hash: hashPassword('pw') });
+    getWorkOSStore(store).users.update(signup.user_id, { password_hash: hashPassword('pw'), email_verified: true });
     const password = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -952,7 +1058,7 @@ describe('Auth routes', () => {
   it('reaches a Magic Auth account by any casing of its address', async () => {
     await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email: 'Mixed@Case.test' }) });
     const user = getWorkOSStore(store).users.all()[0];
-    getWorkOSStore(store).users.update(user.id, { password_hash: hashPassword('correct horse') });
+    getWorkOSStore(store).users.update(user.id, { password_hash: hashPassword('correct horse'), email_verified: true });
 
     const password = await app.request('/user_management/authenticate', {
       method: 'POST',
@@ -1083,7 +1189,7 @@ describe('Auth routes', () => {
   it('password grant accepts form-encoded bodies', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'formpass@test.com', password: 'secret' }),
+      body: JSON.stringify({ email: 'formpass@test.com', password: 'secret', email_verified: true }),
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -1517,7 +1623,7 @@ describe('Auth routes', () => {
   it('resolves the single active organization on password, email-verification and device_code', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'multi-grant@test.com', password: 'pw' }),
+      body: JSON.stringify({ email: 'multi-grant@test.com', password: 'pw', email_verified: true }),
     });
     const user = await json(created);
     const org = joinOrg(user.id, 'Grant Corp');
@@ -1567,7 +1673,7 @@ describe('Auth routes', () => {
   it('returns organization_selection_required for a user with several active organizations', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'multi-org@test.com', password: 'pw' }),
+      body: JSON.stringify({ email: 'multi-org@test.com', password: 'pw', email_verified: true }),
     });
     const user = await json(created);
     const first = joinOrg(user.id, 'Alpha Corp');
@@ -1614,7 +1720,7 @@ describe('Auth routes', () => {
   it('requires the second factor before organization selection', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'mfa-multi-org@test.com', password: 'pw' }),
+      body: JSON.stringify({ email: 'mfa-multi-org@test.com', password: 'pw', email_verified: true }),
     });
     const user = await json(created);
     joinOrg(user.id, 'Gamma Corp');
@@ -1859,7 +1965,7 @@ describe('Auth routes', () => {
   it('holds an invitation until the second factor clears', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'mfa-invite@test.com', password: 'pw' }),
+      body: JSON.stringify({ email: 'mfa-invite@test.com', password: 'pw', email_verified: true }),
     });
     const user = await json(created);
     const org = createOrg('Second Factor Corp');
@@ -1907,7 +2013,7 @@ describe('Auth routes', () => {
   it('reports the same error when a deferred invitation dies mid-challenge', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'mfa-revoked@test.com', password: 'pw' }),
+      body: JSON.stringify({ email: 'mfa-revoked@test.com', password: 'pw', email_verified: true }),
     });
     const user = await json(created);
     const org = createOrg('Vanishing Corp');
@@ -2228,7 +2334,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   async function registerUser(email: string, password: string) {
     const res = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, email_verified: true }),
     });
     return json(res);
   }

@@ -18,7 +18,9 @@ describe('JWT templates end to end', () => {
   });
 
   const seed = {
-    users: [{ email: 'alice@acme.com', first_name: 'Alice', last_name: 'Smith', password: 'test123' }],
+    users: [
+      { email: 'alice@acme.com', first_name: 'Alice', last_name: 'Smith', password: 'test123', email_verified: true },
+    ],
     organizations: [
       {
         name: 'Acme Corp',
@@ -66,7 +68,7 @@ describe('JWT templates end to end', () => {
     const claims = decode(body.access_token);
     expect(claims['urn:myapp:name']).toBe('Alice Smith');
     expect(claims['urn:myapp:tenant']).toBe('tenant_123');
-    expect(claims['urn:myapp:verified']).toBe(false);
+    expect(claims['urn:myapp:verified']).toBe(true);
     // The claims the emulator resolves are still there.
     expect(claims.sub).toBeString();
     expect(claims.role).toBe('admin');
@@ -131,7 +133,7 @@ describe('JWT templates end to end', () => {
       // Valid against the probe values, but renders past the byte limit for this user.
       seed: {
         ...seed,
-        users: [{ email: 'alice@acme.com', first_name: 'x'.repeat(4000), password: 'test123' }],
+        users: [{ email: 'alice@acme.com', first_name: 'x'.repeat(4000), password: 'test123', email_verified: true }],
         jwtTemplate: { content: '{"urn:myapp:name": "{{ user.first_name }}"}' },
       },
     });
@@ -149,7 +151,7 @@ describe('JWT templates end to end', () => {
       port: 0,
       seed: {
         ...seed,
-        users: [{ email: 'alice@acme.com', first_name: 'x'.repeat(4000), password: 'test123' }],
+        users: [{ email: 'alice@acme.com', first_name: 'x'.repeat(4000), password: 'test123', email_verified: true }],
         jwtTemplate: { content: '{"urn:myapp:name": "{{ user.first_name }}"}' },
       },
     });
@@ -235,7 +237,7 @@ describe('JWT templates end to end', () => {
       expect(u.email).toBe('alice@acme.com');
       expect(u.first_name).toBe('Alice');
       expect(u.last_name).toBe('Smith');
-      expect(u.email_verified).toBe(false);
+      expect(u.email_verified).toBe(true);
       expect(u.profile_picture_url).toBeNull();
       expect(u.created_at).toBeString();
       expect(u.updated_at).toBeString();
@@ -379,7 +381,7 @@ describe('Pinned signing key and issuer', () => {
     emulator = await createEmulator({
       port: 0,
       issuer: 'https://api.workos.com',
-      seed: { users: [{ email: 'alice@acme.com', password: 'test123' }] },
+      seed: { users: [{ email: 'alice@acme.com', password: 'test123', email_verified: true }] },
     });
 
     const res = await fetch(`${emulator.url}/user_management/authenticate`, {
@@ -401,7 +403,7 @@ describe('Pinned signing key and issuer', () => {
   it('defaults the issuer to the emulator URL', async () => {
     emulator = await createEmulator({
       port: 0,
-      seed: { users: [{ email: 'alice@acme.com', password: 'test123' }] },
+      seed: { users: [{ email: 'alice@acme.com', password: 'test123', email_verified: true }] },
     });
 
     const res = await fetch(`${emulator.url}/user_management/authenticate`, {

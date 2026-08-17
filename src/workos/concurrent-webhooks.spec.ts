@@ -264,6 +264,7 @@ describe('Concurrent Webhook Delivery', () => {
       body: JSON.stringify({
         email: 'auth1@example.com',
         password: 'password123',
+        email_verified: true,
       }),
     });
     await user1Res.json();
@@ -277,6 +278,7 @@ describe('Concurrent Webhook Delivery', () => {
       body: JSON.stringify({
         email: 'auth2@example.com',
         password: 'password123',
+        email_verified: true,
       }),
     });
     await user2Res.json();

@@ -166,11 +166,7 @@ export function userRoutes(ctx: RouteContext): void {
     const user = ws.users.get(c.req.param('id'));
     if (!user) throw notFound('User');
 
-    const identities = ws.identities.findBy('user_id', user.id);
-    return c.json({
-      object: 'list',
-      data: identities.map(formatIdentity),
-      list_metadata: { before: null, after: null },
-    });
+    // A bare array, per the spec: this endpoint is not paginated and returns no list envelope.
+    return c.json(ws.identities.findBy('user_id', user.id).map(formatIdentity));
   });
 }

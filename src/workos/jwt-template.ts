@@ -191,11 +191,12 @@ export function renderJwtTemplate(content: string, context: JwtTemplateContext):
 
 /**
  * The OAuth provider keys observed in the production JWT template context's
- * `user.identities` map. The emulator does not model identity linking, so every
- * provider maps to null — matching a user with no linked identities. Note
- * GitHubOAuth uses a capital-H per the measured production context.
+ * `user.identities` map. Every provider maps to null — a user with no linked identities —
+ * and a provider the user has actually linked is overlaid with its `idp_id` in
+ * `buildJwtTemplateContext`. Note GitHubOAuth uses a capital-H per the measured
+ * production context.
  */
-const OAUTH_IDENTITIES_MAP: Record<string, null> = {
+const OAUTH_IDENTITIES_MAP: Record<string, string | null> = {
   AppleOAuth: null,
   GitHubOAuth: null,
   GoogleOAuth: null,
@@ -296,8 +297,8 @@ export function validateJwtTemplateContent(content: unknown): string[] {
  * Assemble the variables a template can read for one sign-in. Mirrors the production
  * WorkOS JWT template context: `user` and `organization` are built from the format*
  * helpers (so they track the API response shape), with the adjustments prod's template
- * context makes on top — `user.identities` is added (a provider→null map for users with
- * no linked identity) and `user.last_sign_in_at` is dropped. `organization_membership`
+ * context makes on top — `user.identities` is added (a provider→`idp_id` map, null for every
+ * provider the user has not linked) and `user.last_sign_in_at` is dropped. `organization_membership`
  * is built explicitly with the context-only shape (string `role`/`roles`, no
  * `external_id`/`metadata`).
  *
@@ -309,9 +310,16 @@ export function buildJwtTemplateContext(
   user: WorkOSUser,
   organizationId?: string | null,
 ): JwtTemplateContext {
+  // A linked provider carries the user's id at that provider; the rest stay null. The map is
+  // copied rather than mutated — it is module state shared by every render.
+  const identities: Record<string, string | null> = { ...OAUTH_IDENTITIES_MAP };
+  for (const identity of ws.identities.findBy('user_id', user.id)) {
+    identities[identity.provider] = identity.idp_id;
+  }
+
   const userContext: Record<string, unknown> = {
     ...formatUser(user),
-    identities: OAUTH_IDENTITIES_MAP,
+    identities,
   };
   // `last_sign_in_at` is on the API response but omitted from the JWT template context
   // by production.

@@ -145,8 +145,10 @@ export interface WorkOSAuthorizationCode extends Entity {
 export interface WorkOSIdentity extends Entity {
   object: 'identity';
   user_id: string;
+  /** An OAuth provider, e.g. 'GoogleOAuth'. The spec supports no other identity type yet. */
   provider: string;
-  provider_id: string;
+  /** The user's id at the provider. */
+  idp_id: string;
   type: 'OAuth';
 }
 

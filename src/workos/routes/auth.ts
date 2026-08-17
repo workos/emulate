@@ -31,7 +31,7 @@ import {
 } from '../helpers.js';
 import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
-import type { WorkOSInvitation } from '../entities.js';
+import type { WorkOSInvitation, WorkOSSSOAuthorization, WorkOSUser } from '../entities.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
 import { renderLoginPage, renderDeviceVerifyPage } from '../login-page.js';
 
@@ -257,7 +257,12 @@ export function authRoutes(ctx: RouteContext): void {
     /** Emit the spec's authentication.*_failed event for a credential failure, then throw. */
     const failAuth: (
       method: string,
-      info: { email?: string | null; userId?: string | null },
+      info: {
+        email?: string | null;
+        userId?: string | null;
+        /** Required on every authentication.sso_* event, per the spec's event data. */
+        sso?: { organization_id: string | null; connection_id: string | null; session_id: string | null };
+      },
       error: WorkOSApiError,
     ) => never = (method, info, error) => {
       emitAuthenticationEvent({
@@ -269,8 +274,81 @@ export function authRoutes(ctx: RouteContext): void {
         ipAddress: requestIp,
         userAgent: requestUserAgent,
         error: { code: error.code, message: error.message },
+        sso: info.sso,
       });
       throw error;
+    };
+
+    /**
+     * Redeem an /sso/authorize code into the user-management user it signs in, provisioning one
+     * when the federated profile has no account yet — AuthKit does the same on a first SSO login,
+     * and /sso/authorize mints a profile for any address it is handed, so refusing here would
+     * report a code the emulator had just issued as invalid.
+     *
+     * Provisioning deliberately lands before the shared template gate below: a JWT template that
+     * cannot render fails the request but keeps the user, the same way the gate already keeps the
+     * membership acceptInvitation persists. Both are real domain progress — the user is the exact
+     * record a successful retry would create — and the burned code matches what a template failure
+     * costs every other one-time grant.
+     */
+    const redeemSsoAuthorization = (ssoAuth: WorkOSSSOAuthorization, code: string): WorkOSUser => {
+      const profile = ws.ssoProfiles.get(ssoAuth.profile_id);
+
+      if (isExpired(ssoAuth.expires_at)) {
+        ws.ssoAuthorizations.delete(ssoAuth.id);
+        failAuth(
+          'SSO',
+          {
+            email: profile?.email,
+            userId: findUserByEmail(ws, profile?.email ?? '')?.id ?? null,
+            sso: {
+              organization_id: ssoAuth.organization_id,
+              connection_id: ssoAuth.connection_id,
+              session_id: null,
+            },
+          },
+          new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
+        );
+      }
+
+      // The same emulator-state failure /sso/token names, for the same reason: an authorization
+      // pointing at a profile that no longer exists is not a request anyone can fix by sending
+      // something else, so it stays plain rather than OAuth-shaped.
+      if (!profile) throw new WorkOSApiError(500, 'Profile not found', 'server_error');
+
+      // The shared recipient check below runs only after the grant, and by then this helper has
+      // spent the one-time authorization and possibly provisioned an account — a mismatched
+      // invitation would fail the request yet leave a user behind with no session. The profile
+      // already names who is signing in, so ask before anything is consumed; a rejected caller
+      // keeps the code and retries without the invitation.
+      if (invitation && !emailsMatch(invitation.email, profile.email)) {
+        throw new WorkOSApiError(
+          400,
+          'The invitation was issued for a different email address',
+          'invitation_cannot_be_used_for_email',
+        );
+      }
+
+      ws.ssoAuthorizations.delete(ssoAuth.id);
+
+      const existing = findUserByEmail(ws, profile.email);
+      if (existing) return existing;
+      return ws.users.insert({
+        object: 'user',
+        email: profile.email,
+        name: null,
+        first_name: profile.first_name,
+        last_name: profile.last_name,
+        // The IdP asserted the address, which is what verification proves.
+        email_verified: true,
+        profile_picture_url: null,
+        last_sign_in_at: null,
+        external_id: null,
+        metadata: {},
+        locale: null,
+        password_hash: null,
+        impersonator: null,
+      });
     };
 
     /**
@@ -311,6 +389,48 @@ export function authRoutes(ctx: RouteContext): void {
       );
     };
 
+    /**
+     * Gate a sign-in whose credential proves nothing about the mailbox. Production answers an
+     * unverified user with `email_verification_required` instead of a session, and that response
+     * is what sends them to a verification screen. A fresh email_verification is created, so the
+     * code reaches a test the way every other emulator flow delivers one — on the
+     * `email_verification.created` webhook — and the pending token carries the primary method
+     * (so the eventual session reports it rather than 'unknown') plus any still-unspent
+     * invitation, on the same deferral rule the MFA challenge uses.
+     */
+    const issueEmailVerification = (
+      unverified: { id: string; email: string },
+      orgId: string | null,
+      primaryMethod: string,
+    ) => {
+      const pendingToken = generateId('pending');
+      store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, {
+        user_id: unverified.id,
+        organization_id: orgId,
+        auth_method: primaryMethod,
+        invitation_token: invitation?.token ?? null,
+      });
+      const verification = ws.emailVerifications.insert({
+        object: 'email_verification',
+        user_id: unverified.id,
+        email: unverified.email,
+        code: generateCode(),
+        expires_at: expiresIn(10),
+      });
+      // 403 with {code, message}, like mfa_challenge and organization_selection_required: the
+      // spec lists all three as authenticate's step-up codes under 403, never under its 400.
+      return c.json(
+        {
+          code: 'email_verification_required',
+          message: 'Email ownership must be verified before authentication.',
+          pending_authentication_token: pendingToken,
+          email_verification_id: verification.id,
+          email: unverified.email,
+        },
+        403,
+      );
+    };
+
     let user;
     let organizationId: string | null = null;
     let authMethod: string;
@@ -329,6 +449,9 @@ export function authRoutes(ctx: RouteContext): void {
     // a leniency production doesn't permit — store null. In both cases the redemption request
     // is the only client identity the emulator ever has.
     let grantClientId: string | undefined;
+    // The connection an SSO sign-in came through, carried to the authentication.sso_succeeded
+    // event, whose spec payload requires an `sso` block. Null for every other grant.
+    let ssoContext: { organization_id: string | null; connection_id: string | null } | null = null;
 
     switch (grantType) {
       case 'authorization_code': {
@@ -339,6 +462,23 @@ export function authRoutes(ctx: RouteContext): void {
         // as invalid_grant with the same description.
         const authCode = ws.authCodes.findOneBy('code', code);
         if (!authCode) {
+          // A code minted by /sso/authorize is redeemable here too. The two endpoints wrote to
+          // different stores, so an app that starts SSO with `sso.getAuthorizationUrl` — sending
+          // people straight to their IdP rather than through a hosted screen — and finishes at
+          // AuthKit's callback got invalid_grant for a code the emulator had just issued.
+          // /sso/token still redeems the same code for a bare profile; this is the path that
+          // produces a session, and the only one that records auth_method 'sso'.
+          const ssoAuth = ws.ssoAuthorizations.findOneBy('code', code);
+          if (ssoAuth) {
+            user = redeemSsoAuthorization(ssoAuth, code);
+            organizationId = ssoAuth.organization_id;
+            ssoContext = { organization_id: ssoAuth.organization_id, connection_id: ssoAuth.connection_id };
+            // An SSO authorization records no client_id, so the redeeming request is the only
+            // client identity there is — the same fallback a client-less /authorize gets.
+            grantClientId = clientId;
+            authMethod = 'SSO';
+            break;
+          }
           failAuth(
             'OAuth',
             {},
@@ -426,6 +566,13 @@ export function authRoutes(ctx: RouteContext): void {
         }
         authMethod = 'Password';
 
+        // Checked before the factor challenge below: an unverified mailbox is the earlier gate,
+        // and challenging a second factor for an account whose first contact detail is unproven
+        // would hand out a challenge production never issues.
+        if (!user.email_verified) {
+          return issueEmailVerification(user, organizationId, 'Password');
+        }
+
         // A user with enrolled factors must clear a second factor before a session is issued:
         // hand back a pending token (recording 'Password' as the primary method) and a challenge.
         const passwordFactors = ws.authFactors.findBy('user_id', user.id);
@@ -470,9 +617,29 @@ export function authRoutes(ctx: RouteContext): void {
       case 'urn:workos:oauth:grant-type:email-verification':
       case 'urn:workos:oauth:grant-type:email-verification:code': {
         const code = body.code as string;
-        const userId = body.user_id as string;
+        // The SDKs send `pending_authentication_token` and nothing else identifying the user
+        // (`serializeAuthenticateWithEmailVerificationOptions` in @workos-inc/node), which is the
+        // token the password grant's gate above hands out. `user_id` stays accepted for callers
+        // already driving this grant the emulator's old way.
+        const pendingToken = body.pending_authentication_token as string | undefined;
+        let pending: PendingAuth | undefined;
+        if (pendingToken) {
+          pending = store.getData<PendingAuth>(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`);
+          if (!pending) {
+            throw new WorkOSApiError(
+              400,
+              'Invalid pending authentication token',
+              'invalid_pending_authentication_token',
+            );
+          }
+        }
+        const userId = pending?.user_id ?? (body.user_id as string);
         if (!code || !userId) {
-          throw new OauthApiError(400, 'invalid_request', 'code and user_id are required.');
+          throw new OauthApiError(
+            400,
+            'invalid_request',
+            'code and pending_authentication_token (or user_id) are required.',
+          );
         }
 
         const ev = ws.emailVerifications.findBy('user_id', userId).find((v) => v.code === code);
@@ -491,10 +658,23 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
 
+        // Revalidated before the pending token is consumed, on the same rule the MFA grant
+        // states: an invitation revoked mid-flow fails the request without destroying the state
+        // behind it, so a retry still reports invitation_invalid.
+        const deferredInvitation = pending?.invitation_token ? resolveInvitation(pending.invitation_token) : null;
+
         ws.users.update(userId, { email_verified: true });
         ws.emailVerifications.delete(ev.id);
+        if (pendingToken) store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, undefined);
         user = ws.users.get(userId);
+        organizationId = pending?.organization_id ?? null;
+        invitation = deferredInvitation;
+        // Event is authentication.email_verification_succeeded; the session records the method
+        // that was gated (e.g. 'password'), since verification is a gate rather than a way to
+        // sign in. Without a pending token there is nothing to record, and the session falls
+        // back to 'unknown' as before.
         authMethod = 'EmailVerification';
+        sessionAuthMethod = pending?.auth_method;
         break;
       }
 
@@ -906,6 +1086,9 @@ export function authRoutes(ctx: RouteContext): void {
         email: updatedUser.email,
         ipAddress: session.ip_address,
         userAgent: session.user_agent,
+        // Required on authentication.sso_* by the spec's event data. This is the only SSO path
+        // that reaches a session, so it is also the only one that can report a session_id.
+        sso: ssoContext ? { ...ssoContext, session_id: session.id } : undefined,
       });
     }
 

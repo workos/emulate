@@ -304,7 +304,27 @@ report their own method and need no configuration.)
 users:
   - email: alice@acme.com
     oauth_provider: GoogleOAuth # reported as authentication_method for this user's OAuth logins
+    oauth_idp_id: 108872335 # the user's id at the provider; generated if omitted
 ```
+
+### Linked OAuth identities
+
+`oauth_provider` also links an OAuth identity, so the user is reported by
+`GET /user_management/users/{id}/identities` — a bare array of `{idp_id, type, provider}`, which is
+what the SDKs' `getUserIdentities` deserializes:
+
+```json
+[{ "idp_id": "108872335", "type": "OAuth", "provider": "GoogleOAuth" }]
+```
+
+Completing a login through an OAuth `connection` (`GoogleOAuth`, `MicrosoftOAuth`, `GitHubOAuth`,
+`AppleOAuth`) links one too, carrying the profile's `idp_id`. SAML connections do not: the spec's
+identity `provider` enum is OAuth-only. A second login through the same provider is the same link,
+not another one.
+
+A JWT template reads the same fact as `user.identities` — a provider→`idp_id` map, `null` for every
+provider the user has not linked, so `{{ user.identities.GoogleOAuth }}` renders the id and an
+unlinked provider renders a claim the emulator drops.
 
 ### Pipes connected accounts
 
@@ -541,6 +561,38 @@ curl -X POST http://localhost:4100/user_management/authenticate \
 ```
 
 Only `active` memberships count — an unaccepted invitation or a deactivated member is never selected. Passing `invitation_token` to the `authorization_code`, `password`, or Magic Auth grants accepts the invitation as part of the login, joining the user to the invited organization and scoping the session to it, so there is no selection step; a token that is unknown, expired, or already used is rejected with `invitation_invalid`, and one addressed to somebody else with `invitation_cannot_be_used_for_email`. Once a session exists, only an explicit `organization_id` on a refresh (`switchToOrganization`) moves it between organizations.
+
+### Email verification gates the password grant
+
+A password sign-in by a user whose `email_verified` is `false` does not return a session. Production answers `email_verification_required`, and that response is what sends the user to a verification screen — so the emulator does too:
+
+```json
+{
+  "code": "email_verification_required",
+  "message": "Email ownership must be verified before authentication.",
+  "pending_authentication_token": "pending_...",
+  "email_verification_id": "email_verification_...",
+  "email": "bob@example.com"
+}
+```
+
+The gate creates an email verification, so the code arrives on the `email_verification.created` webhook like every other emailed code. Finish the sign-in with the token and the code — exactly what the SDKs' `authenticateWithEmailVerification` sends:
+
+```bash
+curl -X POST http://localhost:4100/user_management/authenticate \
+  -H "Content-Type: application/json" \
+  -d '{"grant_type":"urn:workos:oauth:grant-type:email-verification:code","pending_authentication_token":"pending_...","code":"123456"}'
+```
+
+The resulting session records the method that was gated (`password`), not the verification step. Driving the grant with `user_id` instead of a pending token still works, and that session reports `unknown` — there is no primary method to recover. Fixtures that sign in with a password want `email_verified: true`, in a seed file or on `POST /user_management/users`.
+
+### SSO logins produce a session
+
+A code from `GET /sso/authorize` redeems at `POST /user_management/authenticate` with `grant_type=authorization_code`, so an app that sends people straight to their IdP with `sso.getAuthorizationUrl` and finishes at AuthKit's callback gets a real session — one whose `auth_method` is `sso`, so authorization code that hides password management for federated users can be exercised. `POST /sso/token` still redeems the same code for a bare profile and access token, which is the standalone SSO product and creates no session; a code is spent by whichever endpoint gets it first.
+
+The session is scoped to the connection's organization. A profile with no user-management account yet gets one, verified — the IdP asserted the address — the way AuthKit provisions on a first SSO login.
+
+As with `/user_management/authorize`, `/sso/authorize` is public and signs in whoever `login_hint` names: there is no IdP here to prove an identity with, and inventing a profile for any address is what lets a test drive an SSO login at all. Both endpoints will therefore hand out a session for any account you ask them for. That is the emulator being a test double, not an authorization server — do not point anything at it that you would not also let sign in as your users.
 
 ### Refresh tokens always rotate
 
