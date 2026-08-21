@@ -152,6 +152,15 @@ export interface WorkOSSeedUser {
    * `oauth_provider` — there is no identity to put it on.
    */
   oauth_idp_id?: string;
+  /**
+   * Enroll a TOTP authentication factor for this user at boot, exactly as
+   * `POST /user_management/users/{id}/auth_factors` would. The factor is reported by
+   * `GET /user_management/users/{id}/auth_factors`, and a password sign-in answers with the
+   * spec's `mfa_challenge` step instead of a session — so MFA administration and step-up
+   * login flows are testable without post-boot enrollment calls that in-memory state loses
+   * on restart.
+   */
+  totp?: boolean;
 }
 
 export interface WorkOSSeedConnection {
@@ -358,6 +367,24 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
           userConfig.oauth_provider,
           userConfig.oauth_idp_id ?? `idp_${generateId('usr')}`,
         );
+      }
+
+      // The same record the enrollment route writes, so ListAuthFactors reports it and the
+      // password grant challenges it like any enrolled second factor. The secret surfaces only
+      // inside the URI, as enrollment leaves it.
+      if (userConfig.totp) {
+        const issuer = 'WorkOS Emulator';
+        const secret = randomBytes(20).toString('hex').slice(0, 32).toUpperCase();
+        ws.authFactors.insert({
+          object: 'authentication_factor',
+          user_id: user.id,
+          type: 'totp',
+          totp: {
+            issuer,
+            user: user.email,
+            uri: `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(user.email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}`,
+          },
+        });
       }
     }
   }

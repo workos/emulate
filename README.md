@@ -326,6 +326,25 @@ A JWT template reads the same fact as `user.identities` — a provider→`idp_id
 provider the user has not linked, so `{{ user.identities.GoogleOAuth }}` renders the id and an
 unlinked provider renders a claim the emulator drops.
 
+### Seeded MFA factors
+
+Set `totp: true` on a user to enroll a TOTP authentication factor at boot, exactly as
+`POST /user_management/users/{id}/auth_factors` would:
+
+```yaml
+users:
+  - email: alice@acme.com
+    password: test123
+    email_verified: true
+    totp: true # enrolls a TOTP factor; password sign-ins answer with mfa_challenge
+```
+
+The factor is reported by `GET /user_management/users/{id}/auth_factors`, and a password
+sign-in for the user returns the spec's `mfa_challenge` step (a `pending_authentication_token`
+plus an `authentication_challenge`) instead of a session, completed with the
+`urn:workos:oauth:grant-type:mfa-totp` grant — so MFA administration and step-up login flows
+need no post-boot enrollment calls that in-memory state would lose on restart.
+
 ### Pipes connected accounts
 
 `GET|POST|PUT|DELETE /user_management/users/{id}/connected_accounts/{slug}` serve a user's

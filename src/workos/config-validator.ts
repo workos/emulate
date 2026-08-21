@@ -120,6 +120,15 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: user.oauth_idp_id,
           });
         }
+        // A truthy non-boolean (YAML's `totp: yes` parses to true, but `totp: "yes"` does not)
+        // would silently enroll — or silently not enroll — a factor the config never decided on.
+        if (user.totp !== undefined && typeof user.totp !== 'boolean') {
+          errors.push({
+            path: `users[${index}].totp`,
+            message: 'totp must be a boolean if provided',
+            value: user.totp,
+          });
+        }
       });
 
       // Email is the lookup key org memberships join on; duplicates would silently
