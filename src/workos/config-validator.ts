@@ -120,8 +120,9 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: user.oauth_idp_id,
           });
         }
-        // A truthy non-boolean (YAML's `totp: yes` parses to true, but `totp: "yes"` does not)
-        // would silently enroll — or silently not enroll — a factor the config never decided on.
+        // The YAML 1.2 parser the CLI uses reads `totp: yes` as the string "yes", not a boolean —
+        // and `totp: no` as the equally truthy string "no", which the seed's truthiness check
+        // would silently enroll a factor from, against what the config explicitly declined.
         if (user.totp !== undefined && typeof user.totp !== 'boolean') {
           errors.push({
             path: `users[${index}].totp`,
