@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/workos/emulate/compare/v0.7.1...v0.8.0) (2026-08-21)
+
+
+### Features
+
+* **seed:** enroll TOTP auth factors from user config ([#77](https://github.com/workos/emulate/issues/77)) ([df078b0](https://github.com/workos/emulate/commit/df078b0685f87ef42c2a7f53b505e1e9b2ca25ec))
+
+
+### Bug Fixes
+
+* **auth:** gate the password grant on email verification ([#69](https://github.com/workos/emulate/issues/69)) ([799ef19](https://github.com/workos/emulate/commit/799ef19ad18db6bae86f5f9ba267075bb8fdd88e))
+* **seed:** honor a pinned webhook signing secret ([#76](https://github.com/workos/emulate/issues/76)) ([5c38781](https://github.com/workos/emulate/commit/5c38781207f5df0474585e2bb59874567dee4452))
+* **sso:** redeem an SSO code for a user-management session ([#70](https://github.com/workos/emulate/issues/70)) ([b0ae0e8](https://github.com/workos/emulate/commit/b0ae0e88cfbd13e066cd215270aa7477a0156ca9))
+* **users:** populate and shape linked OAuth identities ([#71](https://github.com/workos/emulate/issues/71)) ([71f1322](https://github.com/workos/emulate/commit/71f13225d41e9a89bf12337fd309200b67385f73))
+* **users:** populate connected accounts and serve the spec's verbs ([#73](https://github.com/workos/emulate/issues/73)) ([20b4989](https://github.com/workos/emulate/commit/20b4989e97237a09316b5bc55b50978d9f1ba057))
+
 ## [0.7.1](https://github.com/workos/emulate/compare/v0.7.0...v0.7.1) (2026-08-13)
 
 
