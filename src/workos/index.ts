@@ -231,6 +231,12 @@ export interface WorkOSSeedWebhookEndpoint {
   url?: string;
   events?: string[];
   enabled?: boolean;
+  /**
+   * Pinned signing secret. Generated if omitted. Pin it to bake the secret into a
+   * consumer's environment, so it can verify `WorkOS-Signature` headers on seeded
+   * deliveries without first discovering the secret via `GET /webhook_endpoints`.
+   */
+  secret?: string;
 }
 
 export interface WorkOSSeedConnectApplication {
@@ -590,7 +596,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       ws.webhookEndpoints.insert({
         object: 'webhook_endpoint',
         endpoint_url: endpointUrl,
-        secret: randomBytes(32).toString('hex'),
+        secret: whConfig.secret ?? randomBytes(32).toString('hex'),
         enabled: whConfig.enabled !== false,
         events: whConfig.events ?? [],
         description: null,

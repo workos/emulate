@@ -504,10 +504,14 @@ Seed it (an empty `events` list subscribes to everything):
 ```yaml
 webhookEndpoints:
   - endpoint_url: http://localhost:5005/webhooks
+    secret: whsec_test # optional; generated if omitted
     events: []
 ```
 
-Or register at runtime and choose your own signing secret:
+Pin `secret` when your consumer verifies signatures: the API masks an endpoint's secret after
+creation, so a generated one can't be recovered for the consumer's environment.
+
+Or register at runtime:
 
 ```bash
 curl -X POST http://localhost:4100/webhook_endpoints \

@@ -620,6 +620,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: endpoint.events,
           });
         }
+        // The secret keys every signature the endpoint will ever receive; a non-string here
+        // (only YAML or JSON could write one) would sign deliveries with a coerced value no
+        // consumer's verifier was configured with.
+        if (endpoint.secret !== undefined && (typeof endpoint.secret !== 'string' || !endpoint.secret)) {
+          errors.push({
+            path: `webhookEndpoints[${index}].secret`,
+            message: 'secret must be a non-empty string if provided',
+            value: endpoint.secret,
+          });
+        }
       });
     }
   }
