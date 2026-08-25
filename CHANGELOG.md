@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/workos/emulate/compare/v0.8.0...v0.9.0) (2026-08-25)
+
+
+### Features
+
+* **auth:** interactive organization selection, and an account picker on the sign-in page ([#78](https://github.com/workos/emulate/issues/78)) ([5e7ca56](https://github.com/workos/emulate/commit/5e7ca561b92990b1455fa913c8d2041411244386))
+
 ## [0.8.0](https://github.com/workos/emulate/compare/v0.7.1...v0.8.0) (2026-08-21)
 
 
