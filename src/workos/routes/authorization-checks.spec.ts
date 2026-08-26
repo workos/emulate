@@ -228,6 +228,22 @@ describe('Authorization check + role assignment routes', () => {
     expect(body.data.map((p: any) => p.slug).sort()).toEqual(['posts:read', 'posts:write']);
   });
 
+  it('returns 404 via the resource-centric route for an unknown resource', async () => {
+    const { membership } = await setupWithResource();
+    const res = await req(
+      `/authorization/resources/res_nonexistent/organization_memberships/${membership.id}/permissions`,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 via the resource-centric route for an unknown membership', async () => {
+    const { resource } = await setupWithResource();
+    const res = await req(
+      `/authorization/resources/${resource.id}/organization_memberships/om_nonexistent/permissions`,
+    );
+    expect(res.status).toBe(404);
+  });
+
   it('paginates effective permissions', async () => {
     const { membership } = await setupWithResource();
 
@@ -315,6 +331,14 @@ describe('Authorization check + role assignment routes', () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.data.map((p: any) => p.slug)).toEqual(['posts:read']);
+
+    // The shadowing applies to /check as well — same helper
+    const checkRes = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+      method: 'POST',
+      body: JSON.stringify({ permission: 'posts:write' }),
+    });
+    const checkBody = await json(checkRes);
+    expect(checkBody.authorized).toBe(false);
   });
 
   it('returns 404 for nonexistent membership', async () => {
