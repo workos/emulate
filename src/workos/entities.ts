@@ -335,6 +335,10 @@ export interface WorkOSRoleAssignment extends Entity {
   object: 'role_assignment';
   organization_membership_id: string;
   role_id: string;
+  role_slug: string;
+  resource_id: string | null;
+  resource_external_id: string | null;
+  resource_type_slug: string | null;
 }
 
 export interface WorkOSDirectory extends Entity {

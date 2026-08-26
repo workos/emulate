@@ -906,7 +906,23 @@ export function formatAuthorizationResource(r: WorkOSAuthorizationResource): Rec
 }
 
 export function formatRoleAssignment(ra: WorkOSRoleAssignment): Record<string, unknown> {
-  return formatEntity(ra);
+  return {
+    object: 'role_assignment',
+    id: ra.id,
+    organization_membership_id: ra.organization_membership_id,
+    // role_id is not part of the production shape, but is kept for
+    // compatibility with earlier emulator releases.
+    role_id: ra.role_id,
+    role: { slug: ra.role_slug ?? null },
+    resource: {
+      id: ra.resource_id ?? null,
+      external_id: ra.resource_external_id ?? null,
+      resource_type_slug: ra.resource_type_slug ?? null,
+    },
+    source: { type: 'direct', group_role_assignment_id: null },
+    created_at: ra.created_at,
+    updated_at: ra.updated_at,
+  };
 }
 
 export function formatDeviceAuthorization(d: WorkOSDeviceAuthorization, baseUrl: string): Record<string, unknown> {
