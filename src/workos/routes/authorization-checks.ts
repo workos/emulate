@@ -136,6 +136,10 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
           .find((r) => r.resource_type_slug === resourceTypeSlug && r.organization_id === membership.organization_id) ??
         null;
       if (!resource) throw notFound('Resource');
+    } else if (resourceTypeSlug) {
+      throw validationError('resource_external_id is required when resource_type_slug is provided', [
+        { field: 'resource_external_id', code: 'required' },
+      ]);
     }
 
     const assignment = ws.roleAssignments.insert({

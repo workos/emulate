@@ -251,6 +251,39 @@ describe('Authorization check + role assignment routes', () => {
     expect(res.status).toBe(404);
   });
 
+  it('returns 404 when resource_external_id matches but resource_type_slug does not', async () => {
+    const { membership, org } = await setup();
+
+    await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-3', organization_id: org.id }),
+    });
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_external_id: 'doc-3', resource_type_slug: 'folder' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('requires resource_type_slug when resource_external_id is provided', async () => {
+    const { membership } = await setup();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_external_id: 'doc-1' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('requires resource_external_id when resource_type_slug is provided', async () => {
+    const { membership } = await setup();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_type_slug: 'doc' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
   it('requires role_slug or role_id when creating a role assignment', async () => {
     const { membership } = await setup();
     const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
