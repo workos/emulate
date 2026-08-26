@@ -318,6 +318,67 @@ export function ssoRoutes(ctx: RouteContext): void {
   app.get('/sso/jwks', jwks);
   app.get('/sso/jwks/:clientId', jwks);
 
+  /**
+   * OIDC discovery, which production serves per AuthKit client at
+   * `/user_management/{client_id}/.well-known/openid-configuration`. Unauthenticated, as it is
+   * upstream: a client fetches it before it holds anything.
+   *
+   * These five fields are the whole document production returns — `openidConfiguration` in
+   * `api/src/userland-sessions/userland-sso.controller.ts`. Notably absent are
+   * `subject_types_supported` and `id_token_signing_alg_values_supported`, which OIDC Discovery
+   * 1.0 §3 marks REQUIRED. Their absence is fidelity, not oversight: adding them here would
+   * make a client that needs them pass against the emulator and fail against WorkOS, which is
+   * the one outcome an emulator must never produce.
+   *
+   * Endpoints are built from the requested origin rather than the configured base URL, because a
+   * document is only useful to whoever fetched it. Reached over host.docker.internal or a LAN
+   * address — both ordinary for the container image — a base-URL document would advertise
+   * localhost, which is precisely the host that caller cannot reach. Production has no such
+   * problem to solve: it builds them from a configured `API_URL`, the only name it answers on.
+   *
+   * `issuer` is the exception, and comes from `jwt.authKitIssuer` rather than the origin, because
+   * it has to equal the `iss` the emulator mints — a client fetches this document precisely to
+   * validate one against the other.
+   *
+   * A client id that could not be one is refused the way production refuses an unknown one,
+   * verified against `api.workos.com`:
+   * `{"message":"Application not found: '…'","code":"entity_not_found","entity_id":"…"}`.
+   * Registered clients still cannot be told apart — no route under `/user_management` or `/sso`
+   * consults the `connectApplications` registry, so an AuthKit client is never in it — so this
+   * checks the one thing that needs no registry: that the id is shaped like a client id at all.
+   * Serving anything else would reflect it straight back out as a `jwks_uri`.
+   *
+   * Deliberately no narrower than that. Production ids are ULIDs, but the emulator lets you pin
+   * a readable one — `client_local_backend`, the README's own example — and `authorize`,
+   * `authenticate` and
+   * `/sso/jwks` all take any id and mint `iss` from it. A shape stricter than theirs would 404
+   * the discovery document at the very issuer the emulator puts in its own tokens.
+   */
+  const CLIENT_ID_SHAPE = /^client_[A-Za-z0-9_-]+$/;
+
+  app.get('/user_management/:clientId/.well-known/openid-configuration', (c) => {
+    const clientId = c.req.param('clientId');
+    if (!CLIENT_ID_SHAPE.test(clientId)) {
+      return c.json(
+        {
+          message: `Application not found: '${clientId}'.`,
+          code: 'entity_not_found',
+          entity_id: clientId,
+        },
+        404,
+      );
+    }
+
+    const origin = new URL(c.req.url).origin;
+    return c.json({
+      issuer: jwt.authKitIssuer(clientId),
+      authorization_endpoint: `${origin}/user_management/authorize`,
+      token_endpoint: `${origin}/user_management/authenticate`,
+      response_types_supported: ['code'],
+      jwks_uri: `${origin}/sso/jwks/${clientId}`,
+    });
+  });
+
   // SSO Single Logout — generate logout token
   app.post('/sso/logout/authorize', async (c) => {
     const body = await parseJsonBody(c);

@@ -1101,6 +1101,12 @@ export function authRoutes(ctx: RouteContext): void {
     // Prefer the client_id bound to the originating grant (auth code or refresh token)
     // over the unvalidated redemption-time request parameter.
     const tokenClientId = grantClientId ?? clientId;
+    // `aud` keeps its placeholder when no client is bound; `iss` does not get one. A grant with
+    // no client_id would otherwise mint `{issuer}/user_management/workos-emulate`, an issuer URL
+    // whose discovery document 404s — production mints no such thing, and a client discovering
+    // from `iss` would follow it nowhere. Absent a client, `iss` is the bare configured issuer,
+    // which is a real value and production's `'Legacy'` shape.
+    const tokenAudience = tokenClientId ?? 'workos-emulate';
 
     // Entitlements and feature flags re-resolve at every mint — including refresh grants — so
     // a plan change or flag toggle lands in the next token. Both claims are omitted rather
@@ -1129,9 +1135,9 @@ export function authRoutes(ctx: RouteContext): void {
         act: updatedUser.impersonator ? { sub: updatedUser.impersonator.email } : undefined,
         entitlements: entitlements?.length ? entitlements : undefined,
         feature_flags: flagSlugs.length ? flagSlugs : undefined,
-        aud: tokenClientId ?? 'workos-emulate',
+        aud: tokenAudience,
       },
-      { claims: templateClaims },
+      { claims: templateClaims, issuerClientId: tokenClientId },
     );
 
     // Store a real refresh token

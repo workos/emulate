@@ -134,6 +134,165 @@ describe('Authorization check + role assignment routes', () => {
     expect(body.data[0].organization_membership_id).toBe(membership.id);
   });
 
+  it('creates a role assignment via role_slug (production/SDK contract)', async () => {
+    const { membership, adminRole } = await setup();
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role' }),
+    });
+    expect(res.status).toBe(201);
+    const body = await json(res);
+    expect(body.object).toBe('role_assignment');
+    expect(body.organization_membership_id).toBe(membership.id);
+    expect(body.role_id).toBe(adminRole.id);
+    expect(body.role).toEqual({ slug: 'admin-role' });
+    expect(body.resource).toEqual({ id: null, external_id: null, resource_type_slug: null });
+    expect(body.source).toEqual({ type: 'direct', group_role_assignment_id: null });
+
+    // The assignment grants its permissions
+    const checkRes = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+      method: 'POST',
+      body: JSON.stringify({ permission: 'admin:manage' }),
+    });
+    expect((await json(checkRes)).authorized).toBe(true);
+  });
+
+  it('creates a role assignment scoped to a resource by external id', async () => {
+    const { membership, org } = await setup();
+
+    const resourceRes = await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: org.id }),
+    });
+    const resource = await json(resourceRes);
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_external_id: 'doc-1', resource_type_slug: 'doc' }),
+    });
+    expect(res.status).toBe(201);
+    const body = await json(res);
+    expect(body.resource).toEqual({ id: resource.id, external_id: 'doc-1', resource_type_slug: 'doc' });
+  });
+
+  it('creates a role assignment scoped to a resource by id', async () => {
+    const { membership, org } = await setup();
+
+    const resourceRes = await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id }),
+    });
+    const resource = await json(resourceRes);
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_id: resource.id }),
+    });
+    expect(res.status).toBe(201);
+    const body = await json(res);
+    expect(body.resource.id).toBe(resource.id);
+  });
+
+  it('prefers the organization role when its slug collides with an environment role', async () => {
+    const { membership, org } = await setup();
+
+    // 'admin-role' already exists as an environment role (created first in setup)
+    const orgRoleRes = await req(`/authorization/organizations/${org.id}/roles`, {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'admin-role', name: 'Org Admin' }),
+    });
+    const orgRole = await json(orgRoleRes);
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role' }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json(res)).role_id).toBe(orgRole.id);
+  });
+
+  it('returns 404 when resource_id belongs to another organization', async () => {
+    const { membership } = await setup();
+
+    const otherOrgRes = await req('/organizations', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Other Org' }),
+    });
+    const otherOrg = await json(otherOrgRes);
+    const resourceRes = await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-other', organization_id: otherOrg.id }),
+    });
+    const resource = await json(resourceRes);
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_id: resource.id }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for an unknown role_slug', async () => {
+    const { membership } = await setup();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'no-such-role' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for an unknown resource target', async () => {
+    const { membership } = await setup();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_id: 'resource_nonexistent' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when resource_external_id matches but resource_type_slug does not', async () => {
+    const { membership, org } = await setup();
+
+    await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-3', organization_id: org.id }),
+    });
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_external_id: 'doc-3', resource_type_slug: 'folder' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('requires resource_type_slug when resource_external_id is provided', async () => {
+    const { membership } = await setup();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_external_id: 'doc-1' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('requires resource_external_id when resource_type_slug is provided', async () => {
+    const { membership } = await setup();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'admin-role', resource_type_slug: 'doc' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('requires role_slug or role_id when creating a role assignment', async () => {
+    const { membership } = await setup();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(422);
+  });
+
   it('deletes a role assignment', async () => {
     const { membership, adminRole } = await setup();
 

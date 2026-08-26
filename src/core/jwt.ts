@@ -64,6 +64,13 @@ interface SignOptions {
    * is not something a template gets to restate.
    */
   claims?: Record<string, unknown>;
+  /**
+   * AuthKit client to scope `iss` to, giving the per-client issuer production mints for
+   * `/user_management/authenticate` tokens. Omit and `iss` is the bare configured issuer,
+   * which is what the M2M, SSO and widget tokens want — none of them is the token the
+   * AuthKit discovery document describes.
+   */
+  issuerClientId?: string;
 }
 
 export interface SigningKeyOptions {
@@ -123,7 +130,22 @@ export class JWTManager {
   private privateKey: KeyObject;
   private publicKey: KeyObject;
   private kid: string;
-  issuer: string;
+  private _issuer = '';
+
+  /**
+   * Base the `iss` claim is built from. Trailing slashes are stripped on the way in, whichever
+   * way it is set, because `authKitIssuer` concatenates: `--issuer https://api.workos.com/`
+   * would otherwise mint `https://api.workos.com//user_management/client_x`, which equals
+   * nothing production emits and nothing a verifier is comparing against. Settable because
+   * `createEmulator` learns the bound URL only after listen() resolves an ephemeral port.
+   */
+  get issuer(): string {
+    return this._issuer;
+  }
+
+  set issuer(value: string) {
+    this._issuer = value.replace(/\/+$/, '');
+  }
 
   constructor(issuer = 'https://api.workos.com', signingKey?: SigningKeyOptions) {
     this.issuer = issuer;
@@ -143,6 +165,26 @@ export class JWTManager {
     this.kid = signingKey?.kid ?? `workos_emulate_${jwkThumbprint(this.publicKey).slice(0, 16)}`;
   }
 
+  /**
+   * The `iss` of an AuthKit access token, and the `issuer` its OIDC discovery document
+   * advertises — one function so the two cannot drift.
+   *
+   * Production derives it from the environment's client id, not the bare API URL:
+   * `${apiUrl}/user_management/${clientId}` (`getIssuer` in
+   * `api-services/src/jwt-claims/build-access-token-claims.ts`, under the default
+   * `issuerType: 'ClientId'`). Its `'Legacy'` issuer type returns the bare URL instead —
+   * what the emulator used to mint for every token — so a verifier written against a
+   * current WorkOS environment saw an `iss` it would have rejected in production.
+   *
+   * It also makes the discovery document valid: OIDC Discovery 1.0 §4.3 requires `issuer`
+   * to equal the URL prefix the document was fetched from, and that prefix carries the
+   * client id. Reach the emulator under a name other than its configured base URL and the
+   * two diverge again — set `--issuer` to that name if a client enforces §4.3.
+   */
+  authKitIssuer(clientId: string): string {
+    return `${this.issuer}/user_management/${clientId}`;
+  }
+
   sign(payload: Omit<JWTClaims, 'iss' | 'iat' | 'exp'>, options?: SignOptions): string {
     const now = Math.floor(Date.now() / 1000);
     const expiresIn = options?.expiresIn ?? 3600;
@@ -159,7 +201,7 @@ export class JWTManager {
       // reserved claims below are off-limits, so a template may deliberately restate `role`,
       // `permissions`, or `org_id`.
       ...templateClaims,
-      iss: this.issuer,
+      iss: options?.issuerClientId ? this.authKitIssuer(options.issuerClientId) : this.issuer,
       iat: now,
       exp: now + expiresIn,
     };

@@ -53,10 +53,13 @@ export interface EmulatorOptions {
   hostname?: string;
   seed?: EmulatorSeedConfig;
   /**
-   * `iss` to mint into access tokens, and to advertise as the OIDC issuer. Defaults to the
-   * emulator's own URL, which changes with the port. Pin it to the issuer your real WorkOS
-   * environment emits so a verifier comparing `iss` against a constant needs no test-only
-   * branch. The verifier must still fetch JWKS from the emulator.
+   * Base the `iss` claim is built from, and the base of the OIDC issuer discovery advertises.
+   * Defaults to the emulator's own URL, which changes with the port. Pin it to the URL your real
+   * WorkOS environment issues from so a verifier comparing `iss` against a constant needs no
+   * test-only branch. The verifier must still fetch JWKS from the emulator.
+   *
+   * Not the whole claim: an AuthKit access token carries `{issuer}/user_management/{client_id}`,
+   * as production does. Only the M2M, SSO and widget tokens carry the bare value.
    */
   issuer?: string;
   /**

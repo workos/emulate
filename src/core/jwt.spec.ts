@@ -33,6 +33,19 @@ describe('JWTManager', () => {
     expect(payload.exp).toBe(payload.iat + 3600);
   });
 
+  it('strips a trailing slash from the issuer, however it was set', () => {
+    // `authKitIssuer` concatenates, so a trailing slash would mint
+    // `https://api.workos.com//user_management/client_01XYZ` — a URL production never emits and
+    // no verifier is comparing against. Easy to hand it one from a compose file or an env var.
+    const pinned = new JWTManager('https://api.workos.com/');
+    expect(pinned.issuer).toBe('https://api.workos.com');
+    expect(pinned.authKitIssuer('client_01XYZ')).toBe('https://api.workos.com/user_management/client_01XYZ');
+
+    // createEmulator reassigns it after listen() resolves an ephemeral port; that path normalizes too.
+    pinned.issuer = 'https://api.workos.com//';
+    expect(pinned.authKitIssuer('client_01XYZ')).toBe('https://api.workos.com/user_management/client_01XYZ');
+  });
+
   it('preserves optional fields like role and permissions', () => {
     const token = jwt.sign({
       sub: 'user_01ABC',

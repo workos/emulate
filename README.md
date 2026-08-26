@@ -771,9 +771,9 @@ rather than replaying the login.
 
 ## Stable Signing Key and Issuer
 
-By default the emulator generates an RSA keypair at startup and mints its own URL as `iss`. That is
-fine for a single run, but it means a restart invalidates every token already issued and changes the
-published JWKS — and the issuer moves with the port.
+By default the emulator generates an RSA keypair at startup and builds `iss` from its own URL. That
+is fine for a single run, but it means a restart invalidates every token already issued and changes
+the published JWKS — and the issuer moves with the port.
 
 Pin either or both to make tokens outlive a restart:
 
@@ -810,12 +810,62 @@ What this buys you:
 - **One key across several emulators**, or tokens pre-signed offline with the same key the emulator
   verifies.
 
+`--issuer` is the base the client id hangs off, not the whole claim. An AuthKit access token from
+`/user_management/authenticate` carries `iss` of `{issuer}/user_management/{client_id}`, which is
+what production mints — so `--issuer https://api.workos.com` with a client of `client_123` gives
+`https://api.workos.com/user_management/client_123`. The M2M, SSO and widget tokens carry the bare
+value, as does an AuthKit token from a grant that named no `client_id` — there is no client to hang
+off, and inventing a placeholder would advertise an issuer whose discovery document is not there.
+
 The key must be a PEM-encoded RSA private key, since tokens are signed RS256; anything else fails at
 startup with a message saying why. Omit `--kid` and the `kid` is derived from the key itself, so it
 is stable for a pinned key without being pinned separately.
 
 > A pinned signing key is a test fixture, not a secret to reuse anywhere real. Never point the
 > emulator at a key your production environment trusts.
+
+## OIDC Discovery
+
+`GET /user_management/:client_id/.well-known/openid-configuration` serves the same document
+production does, unauthenticated, so a client that discovers its endpoints rather than hard-coding
+them needs no emulator-specific branch:
+
+```bash
+curl http://localhost:4100/user_management/client_123/.well-known/openid-configuration
+```
+
+```json
+{
+  "issuer": "http://localhost:4100/user_management/client_123",
+  "authorization_endpoint": "http://localhost:4100/user_management/authorize",
+  "token_endpoint": "http://localhost:4100/user_management/authenticate",
+  "response_types_supported": ["code"],
+  "jwks_uri": "http://localhost:4100/sso/jwks/client_123"
+}
+```
+
+Those five fields are the whole document production returns. `subject_types_supported` and
+`id_token_signing_alg_values_supported` are absent from both, though OIDC Discovery marks them
+required — a client that needs them fails against WorkOS too, and an emulator that papered over
+that would be hiding the failure rather than reproducing it.
+
+The endpoints follow the host the document was fetched over, so reaching the emulator as
+`host.docker.internal` or a compose service name gets a document pointing back at that name rather
+than at localhost. `issuer` is the one field that does not: it has to equal the `iss` the emulator
+mints, whatever name the document was fetched under. If a strict client enforces OIDC Discovery
+§4.3 — `issuer` must equal the URL the document was fetched from — and you reach the emulator under
+a name other than its own base URL, set `--issuer` to that name.
+
+An id that is not shaped like a client id gets production's 404 rather than a document advertising
+it as a key endpoint:
+
+```json
+{ "message": "Application not found: 'nope'.", "code": "entity_not_found", "entity_id": "nope" }
+```
+
+A _registered_ client cannot be told apart from an unregistered one — nothing under
+`/user_management` or `/sso` consults the application registry, so `authorize` and `/sso/jwks` serve
+any well-formed id too.
 
 ## Redirect URI Hosts
 

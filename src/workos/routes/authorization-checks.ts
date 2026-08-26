@@ -2,8 +2,8 @@ import type { Context } from 'hono';
 import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
 import type { WorkOSAuthorizationResource } from '../entities.js';
 import { getWorkOSStore } from '../store.js';
-import { resolvePrimaryRole } from '../role-helpers.js';
 import { formatRoleAssignment, formatAuthorizationResource, formatListResponse, formatPermission } from '../helpers.js';
+import { findEnvRole, findOrgRole, resolvePrimaryRole } from '../role-helpers.js';
 
 /**
  * Gather all permission slugs for a given membership:
@@ -154,18 +154,53 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     if (!membership) throw notFound('OrganizationMembership');
 
     const body = await parseJsonBody(c);
-    const roleId = body.role_id as string;
-    if (!roleId) {
-      throw validationError('role_id is required', [{ field: 'role_id', code: 'required' }]);
+    const roleSlug = body.role_slug as string | undefined;
+    // role_id is not part of the production contract, but is accepted for
+    // compatibility with earlier emulator releases.
+    const roleId = body.role_id as string | undefined;
+    if (!roleSlug && !roleId) {
+      throw validationError('role_slug is required', [{ field: 'role_slug', code: 'required' }]);
     }
 
-    const role = ws.roles.get(roleId);
+    const role = roleSlug
+      ? (findOrgRole(ws, membership.organization_id, roleSlug) ?? findEnvRole(ws, roleSlug))
+      : ws.roles.get(roleId as string);
     if (!role) throw notFound('Role');
+
+    const resourceId = body.resource_id as string | undefined;
+    const resourceExternalId = body.resource_external_id as string | undefined;
+    const resourceTypeSlug = body.resource_type_slug as string | undefined;
+
+    let resource: WorkOSAuthorizationResource | null = null;
+    if (resourceId) {
+      resource = ws.authorizationResources.get(resourceId) ?? null;
+      if (!resource || resource.organization_id !== membership.organization_id) throw notFound('Resource');
+    } else if (resourceExternalId) {
+      if (!resourceTypeSlug) {
+        throw validationError('resource_type_slug is required when resource_external_id is provided', [
+          { field: 'resource_type_slug', code: 'required' },
+        ]);
+      }
+      resource =
+        ws.authorizationResources
+          .findBy('external_id', resourceExternalId)
+          .find((r) => r.resource_type_slug === resourceTypeSlug && r.organization_id === membership.organization_id) ??
+        null;
+      if (!resource) throw notFound('Resource');
+    } else if (resourceTypeSlug) {
+      throw validationError('resource_external_id is required when resource_type_slug is provided', [
+        { field: 'resource_external_id', code: 'required' },
+      ]);
+    }
 
     const assignment = ws.roleAssignments.insert({
       object: 'role_assignment',
       organization_membership_id: membershipId,
-      role_id: roleId,
+      role_id: role.id,
+      role_slug: role.slug,
+      resource_id: resource?.id ?? null,
+      resource_external_id: resource?.external_id ?? null,
+      resource_type_slug: resource?.resource_type_slug ?? null,
     });
 
     return c.json(formatRoleAssignment(assignment), 201);

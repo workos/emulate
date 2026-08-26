@@ -8,8 +8,8 @@ import type { Store } from '../../core/index.js';
 const apiKeys: ApiKeyMap = { sk_test_sso: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_sso', 'Content-Type': 'application/json' };
 
-function createTestApp() {
-  return createServer(workosPlugin, { port: 0, baseUrl: 'http://localhost:0', apiKeys });
+function createTestApp(options: { baseUrl?: string } = {}) {
+  return createServer(workosPlugin, { port: 0, baseUrl: options.baseUrl ?? 'http://localhost:0', apiKeys });
 }
 
 describe('SSO routes', () => {
@@ -604,5 +604,159 @@ describe('SSO authentication events', () => {
     const res = await app.request(new URL(authorize.logout_url).pathname + new URL(authorize.logout_url).search);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true });
+  });
+});
+
+describe('OIDC discovery', () => {
+  const seedUser = (store: Store) =>
+    getWorkOSStore(store).users.insert({
+      object: 'user',
+      name: null,
+      email: 'discovery@test.com',
+      first_name: null,
+      last_name: null,
+      email_verified: true,
+      profile_picture_url: null,
+      last_sign_in_at: null,
+      external_id: null,
+      metadata: {},
+      locale: null,
+      password_hash: null,
+      impersonator: null,
+    });
+
+  /** Sign in through the flow the document advertises and return the access token's claims. */
+  const mintToken = async (app: ReturnType<typeof createTestApp>['app'], origin: string, clientId: string) => {
+    const authorize = await app.request(
+      `${origin}/user_management/authorize?redirect_uri=http://localhost:3000/callback&client_id=${clientId}`,
+    );
+    const code = new URL(authorize.headers.get('location')!).searchParams.get('code')!;
+    const token = (await (
+      await app.request(`${origin}/user_management/authenticate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: clientId }),
+      })
+    ).json()) as { access_token: string };
+
+    return JSON.parse(Buffer.from(token.access_token.split('.')[1]!, 'base64url').toString()) as Record<string, string>;
+  };
+
+  it('serves the document unauthenticated, shaped as production does', async () => {
+    const { app } = createTestApp();
+
+    const res = await app.request(
+      '/user_management/client_01EXAMPLE/.well-known/openid-configuration',
+      // deliberately no Authorization header
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(
+      ['authorization_endpoint', 'issuer', 'jwks_uri', 'response_types_supported', 'token_endpoint'].sort(),
+    );
+    expect(body.response_types_supported).toEqual(['code']);
+    expect(body.authorization_endpoint).toMatch(/\/user_management\/authorize$/);
+    expect(body.token_endpoint).toMatch(/\/user_management\/authenticate$/);
+    // Per client, like production's.
+    expect(body.jwks_uri).toMatch(/\/sso\/jwks\/client_01EXAMPLE$/);
+  });
+
+  it('builds its endpoints from the host it was fetched over, not the configured base URL', async () => {
+    const { app } = createTestApp();
+
+    // The container image is routinely reached as something other than localhost — over
+    // host.docker.internal, a service name, a LAN address — and a document advertising the
+    // configured base URL would point that caller at a host it cannot reach.
+    const res = await app.request(
+      new Request('http://host.docker.internal:4100/user_management/client_01EXAMPLE/.well-known/openid-configuration'),
+    );
+    const body = (await res.json()) as Record<string, string>;
+
+    expect(body.authorization_endpoint).toBe('http://host.docker.internal:4100/user_management/authorize');
+    expect(body.token_endpoint).toBe('http://host.docker.internal:4100/user_management/authenticate');
+    expect(body.jwks_uri).toBe('http://host.docker.internal:4100/sso/jwks/client_01EXAMPLE');
+  });
+
+  it.each([
+    ['punctuation an id never carries', '%3Cscript%3E'],
+    // Alphanumeric, so a character-set check served this one a document advertising
+    // `/sso/jwks/notaclient` as a key endpoint. Nothing without the prefix is a client id.
+    ['a bare word with no client_ prefix', 'notaclient'],
+  ])('refuses %s, the way production refuses an unknown id', async (_case, id) => {
+    const { app } = createTestApp();
+
+    const res = await app.request(`/user_management/${id}/.well-known/openid-configuration`);
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as Record<string, string>;
+    expect(body.code).toBe('entity_not_found');
+    // Nothing reflected into a document that then advertises it as a JWKS endpoint.
+    expect(body).not.toHaveProperty('jwks_uri');
+  });
+
+  it.each([
+    ['a readable pinned id', 'client_local_backend'],
+    ['a hyphenated one', 'client_web-app'],
+  ])('serves %s, since that is an id the emulator mints an `iss` from', async (_case, clientId) => {
+    const { app, store } = createTestApp({ baseUrl: 'https://api.workos.com' });
+    seedUser(store);
+
+    // Walk it the way a discovering client does: mint a token, read `iss`, fetch the document
+    // `iss` promises is there. Production ids are ULIDs, but the emulator lets you pin a readable
+    // one — `client_local_backend` is the README's own — and `authorize`, `authenticate` and
+    // `/sso/jwks` take any id and build `iss` from it. A shape check stricter than theirs 404s a
+    // client at its own issuer, which is the dead end this route exists to remove.
+    const claims = await mintToken(app, 'https://api.workos.com', clientId);
+    expect(claims.iss).toBe(`https://api.workos.com/user_management/${clientId}`);
+
+    const res = await app.request(`${claims.iss}/.well-known/openid-configuration`);
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Record<string, string>).issuer).toBe(claims.iss);
+  });
+
+  it('404s a trailing slash rather than 401ing it', async () => {
+    const { app } = createTestApp();
+
+    const res = await app.request('/user_management/client_01EXAMPLE/.well-known/openid-configuration/');
+
+    // The route itself does not match the trailing slash, and need not. What it must not do is
+    // fall to the auth middleware: a 401 says the document is behind a credential and invites a
+    // retry that cannot succeed, which is the confusion this whole route exists to end.
+    expect(res.status).toBe(404);
+  });
+
+  it('reports an issuer equal to the URL the document was fetched from, per OIDC Discovery §4.3', async () => {
+    const { app } = createTestApp({ baseUrl: 'https://api.workos.com' });
+
+    // §4.3: "The `issuer` value returned MUST be identical to the Issuer URL that was used as
+    // the prefix to /.well-known/openid-configuration". That prefix carries the client id, so a
+    // bare issuer can never satisfy it — openid-client v6, Spring's fromIssuerLocation and pyoidc
+    // all throw before they reach `token_endpoint`, which is the one class of client that fetches
+    // this document at all.
+    const res = await app.request(
+      new Request('https://api.workos.com/user_management/client_01EXAMPLE/.well-known/openid-configuration'),
+    );
+    const body = (await res.json()) as Record<string, string>;
+
+    expect(body.issuer).toBe('https://api.workos.com/user_management/client_01EXAMPLE');
+  });
+
+  it('advertises the issuer it actually mints, so a client can validate iss against it', async () => {
+    const { app, store } = createTestApp();
+    seedUser(store);
+
+    const doc = (await (
+      await app.request('/user_management/client_01EXAMPLE/.well-known/openid-configuration')
+    ).json()) as Record<string, string>;
+
+    // Mint a real token through the flow the document advertises, rather than trusting the
+    // document about itself: a client fetches discovery precisely to validate `iss`, so the two
+    // drifting apart is the failure worth catching.
+    const claims = await mintToken(app, '', 'client_01EXAMPLE');
+
+    expect(claims.iss).toBe(doc.issuer);
+    expect(claims.aud).toBe('client_01EXAMPLE');
   });
 });

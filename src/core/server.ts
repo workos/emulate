@@ -12,9 +12,12 @@ export interface ServerOptions {
   baseUrl?: string;
   apiKeys?: ApiKeyMap;
   /**
-   * `iss` to mint into tokens. Defaults to the emulator's own base URL. Pin it to match
-   * what your real WorkOS environment emits, so a verifier that checks `iss` against a
+   * Base the `iss` claim is built from. Defaults to the emulator's own base URL. Pin it to the
+   * URL your real WorkOS environment issues from, so a verifier that checks `iss` against a
    * constant accepts emulator tokens unchanged.
+   *
+   * Not the whole claim: an AuthKit access token carries `{issuer}/user_management/{client_id}`,
+   * as production does. Only the M2M, SSO and widget tokens carry the bare value.
    */
   issuer?: string;
   /** Pinned RSA signing key, keeping the JWKS stable across restarts. */
@@ -70,11 +73,18 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
     '/_emulate/',
   ];
 
+  // OIDC discovery is per AuthKit client, so the path carries an id and cannot be matched
+  // exactly. Public upstream, since a client fetches it before it holds any credential. The
+  // trailing slash is allowed through too: the route itself does not match it, and a 404 saying
+  // the document is not there beats a 401 that reads as a credential the caller could fix.
+  const OPENID_CONFIGURATION = /^\/user_management\/[^/]+\/\.well-known\/openid-configuration\/?$/;
+
   app.use('*', async (c, next) => {
     const path = new URL(c.req.url).pathname;
 
     // Skip auth for public paths
     if (PUBLIC_PATHS.has(path)) return next();
+    if (OPENID_CONFIGURATION.test(path)) return next();
     for (const prefix of PUBLIC_PATH_PREFIXES) {
       if (path.startsWith(prefix)) {
         // data-integrations: only /authorize subpath is public

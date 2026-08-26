@@ -48,7 +48,9 @@ Options:
                       it a key is generated at startup, so the published JWKS changes on
                       every restart. Pin it to keep the JWKS stable.
   --kid <id>          Key id to advertise in the JWKS (default: derived from the key)
-  --issuer <url>      Value to mint as the "iss" claim (default: the emulator's own URL)
+  --issuer <url>      Base the "iss" claim is built from (default: the emulator's own URL).
+                      An AuthKit token carries <url>/user_management/<client_id>, as
+                      production does; M2M, SSO and widget tokens carry <url> itself.
   --redirect-hosts <hosts>
                       Comma-separated hosts a redirect_uri may point at, on top of localhost
                       (always allowed). Use for test environments with production-like

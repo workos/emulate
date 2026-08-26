@@ -377,7 +377,7 @@ describe('Pinned signing key and issuer', () => {
     expect((await jwks(emulator.url)).keys[0].kid).toBe('ci_key');
   });
 
-  it('mints a pinned issuer instead of the emulator URL', async () => {
+  it('scopes a pinned issuer to the client, as production does, instead of the emulator URL', async () => {
     emulator = await createEmulator({
       port: 0,
       issuer: 'https://api.workos.com',
@@ -397,10 +397,13 @@ describe('Pinned signing key and issuer', () => {
     });
     const body = (await res.json()) as any;
     const claims = JSON.parse(Buffer.from(body.access_token.split('.')[1], 'base64url').toString('utf-8'));
-    expect(claims.iss).toBe('https://api.workos.com');
+    // `--issuer` is the base the client id hangs off, matching production's `getIssuer`:
+    // `${apiUrl}/user_management/${clientId}` under the default `issuerType: 'ClientId'`. Pinning
+    // it to the bare API URL was minting production's non-default `'Legacy'` shape.
+    expect(claims.iss).toBe('https://api.workos.com/user_management/client_test');
   });
 
-  it('defaults the issuer to the emulator URL', async () => {
+  it('defaults the issuer base to the emulator URL', async () => {
     emulator = await createEmulator({
       port: 0,
       seed: { users: [{ email: 'alice@acme.com', password: 'test123', email_verified: true }] },
@@ -419,6 +422,30 @@ describe('Pinned signing key and issuer', () => {
     });
     const body = (await res.json()) as any;
     const claims = JSON.parse(Buffer.from(body.access_token.split('.')[1], 'base64url').toString('utf-8'));
-    expect(claims.iss).toBe(emulator.url);
+    expect(claims.iss).toBe(`${emulator.url}/user_management/client_test`);
+  });
+
+  it('mints the bare issuer when the grant binds no client, rather than inventing one', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      issuer: 'https://api.workos.com',
+      seed: { users: [{ email: 'alice@acme.com', password: 'test123', email_verified: true }] },
+    });
+
+    const res = await fetch(`${emulator.url}/user_management/authenticate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // No client_id: the emulator accepts the grant, and `aud` falls back to a placeholder.
+      body: JSON.stringify({ grant_type: 'password', email: 'alice@acme.com', password: 'test123' }),
+    });
+    const body = (await res.json()) as any;
+    const claims = JSON.parse(Buffer.from(body.access_token.split('.')[1], 'base64url').toString('utf-8'));
+
+    // `aud`'s placeholder must not reach `iss`: scoping it would mint
+    // `https://api.workos.com/user_management/workos-emulate`, an issuer whose discovery document
+    // 404s, so a client discovering from `iss` would follow it nowhere. The bare issuer is at
+    // least a real value, and production's `'Legacy'` shape.
+    expect(claims.aud).toBe('workos-emulate');
+    expect(claims.iss).toBe('https://api.workos.com');
   });
 });
