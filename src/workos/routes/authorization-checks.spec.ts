@@ -171,6 +171,106 @@ describe('Authorization check + role assignment routes', () => {
     expect(body.data[0].external_id).toBe('res1');
   });
 
+  async function setupWithResource() {
+    const ctx = await setup();
+    const resourceRes = await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: ctx.org.id }),
+    });
+    const resource = await json(resourceRes);
+    return { ...ctx, resource };
+  }
+
+  it('lists effective permissions on a resource by external id', async () => {
+    const { membership } = await setupWithResource();
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/resources/doc/doc-1/permissions`);
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.object).toBe('list');
+    expect(body.data.map((p: any) => p.slug).sort()).toEqual(['posts:read', 'posts:write']);
+    expect(body.data[0].object).toBe('permission');
+    expect(body.data[0].id).toBeDefined();
+  });
+
+  it('includes permissions from additional role assignments in effective permissions', async () => {
+    const { membership, adminRole } = await setupWithResource();
+
+    await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: adminRole.id }),
+    });
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/resources/doc/doc-1/permissions`);
+    const body = await json(res);
+    expect(body.data.map((p: any) => p.slug).sort()).toEqual(['admin:manage', 'posts:read', 'posts:write']);
+  });
+
+  it('lists effective permissions addressing the resource by id', async () => {
+    const { membership, resource } = await setupWithResource();
+
+    const res = await req(
+      `/authorization/organization_memberships/${membership.id}/resources/${resource.id}/permissions`,
+    );
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.data.map((p: any) => p.slug).sort()).toEqual(['posts:read', 'posts:write']);
+  });
+
+  it('lists effective permissions via the resource-centric route', async () => {
+    const { membership, resource } = await setupWithResource();
+
+    const res = await req(
+      `/authorization/resources/${resource.id}/organization_memberships/${membership.id}/permissions`,
+    );
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.data.map((p: any) => p.slug).sort()).toEqual(['posts:read', 'posts:write']);
+  });
+
+  it('paginates effective permissions', async () => {
+    const { membership } = await setupWithResource();
+
+    const res = await req(
+      `/authorization/organization_memberships/${membership.id}/resources/doc/doc-1/permissions?limit=1`,
+    );
+    const body = await json(res);
+    expect(body.data.length).toBe(1);
+    expect(body.list_metadata.after).toBeTruthy();
+  });
+
+  it('returns 404 for effective permissions with an unknown membership', async () => {
+    await setupWithResource();
+    const res = await req('/authorization/organization_memberships/om_nonexistent/resources/doc/doc-1/permissions');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for effective permissions on an unknown resource', async () => {
+    const { membership } = await setupWithResource();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/resources/doc/nope/permissions`);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for effective permissions on a resource in another organization', async () => {
+    const { membership } = await setupWithResource();
+
+    const otherOrgRes = await req('/organizations', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Other Org' }),
+    });
+    const otherOrg = await json(otherOrgRes);
+    const resourceRes = await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'other-doc', organization_id: otherOrg.id }),
+    });
+    const otherResource = await json(resourceRes);
+
+    const res = await req(
+      `/authorization/organization_memberships/${membership.id}/resources/${otherResource.id}/permissions`,
+    );
+    expect(res.status).toBe(404);
+  });
+
   it('returns 404 for nonexistent membership', async () => {
     const res = await req('/authorization/organization_memberships/om_nonexistent/check', {
       method: 'POST',

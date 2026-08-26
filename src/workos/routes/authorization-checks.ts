@@ -1,6 +1,8 @@
+import type { Context } from 'hono';
 import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
+import type { WorkOSAuthorizationResource } from '../entities.js';
 import { getWorkOSStore } from '../store.js';
-import { formatRoleAssignment, formatAuthorizationResource, formatListResponse } from '../helpers.js';
+import { formatRoleAssignment, formatAuthorizationResource, formatListResponse, formatPermission } from '../helpers.js';
 
 /**
  * Gather all permission slugs for a given membership:
@@ -75,6 +77,51 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     });
 
     return c.json(formatListResponse(result, formatAuthorizationResource));
+  });
+
+  // Effective permissions for a membership on a resource. The emulator has no
+  // resource-scoped role assignments or ancestor inheritance, so the effective
+  // set is the membership's full permission set; the resource only gates 404s.
+  const listEffectivePermissions = (
+    c: Context,
+    membershipId: string,
+    resource: WorkOSAuthorizationResource | undefined,
+  ) => {
+    const membership = ws.organizationMemberships.get(membershipId);
+    if (!membership) throw notFound('OrganizationMembership');
+    if (!resource || resource.organization_id !== membership.organization_id) throw notFound('Resource');
+
+    const permSlugs = getPermissionsForMembership(ws, membershipId);
+
+    const url = new URL(c.req.url);
+    const params = parseListParams(url);
+
+    const result = ws.permissions.list({
+      ...params,
+      filter: (p) => permSlugs.has(p.slug),
+    });
+
+    return c.json(formatListResponse(result, formatPermission));
+  };
+
+  // Production route used by the Node SDK's listEffectivePermissionsByExternalId()
+  app.get('/authorization/organization_memberships/:id/resources/:resourceTypeSlug/:externalId/permissions', (c) => {
+    const resource = ws.authorizationResources
+      .findBy('external_id', c.req.param('externalId'))
+      .find((r) => r.resource_type_slug === c.req.param('resourceTypeSlug'));
+    return listEffectivePermissions(c, c.req.param('id'), resource);
+  });
+
+  // Production controller variant addressing the resource by id
+  app.get('/authorization/organization_memberships/:id/resources/:resourceId/permissions', (c) => {
+    const resource = ws.authorizationResources.get(c.req.param('resourceId'));
+    return listEffectivePermissions(c, c.req.param('id'), resource);
+  });
+
+  // Resource-centric route used by the Node SDK's listEffectivePermissions()
+  app.get('/authorization/resources/:resourceId/organization_memberships/:membershipId/permissions', (c) => {
+    const resource = ws.authorizationResources.get(c.req.param('resourceId'));
+    return listEffectivePermissions(c, c.req.param('membershipId'), resource);
   });
 
   // List role assignments for a membership
