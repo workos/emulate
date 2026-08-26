@@ -271,6 +271,52 @@ describe('Authorization check + role assignment routes', () => {
     expect(res.status).toBe(404);
   });
 
+  it('resolves an external id collision to the resource in the membership organization', async () => {
+    const ctx = await setup();
+
+    // Another org registers the same type slug + external id first
+    const otherOrgRes = await req('/organizations', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Other Org' }),
+    });
+    const otherOrg = await json(otherOrgRes);
+    await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: otherOrg.id }),
+    });
+
+    await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: ctx.org.id }),
+    });
+
+    const res = await req(
+      `/authorization/organization_memberships/${ctx.membership.id}/resources/doc/doc-1/permissions`,
+    );
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.data.map((p: any) => p.slug).sort()).toEqual(['posts:read', 'posts:write']);
+  });
+
+  it('prefers an organization role over an environment role with the same slug', async () => {
+    const { org, membership } = await setupWithResource();
+
+    // Org-scoped 'editor' role with narrower permissions than the environment 'editor'
+    await req(`/authorization/organizations/${org.id}/roles`, {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'editor', name: 'Org Editor' }),
+    });
+    await req(`/authorization/organizations/${org.id}/roles/editor/permissions`, {
+      method: 'POST',
+      body: JSON.stringify({ permissions: ['posts:read'] }),
+    });
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/resources/doc/doc-1/permissions`);
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.data.map((p: any) => p.slug)).toEqual(['posts:read']);
+  });
+
   it('returns 404 for nonexistent membership', async () => {
     const res = await req('/authorization/organization_memberships/om_nonexistent/check', {
       method: 'POST',

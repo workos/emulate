@@ -15,10 +15,12 @@ function getPermissionsForMembership(ws: ReturnType<typeof getWorkOSStore>, memb
 
   const permSlugs = new Set<string>();
 
-  // Permissions from the membership's primary role
-  const primaryRole = ws.roles
-    .findBy('slug', membership.role.slug)
-    .find((r) => r.organization_id === membership.organization_id || r.type === 'EnvironmentRole');
+  // Permissions from the membership's primary role. An organization role
+  // shadows an environment role with the same slug.
+  const candidateRoles = ws.roles.findBy('slug', membership.role.slug);
+  const primaryRole =
+    candidateRoles.find((r) => r.organization_id === membership.organization_id) ??
+    candidateRoles.find((r) => r.type === 'EnvironmentRole');
   if (primaryRole) {
     const rps = ws.rolePermissions.findBy('role_id', primaryRole.id);
     for (const rp of rps) {
@@ -106,9 +108,16 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
 
   // Production route used by the Node SDK's listEffectivePermissionsByExternalId()
   app.get('/authorization/organization_memberships/:id/resources/:resourceTypeSlug/:externalId/permissions', (c) => {
-    const resource = ws.authorizationResources
-      .findBy('external_id', c.req.param('externalId'))
-      .find((r) => r.resource_type_slug === c.req.param('resourceTypeSlug'));
+    const membership = ws.organizationMemberships.get(c.req.param('id'));
+    const resource = membership
+      ? ws.authorizationResources
+          .findBy('external_id', c.req.param('externalId'))
+          .find(
+            (r) =>
+              r.resource_type_slug === c.req.param('resourceTypeSlug') &&
+              r.organization_id === membership.organization_id,
+          )
+      : undefined;
     return listEffectivePermissions(c, c.req.param('id'), resource);
   });
 
