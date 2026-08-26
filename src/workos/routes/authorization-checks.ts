@@ -3,7 +3,7 @@ import { type RouteContext, notFound, validationError, parseJsonBody, parseListP
 import type { WorkOSAuthorizationResource } from '../entities.js';
 import { getWorkOSStore } from '../store.js';
 import { formatRoleAssignment, formatAuthorizationResource, formatListResponse, formatPermission } from '../helpers.js';
-import { findEnvRole, findOrgRole, resolvePrimaryRole } from '../role-helpers.js';
+import { resolvePrimaryRole } from '../role-helpers.js';
 
 /**
  * Gather all permission slugs for a given membership:
@@ -163,7 +163,7 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     }
 
     const role = roleSlug
-      ? (findOrgRole(ws, membership.organization_id, roleSlug) ?? findEnvRole(ws, roleSlug))
+      ? resolvePrimaryRole(ws, membership.organization_id, roleSlug)
       : ws.roles.get(roleId as string);
     if (!role) throw notFound('Role');
 

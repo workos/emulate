@@ -547,6 +547,13 @@ describe('Authorization check + role assignment routes', () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.authorized).toBe(false);
+
+    // Assigning that foreign role by slug must not resolve it either
+    const assignRes = await req(`/authorization/organization_memberships/${ctx.membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'phantom' }),
+    });
+    expect(assignRes.status).toBe(404);
   });
 
   it('returns 404 for nonexistent membership', async () => {
