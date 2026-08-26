@@ -2,6 +2,7 @@ import { type RouteContext, notFound, validationError, parseJsonBody, parseListP
 import type { WorkOSAuthorizationResource } from '../entities.js';
 import { getWorkOSStore } from '../store.js';
 import { formatRoleAssignment, formatAuthorizationResource, formatListResponse } from '../helpers.js';
+import { findEnvRole, findOrgRole } from '../role-helpers.js';
 
 /**
  * Gather all permission slugs for a given membership:
@@ -111,9 +112,7 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     }
 
     const role = roleSlug
-      ? ws.roles
-          .findBy('slug', roleSlug)
-          .find((r) => r.organization_id === membership.organization_id || r.type === 'EnvironmentRole')
+      ? (findOrgRole(ws, membership.organization_id, roleSlug) ?? findEnvRole(ws, roleSlug))
       : ws.roles.get(roleId as string);
     if (!role) throw notFound('Role');
 
@@ -124,7 +123,7 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     let resource: WorkOSAuthorizationResource | null = null;
     if (resourceId) {
       resource = ws.authorizationResources.get(resourceId) ?? null;
-      if (!resource) throw notFound('Resource');
+      if (!resource || resource.organization_id !== membership.organization_id) throw notFound('Resource');
     } else if (resourceExternalId) {
       if (!resourceTypeSlug) {
         throw validationError('resource_type_slug is required when resource_external_id is provided', [
