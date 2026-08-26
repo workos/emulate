@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { createServer, type ApiKeyMap } from '../../core/index.js';
+import { createServer, type ApiKeyMap, type Store } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 
 const apiKeys: ApiKeyMap = { sk_test_check: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_check', 'Content-Type': 'application/json' };
@@ -11,9 +12,12 @@ function createTestApp() {
 
 describe('Authorization check + role assignment routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: Store;
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -498,6 +502,51 @@ describe('Authorization check + role assignment routes', () => {
     });
     const checkBody = await json(checkRes);
     expect(checkBody.authorized).toBe(false);
+  });
+
+  it('ignores a foreign organization role seeded with an environment type', async () => {
+    const ctx = await setup();
+    const ws = getWorkOSStore(store);
+
+    const otherOrgRes = await req('/organizations', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Other Org' }),
+    });
+    const otherOrg = await json(otherOrgRes);
+
+    // Seed normalization allows an organization-owned role whose type
+    // defaulted to EnvironmentRole. One from another org must not satisfy
+    // the environment fallback.
+    const phantomRole = ws.roles.insert({
+      object: 'role',
+      slug: 'phantom',
+      name: 'Phantom',
+      description: null,
+      type: 'EnvironmentRole',
+      organization_id: otherOrg.id,
+      is_default_role: false,
+      priority: 0,
+    });
+    const adminPerm = ws.permissions.findOneBy('slug', 'admin:manage')!;
+    ws.rolePermissions.insert({ role_id: phantomRole.id, permission_id: adminPerm.id });
+
+    const phantomMembership = ws.organizationMemberships.insert({
+      object: 'organization_membership',
+      organization_id: ctx.org.id,
+      user_id: ctx.user.id,
+      role: { slug: 'phantom' },
+      status: 'active',
+      external_id: null,
+      metadata: {},
+    });
+
+    const res = await req(`/authorization/organization_memberships/${phantomMembership.id}/check`, {
+      method: 'POST',
+      body: JSON.stringify({ permission: 'admin:manage' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.authorized).toBe(false);
   });
 
   it('returns 404 for nonexistent membership', async () => {

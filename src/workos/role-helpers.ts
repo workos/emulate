@@ -17,12 +17,15 @@ export function findOrgRole(ws: WorkOSStore, orgId: string, slug: string): WorkO
  * Resolve the role a membership's role slug refers to within an organization.
  * An organization role shadows an environment role with the same slug. Matches
  * on organization_id rather than type: seeded roles can carry an organization_id
- * with the type defaulted to EnvironmentRole.
+ * with the type defaulted to EnvironmentRole — which is also why the environment
+ * fallback requires a null organization_id, so another organization's seeded
+ * role can never leak across the boundary.
  */
 export function resolvePrimaryRole(ws: WorkOSStore, organizationId: string, slug: string): WorkOSRole | undefined {
   const candidates = ws.roles.findBy('slug', slug);
   return (
-    candidates.find((r) => r.organization_id === organizationId) ?? candidates.find((r) => r.type === 'EnvironmentRole')
+    candidates.find((r) => r.organization_id === organizationId) ??
+    candidates.find((r) => r.type === 'EnvironmentRole' && r.organization_id === null)
   );
 }
 
