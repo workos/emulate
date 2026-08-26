@@ -1302,6 +1302,48 @@ describe('Auth routes', () => {
     expect(session?.organization_id).toBe(org.id);
   });
 
+  it('mints the permissions claim from the organization role when it shadows an environment role', async () => {
+    const ws = getWorkOSStore(store);
+
+    // Environment 'admin' role inserted first
+    const envPerm = ws.permissions.insert({ object: 'permission', slug: 'env:perm', name: 'Env', description: null });
+    const envRole = ws.roles.insert({
+      object: 'role',
+      slug: 'admin',
+      name: 'Admin',
+      description: null,
+      type: 'EnvironmentRole',
+      organization_id: null,
+      is_default_role: false,
+      priority: 0,
+    });
+    ws.rolePermissions.insert({ role_id: envRole.id, permission_id: envPerm.id });
+
+    const user = await createUser('shadowed-role@test.com');
+    const org = joinOrg(user.id, 'Shadow Corp', { role: 'admin' });
+
+    // Org-scoped 'admin' shadows the environment role — the token must agree
+    // with /check and effective-permissions, which resolve the org role.
+    const orgPerm = ws.permissions.insert({ object: 'permission', slug: 'org:perm', name: 'Org', description: null });
+    const orgRole = ws.roles.insert({
+      object: 'role',
+      slug: 'admin',
+      name: 'Org Admin',
+      description: null,
+      type: 'OrganizationRole',
+      organization_id: org.id,
+      is_default_role: false,
+      priority: 0,
+    });
+    ws.rolePermissions.insert({ role_id: orgRole.id, permission_id: orgPerm.id });
+
+    const res = await signInWithMagicAuth('shadowed-role@test.com');
+    expect(res.status).toBe(200);
+    const claims = decodeJwt((await json(res)).access_token);
+    expect(claims.role).toBe('admin');
+    expect(claims.permissions).toEqual(['org:perm']);
+  });
+
   it('includes client_id on the access token when the authorize flow carries one', async () => {
     await createUser('cid@test.com');
 

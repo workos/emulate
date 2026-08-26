@@ -13,6 +13,19 @@ export function findOrgRole(ws: WorkOSStore, orgId: string, slug: string): WorkO
   return ws.roles.findBy('organization_id', orgId).find((r) => r.slug === slug && r.type === 'OrganizationRole');
 }
 
+/**
+ * Resolve the role a membership's role slug refers to within an organization.
+ * An organization role shadows an environment role with the same slug. Matches
+ * on organization_id rather than type: seeded roles can carry an organization_id
+ * with the type defaulted to EnvironmentRole.
+ */
+export function resolvePrimaryRole(ws: WorkOSStore, organizationId: string, slug: string): WorkOSRole | undefined {
+  const candidates = ws.roles.findBy('slug', slug);
+  return (
+    candidates.find((r) => r.organization_id === organizationId) ?? candidates.find((r) => r.type === 'EnvironmentRole')
+  );
+}
+
 export function requireEnvRole(ws: WorkOSStore, slug: string): WorkOSRole {
   const role = findEnvRole(ws, slug);
   if (!role) throw notFound('Role');

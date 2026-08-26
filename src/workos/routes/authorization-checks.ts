@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
 import type { WorkOSAuthorizationResource } from '../entities.js';
 import { getWorkOSStore } from '../store.js';
+import { resolvePrimaryRole } from '../role-helpers.js';
 import { formatRoleAssignment, formatAuthorizationResource, formatListResponse, formatPermission } from '../helpers.js';
 
 /**
@@ -15,12 +16,8 @@ function getPermissionsForMembership(ws: ReturnType<typeof getWorkOSStore>, memb
 
   const permSlugs = new Set<string>();
 
-  // Permissions from the membership's primary role. An organization role
-  // shadows an environment role with the same slug.
-  const candidateRoles = ws.roles.findBy('slug', membership.role.slug);
-  const primaryRole =
-    candidateRoles.find((r) => r.organization_id === membership.organization_id) ??
-    candidateRoles.find((r) => r.type === 'EnvironmentRole');
+  // Permissions from the membership's primary role
+  const primaryRole = resolvePrimaryRole(ws, membership.organization_id, membership.role.slug);
   if (primaryRole) {
     const rps = ws.rolePermissions.findBy('role_id', primaryRole.id);
     for (const rp of rps) {

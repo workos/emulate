@@ -9,6 +9,7 @@ import {
   generateUlid,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
+import { resolvePrimaryRole, getRolePermissions } from '../role-helpers.js';
 import { tokenFeatureFlags } from './feature-flags.js';
 import {
   formatUser,
@@ -1088,15 +1089,11 @@ export function authRoutes(ctx: RouteContext): void {
         .find((m) => m.user_id === user.id);
       if (membership) {
         roleSlug = membership.role.slug;
-        const role = ws.roles
-          .findBy('slug', membership.role.slug)
-          .find((r) => r.organization_id === organizationId || r.type === 'EnvironmentRole');
+        // Same resolution as the authorization endpoints, so the token's
+        // permissions claim agrees with /check and effective-permissions.
+        const role = resolvePrimaryRole(ws, organizationId, membership.role.slug);
         if (role) {
-          const rps = ws.rolePermissions.findBy('role_id', role.id);
-          permissionSlugs = rps
-            .map((rp) => ws.permissions.get(rp.permission_id))
-            .filter(Boolean)
-            .map((p) => p!.slug);
+          permissionSlugs = getRolePermissions(ws, role.id).map((p) => p.slug);
         }
       }
     }
