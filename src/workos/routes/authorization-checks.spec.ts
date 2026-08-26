@@ -554,6 +554,13 @@ describe('Authorization check + role assignment routes', () => {
       body: JSON.stringify({ role_slug: 'phantom' }),
     });
     expect(assignRes.status).toBe(404);
+
+    // Nor by the compatibility role_id path
+    const assignByIdRes = await req(`/authorization/organization_memberships/${ctx.membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: phantomRole.id }),
+    });
+    expect(assignByIdRes.status).toBe(404);
   });
 
   it('returns 404 for nonexistent membership', async () => {
