@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0](https://github.com/workos/emulate/compare/v0.9.0...v0.10.0) (2026-08-27)
+
+
+### Features
+
+* **fga:** implement effective-permissions listing endpoints ([#84](https://github.com/workos/emulate/issues/84)) ([4c444e2](https://github.com/workos/emulate/commit/4c444e2698f551a749fd502e04f3fabde1e97f90))
+* **sso:** serve OIDC discovery per AuthKit client ([#80](https://github.com/workos/emulate/issues/80)) ([45b7736](https://github.com/workos/emulate/commit/45b7736606ecd9b978fa6bde73ed10aeb9541dc3))
+
+
+### Bug Fixes
+
+* **fga:** accept role_slug when creating role assignments ([#83](https://github.com/workos/emulate/issues/83)) ([d454991](https://github.com/workos/emulate/commit/d454991537544badc805437aac81ae78a8599c69))
+
 ## [0.9.0](https://github.com/workos/emulate/compare/v0.8.0...v0.9.0) (2026-08-25)
 
 
