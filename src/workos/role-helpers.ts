@@ -6,7 +6,10 @@ import { getWorkOSStore } from './store.js';
 import { formatRole, formatPermission, formatListResponse } from './helpers.js';
 
 export function findEnvRole(ws: WorkOSStore, slug: string): WorkOSRole | undefined {
-  return ws.roles.findBy('slug', slug).find((r) => r.type === 'EnvironmentRole');
+  // An environment role is unowned by definition; seeded roles can carry an
+  // organization_id while their type defaulted to EnvironmentRole, and those
+  // must never resolve as environment roles for another organization.
+  return ws.roles.findBy('slug', slug).find((r) => r.type === 'EnvironmentRole' && r.organization_id === null);
 }
 
 export function findOrgRole(ws: WorkOSStore, orgId: string, slug: string): WorkOSRole | undefined {
