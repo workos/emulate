@@ -2,8 +2,12 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
 
-const apiKeys: ApiKeyMap = { sk_test_vault: { environment: 'test' } };
+const apiKeys: ApiKeyMap = {
+  sk_test_vault: { environment: 'test' },
+  sk_live_vault: { environment: 'production' },
+};
 const headers = { Authorization: 'Bearer sk_test_vault', 'Content-Type': 'application/json' };
+const liveHeaders = { Authorization: 'Bearer sk_live_vault', 'Content-Type': 'application/json' };
 
 function createTestApp() {
   return createServer(workosPlugin, { port: 0, baseUrl: 'http://localhost:0', apiKeys }).app;
@@ -89,6 +93,42 @@ describe('Vault object routes', () => {
     expect(deleted.status).toBe(200);
     expect(await json(deleted)).toEqual({ success: true, name: 'database-password' });
     expect((await req(`/vault/v1/kv/${original.id}`)).status).toBe(404);
+  });
+
+  it('isolates objects by authenticated environment', async () => {
+    const testObject = await json(await create());
+    const liveReq = (path: string, init?: RequestInit) => app.request(path, { headers: liveHeaders, ...init });
+
+    expect((await json(await liveReq('/vault/v1/kv'))).data).toEqual([]);
+    for (const path of [
+      `/vault/v1/kv/${testObject.id}`,
+      `/vault/v1/kv/${testObject.id}/metadata`,
+      `/vault/v1/kv/${testObject.id}/versions`,
+      '/vault/v1/kv/name/database-password',
+    ]) {
+      expect((await liveReq(path)).status).toBe(404);
+    }
+    expect(
+      (
+        await liveReq(`/vault/v1/kv/${testObject.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ value: 'overwritten' }),
+        })
+      ).status,
+    ).toBe(404);
+    expect((await liveReq(`/vault/v1/kv/${testObject.id}`, { method: 'DELETE' })).status).toBe(404);
+
+    const liveObject = await liveReq('/vault/v1/kv', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'database-password',
+        value: 'live-secret',
+        key_context: { organization_id: 'org_live' },
+      }),
+    });
+    expect(liveObject.status).toBe(201);
+    expect((await json(await liveReq('/vault/v1/kv/name/database-password'))).value).toBe('live-secret');
+    expect((await json(await req(`/vault/v1/kv/${testObject.id}`))).value).toBe('secret');
   });
 
   it('rejects missing key context and duplicate names', async () => {

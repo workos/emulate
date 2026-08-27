@@ -38,6 +38,13 @@ function withValue(object: WorkOSVaultObject) {
 export function vaultRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
   const ws = getWorkOSStore(store);
+  const environmentIdFor = (environment?: string) => `environment_${environment ?? 'test'}`;
+  const findById = (id: string, environment?: string) => {
+    const object = ws.vaultObjects.get(id);
+    return object?.environment_id === environmentIdFor(environment) ? object : undefined;
+  };
+  const findByName = (name: string, environment?: string) =>
+    ws.vaultObjects.findBy('name', name).find((object) => object.environment_id === environmentIdFor(environment));
   const actorFor = (apiKey?: string) => {
     const record = apiKey ? ws.apiKeyRecords.findOneBy('key', apiKey) : undefined;
     return { id: record?.id ?? 'api_key_emulator', name: record?.name ?? 'Emulator API key' };
@@ -55,6 +62,7 @@ export function vaultRoutes(ctx: RouteContext): void {
     const result = ws.vaultObjects.list({
       ...params,
       filter: (object) =>
+        object.environment_id === environmentIdFor(c.get('auth')?.environment) &&
         (!search || object.name.toLowerCase().includes(search)) &&
         (!updatedAfter || Date.parse(object.updated_at) > Date.parse(updatedAfter)),
       sort: (a, b) =>
@@ -83,7 +91,8 @@ export function vaultRoutes(ctx: RouteContext): void {
     ) {
       return c.json(error('key_context must contain at most 10 string values'), 422);
     }
-    if (ws.vaultObjects.findOneBy('name', name)) return c.json(error('An object with this name already exists'), 409);
+    const environment = c.get('auth')?.environment;
+    if (findByName(name, environment)) return c.json(error('An object with this name already exists'), 409);
 
     const version = makeVersion(body.value);
     const object = ws.vaultObjects.insert({
@@ -91,7 +100,7 @@ export function vaultRoutes(ctx: RouteContext): void {
       name,
       value: body.value,
       key_context: keyContext as Record<string, string>,
-      environment_id: `environment_${c.get('auth')?.environment ?? 'test'}`,
+      environment_id: environmentIdFor(environment),
       key_id: randomUUID(),
       updated_by: actorFor(c.get('auth')?.apiKey),
       version_id: version.id,
@@ -101,28 +110,28 @@ export function vaultRoutes(ctx: RouteContext): void {
   });
 
   app.get('/vault/v1/kv/name/:name', (c) => {
-    const object = ws.vaultObjects.findOneBy('name', c.req.param('name'));
+    const object = findByName(c.req.param('name'), c.get('auth')?.environment);
     return object ? c.json(withValue(object)) : c.json(error('Object not found'), 404);
   });
 
   app.get('/vault/v1/kv/:id/metadata', (c) => {
-    const object = ws.vaultObjects.get(c.req.param('id'));
+    const object = findById(c.req.param('id'), c.get('auth')?.environment);
     return object ? c.json(withoutValue(object)) : c.json(error('Object not found'), 404);
   });
 
   app.get('/vault/v1/kv/:id/versions', (c) => {
-    const object = ws.vaultObjects.get(c.req.param('id'));
+    const object = findById(c.req.param('id'), c.get('auth')?.environment);
     if (!object) return c.json(error('Object not found'), 404);
     return c.json({ data: object.versions.slice().reverse(), list_metadata: { before: null, after: null } });
   });
 
   app.get('/vault/v1/kv/:id', (c) => {
-    const object = ws.vaultObjects.get(c.req.param('id'));
+    const object = findById(c.req.param('id'), c.get('auth')?.environment);
     return object ? c.json(withValue(object)) : c.json(error('Object not found'), 404);
   });
 
   app.put('/vault/v1/kv/:id', async (c) => {
-    const object = ws.vaultObjects.get(c.req.param('id'));
+    const object = findById(c.req.param('id'), c.get('auth')?.environment);
     if (!object) return c.json(error('Object not found'), 404);
     const body = await parseJsonBody(c);
     if (typeof body.value !== 'string') return c.json(error('value is required'), 400);
@@ -144,7 +153,7 @@ export function vaultRoutes(ctx: RouteContext): void {
   });
 
   app.delete('/vault/v1/kv/:id', (c) => {
-    const object = ws.vaultObjects.get(c.req.param('id'));
+    const object = findById(c.req.param('id'), c.get('auth')?.environment);
     if (!object) return c.json(error('Object not found'), 404);
     const versionCheck = new URL(c.req.url).searchParams.get('version_check');
     if (versionCheck && versionCheck !== object.version_id) return c.json(error('Version mismatch'), 409);
