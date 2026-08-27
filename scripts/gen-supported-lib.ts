@@ -181,7 +181,7 @@ export const FEATURES: FeatureDef[] = [
     name: 'API Keys',
     tags: ['api_keys', 'organizations.api_keys'],
     seedKeys: ['apiKeys'],
-    notes: 'Seeded keys authenticate real requests. User-scoped API key endpoints are not implemented.',
+    notes: 'Created and seeded keys authenticate real requests.',
   },
   {
     name: 'Pipes / Connected Apps',

@@ -28,6 +28,16 @@ describe('API Keys routes', () => {
     const server = createTestApp();
     app = server.app;
     store = server.store;
+    getWorkOSStore(store).organizations.insert({
+      id: 'org_123',
+      object: 'organization',
+      name: 'Acme',
+      external_id: null,
+      metadata: {},
+      stripe_customer_id: null,
+      allow_profiles_outside_organization: false,
+      entitlements: [],
+    });
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -145,6 +155,78 @@ describe('API Keys routes', () => {
     expect(res.status).toBe(404);
   });
 
+  it('creates an organization API key that authenticates requests', async () => {
+    const res = await req('/organizations/org_123/api_keys', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Runtime key', permissions: ['posts:read'] }),
+    });
+    expect(res.status).toBe(201);
+    const key = await json(res);
+    expect(key.owner).toEqual({ type: 'organization', id: 'org_123' });
+    expect(key.value.startsWith('sk_test_')).toBe(true);
+    expect(key.permissions).toEqual(['posts:read']);
+
+    const authenticated = await app.request('/connect/applications', {
+      headers: { Authorization: `Bearer ${key.value}` },
+    });
+    expect(authenticated.status).toBe(200);
+  });
+
+  it('creates and lists API keys for an active organization member', async () => {
+    const ws = getWorkOSStore(store);
+    ws.users.insert({
+      id: 'user_123',
+      object: 'user',
+      email: 'member@acme.test',
+      name: null,
+      first_name: null,
+      last_name: null,
+      email_verified: true,
+      profile_picture_url: null,
+      last_sign_in_at: null,
+      external_id: null,
+      metadata: {},
+      locale: null,
+      password_hash: null,
+      impersonator: null,
+    });
+    ws.organizationMemberships.insert({
+      object: 'organization_membership',
+      organization_id: 'org_123',
+      user_id: 'user_123',
+      role: { slug: 'member' },
+      status: 'active',
+      external_id: null,
+      metadata: {},
+    });
+
+    const created = await req('/user_management/users/user_123/api_keys', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'User key', organization_id: 'org_123' }),
+    });
+    expect(created.status).toBe(201);
+    expect((await json(created)).owner).toEqual({ type: 'user', id: 'user_123', organization_id: 'org_123' });
+
+    const listed = await req('/user_management/users/user_123/api_keys?organization_id=org_123');
+    expect(listed.status).toBe(200);
+    expect((await json(listed)).data).toHaveLength(1);
+  });
+
+  it('expires a key in the auth allow-list', async () => {
+    const created = await req('/organizations/org_123/api_keys', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Short-lived key' }),
+    });
+    const key = await json(created);
+
+    const expired = await req(`/api_keys/${key.id}/expire`, { method: 'POST', body: '{}' });
+    expect(expired.status).toBe(200);
+    expect((await json(expired)).expires_at).not.toBeNull();
+    expect(
+      (await app.request('/connect/applications', { headers: { Authorization: `Bearer ${key.value}` } })).status,
+    ).toBe(401);
+  });
+
   it('lists API key records', async () => {
     const ws = getWorkOSStore(store);
     insertKey(ws, 'key-1', 'sk_test_aaaa1111');
@@ -165,5 +247,10 @@ describe('API Keys routes', () => {
     // The raw secret is never serialized — only an obfuscated representation.
     expect(key.obfuscated_value).toBe('sk_...1111');
     expect(key.key).toBeUndefined();
+  });
+
+  it('returns 404 when listing keys for an unknown owner', async () => {
+    expect((await req('/organizations/org_missing/api_keys')).status).toBe(404);
+    expect((await req('/user_management/users/user_missing/api_keys')).status).toBe(404);
   });
 });

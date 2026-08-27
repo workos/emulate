@@ -28,7 +28,7 @@ export type ApiKeyMap = Record<string, ApiKeyEntry>;
 export function isApiKeyEntryExpired(entry: ApiKeyEntry): boolean {
   if (!entry.expiresAt) return false;
   const expiresAt = new Date(entry.expiresAt).getTime();
-  return Number.isNaN(expiresAt) || expiresAt < Date.now();
+  return Number.isNaN(expiresAt) || expiresAt <= Date.now();
 }
 
 export function authMiddleware(apiKeys: ApiKeyMap) {
