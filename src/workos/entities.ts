@@ -476,6 +476,25 @@ export interface WorkOSApiKey extends Entity {
   expires_at: string | null;
 }
 
+export interface WorkOSVaultObjectVersion {
+  id: string;
+  created_at: string;
+  current_version: boolean;
+  size: number;
+  etag: string;
+}
+
+export interface WorkOSVaultObject extends Entity {
+  name: string;
+  value: string;
+  key_context: Record<string, string>;
+  environment_id: string;
+  key_id: string;
+  updated_by: { id: string; name: string };
+  version_id: string;
+  versions: WorkOSVaultObjectVersion[];
+}
+
 export interface WorkOSEvent extends Entity {
   object: 'event';
   event: string;

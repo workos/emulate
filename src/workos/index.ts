@@ -30,6 +30,7 @@ import { authorizationCheckRoutes } from './routes/authorization-checks.js';
 import { portalRoutes } from './routes/portal.js';
 import { legacyMfaRoutes } from './routes/legacy-mfa.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
+import { vaultRoutes } from './routes/vault.js';
 import { radarRoutes } from './routes/radar.js';
 import { connectRoutes } from './routes/connect.js';
 import { oauthRoutes } from './routes/oauth.js';
@@ -756,6 +757,7 @@ export const workosPlugin: ServicePlugin = {
     portalRoutes(ctx);
     legacyMfaRoutes(ctx);
     apiKeyRoutes(ctx);
+    vaultRoutes(ctx);
     radarRoutes(ctx);
     connectRoutes(ctx);
     oauthRoutes(ctx);

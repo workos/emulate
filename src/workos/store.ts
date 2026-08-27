@@ -44,6 +44,7 @@ import type {
   WorkOSDataIntegrationAuth,
   WorkOSRadarAttempt,
   WorkOSApiKey,
+  WorkOSVaultObject,
   WorkOSEvent,
   WorkOSWebhookEndpoint,
 } from './entities.js';
@@ -92,6 +93,7 @@ export interface WorkOSStore {
   dataIntegrationAuths: Collection<WorkOSDataIntegrationAuth>;
   radarAttempts: Collection<WorkOSRadarAttempt>;
   apiKeyRecords: Collection<WorkOSApiKey>;
+  vaultObjects: Collection<WorkOSVaultObject>;
   events: Collection<WorkOSEvent>;
   webhookEndpoints: Collection<WorkOSWebhookEndpoint>;
 }
@@ -243,6 +245,7 @@ export function getWorkOSStore(store: Store): WorkOSStore {
       'ip_address',
     ]),
     apiKeyRecords: store.collection<WorkOSApiKey>('workos.api_keys', ID_PREFIXES.api_key, ['key', 'environment']),
+    vaultObjects: store.collection<WorkOSVaultObject>('workos.vault_objects', 'vault', ['name']),
     events: store.collection<WorkOSEvent>('workos.events', ID_PREFIXES.event, ['event']),
     webhookEndpoints: store.collection<WorkOSWebhookEndpoint>(
       'workos.webhook_endpoints',
