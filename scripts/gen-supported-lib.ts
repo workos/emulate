@@ -154,7 +154,8 @@ export const FEATURES: FeatureDef[] = [
     name: 'FGA / Authorization',
     tags: ['authorization', 'permissions'],
     seedKeys: ['roles', 'permissions'],
-    notes: 'Warrant/check semantics are partial; group role assignments are not implemented.',
+    notes:
+      'Checks and effective-permission listings honor resource-scoped role assignments and ancestor inheritance (`parent_resource_id`); group role assignments are not implemented.',
   },
   {
     name: 'Audit Logs',
