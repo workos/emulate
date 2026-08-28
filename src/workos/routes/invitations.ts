@@ -115,11 +115,17 @@ export function invitationRoutes(ctx: RouteContext): void {
     if (!inv) throw notFound('Invitation');
 
     const newToken = generateVerificationToken();
+    // Resending returns the invitation to pending, so the metadata recording how it left that
+    // state has to go with it — otherwise the response and invitation.resent both carry a
+    // pending invitation that also claims to have been accepted or revoked.
     ws.invitations.update(inv.id, {
       token: newToken,
       accept_invitation_url: `${ctx.baseUrl}/user_management/invitations/accept?token=${newToken}`,
       expires_at: expiresIn(72 * 60),
       state: 'pending',
+      accepted_at: null,
+      accepted_user_id: null,
+      revoked_at: null,
     });
 
     const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);

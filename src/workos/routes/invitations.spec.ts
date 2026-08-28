@@ -283,6 +283,48 @@ describe('Invitation routes', () => {
     expect(resent.accept_invitation_url).toContain(resent.token);
   });
 
+  // Resending puts the invitation back to pending, so the terminal metadata has to clear with it:
+  // a pending invitation that still carries accepted_at or revoked_at contradicts its own state.
+  it('clears acceptance metadata when an accepted invitation is resent', async () => {
+    const user = await json(
+      await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'resend-accepted@test.com' }),
+      }),
+    );
+    const created = await json(
+      await req('/user_management/invitations', {
+        method: 'POST',
+        body: JSON.stringify({ email: user.email }),
+      }),
+    );
+
+    const accepted = await json(await req(`/user_management/invitations/${created.id}/accept`, { method: 'POST' }));
+    expect(accepted.accepted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(accepted.accepted_user_id).toBe(user.id);
+
+    const resent = await json(await req(`/user_management/invitations/${created.id}/resend`, { method: 'POST' }));
+    expect(resent.state).toBe('pending');
+    expect(resent.accepted_at).toBeNull();
+    expect(resent.accepted_user_id).toBeNull();
+  });
+
+  it('clears revocation metadata when a revoked invitation is resent', async () => {
+    const created = await json(
+      await req('/user_management/invitations', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'resend-revoked@test.com' }),
+      }),
+    );
+
+    const revoked = await json(await req(`/user_management/invitations/${created.id}/revoke`, { method: 'POST' }));
+    expect(revoked.revoked_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    const resent = await json(await req(`/user_management/invitations/${created.id}/resend`, { method: 'POST' }));
+    expect(resent.state).toBe('pending');
+    expect(resent.revoked_at).toBeNull();
+  });
+
   it('deletes an invitation', async () => {
     const created = await json(
       await req('/user_management/invitations', {
