@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.0](https://github.com/workos/emulate/compare/v0.10.0...v0.11.0) (2026-08-28)
+
+
+### Features
+
+* **api-keys:** support runtime key creation ([#87](https://github.com/workos/emulate/issues/87)) ([931971b](https://github.com/workos/emulate/commit/931971b664b41a26e6016f96de673f11a57e7fa3))
+* **vault:** emulate object storage routes ([#88](https://github.com/workos/emulate/issues/88)) ([300475b](https://github.com/workos/emulate/commit/300475b4596a98184aa5f2386624eb4c17ba4f84))
+
+
+### Bug Fixes
+
+* **fga:** align authorization checks and resources with production contract ([#89](https://github.com/workos/emulate/issues/89)) ([ae7abed](https://github.com/workos/emulate/commit/ae7abed78c4c47b44985d25741c3b0a0e3ed6798))
+* **invitations:** emit required nullable keys ([#90](https://github.com/workos/emulate/issues/90)) ([cda19b2](https://github.com/workos/emulate/commit/cda19b2e86c270500de075e0a3d358ba12b8cb8b))
+
 ## [0.10.0](https://github.com/workos/emulate/compare/v0.9.0...v0.10.0) (2026-08-27)
 
 
