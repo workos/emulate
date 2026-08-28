@@ -547,7 +547,11 @@ export function acceptInvitation(
   ws: WorkOSStore,
   eventBus: EventBus | undefined,
 ): string | null {
-  ws.invitations.update(inv.id, { state: 'accepted' });
+  ws.invitations.update(inv.id, {
+    state: 'accepted',
+    accepted_at: new Date().toISOString(),
+    accepted_user_id: user?.id ?? null,
+  });
   eventBus?.emit({ event: EVENTS.invitationAccepted, data: formatInvitation(ws.invitations.get(inv.id)!) });
 
   if (!inv.organization_id) return null;

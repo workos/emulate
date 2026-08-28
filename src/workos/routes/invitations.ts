@@ -38,6 +38,9 @@ export function invitationRoutes(ctx: RouteContext): void {
       inviter_user_id: (body.inviter_user_id as string) ?? null,
       role_slug: (body.role_slug as string) ?? null,
       expires_at: expiresIn(72 * 60), // 72 hours
+      accepted_at: null,
+      revoked_at: null,
+      accepted_user_id: null,
     });
 
     return c.json(formatInvitation(inv), 201);
@@ -100,7 +103,7 @@ export function invitationRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, `Invitation is ${inv.state}`, 'invalid_invitation_state');
     }
 
-    ws.invitations.update(inv.id, { state: 'revoked' });
+    ws.invitations.update(inv.id, { state: 'revoked', revoked_at: new Date().toISOString() });
     const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
     eventBus?.emit({ event: EVENTS.invitationRevoked, data: formatInvitation(ws.invitations.get(inv.id)!) });
     const updated = ws.invitations.get(inv.id)!;

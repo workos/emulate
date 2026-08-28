@@ -215,6 +215,11 @@ export interface WorkOSInvitation extends Entity {
   inviter_user_id: string | null;
   role_slug: string | null;
   expires_at: string;
+  // The generated SDK treats these as nullable-but-required keys: a missing key raises KeyError
+  // on parse. Production always sends them (null when unset), so emulate does too.
+  accepted_at: string | null;
+  revoked_at: string | null;
+  accepted_user_id: string | null;
 }
 
 export interface WorkOSRedirectUri extends Entity {

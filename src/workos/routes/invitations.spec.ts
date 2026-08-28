@@ -32,6 +32,10 @@ describe('Invitation routes', () => {
     expect(inv.token).toBeDefined();
     expect(inv.accept_invitation_url).toContain(inv.token);
     expect(inv.id).toMatch(/^inv_/);
+    // The generated SDK reads these as required keys; omitting them raises KeyError on parse.
+    expect(inv.accepted_at).toBeNull();
+    expect(inv.revoked_at).toBeNull();
+    expect(inv.accepted_user_id).toBeNull();
   });
 
   it('lists invitations with email filter', async () => {
@@ -47,6 +51,10 @@ describe('Invitation routes', () => {
     const list = await json(await req('/user_management/invitations?email=a@test.com'));
     expect(list.data).toHaveLength(1);
     expect(list.data[0].email).toBe('a@test.com');
+    // List responses serialize through the same formatter; the required nullable keys appear here too.
+    expect(list.data[0].accepted_at).toBeNull();
+    expect(list.data[0].revoked_at).toBeNull();
+    expect(list.data[0].accepted_user_id).toBeNull();
   });
 
   it('lists invitations with organization_id filter', async () => {
@@ -102,6 +110,10 @@ describe('Invitation routes', () => {
     expect(res.status).toBe(200);
     const accepted = await json(res);
     expect(accepted.state).toBe('accepted');
+    expect(accepted.accepted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(accepted.revoked_at).toBeNull();
+    // No user signed up under this email, so nobody is recorded as the accepter.
+    expect(accepted.accepted_user_id).toBeNull();
   });
 
   it('accepts invitation with org creates membership', async () => {
@@ -130,6 +142,10 @@ describe('Invitation routes', () => {
     const memberships = await json(await req(`/user_management/organization_memberships?organization_id=${org.id}`));
     expect(memberships.data).toHaveLength(1);
     expect(memberships.data[0].organization_id).toBe(org.id);
+
+    // The recipient exists, so their id is recorded as the accepter.
+    const accepted = await json(await req(`/user_management/invitations/${inv.id}`));
+    expect(accepted.accepted_user_id).toBe(memberships.data[0].user_id);
   });
 
   // Resolving the recipient exactly enrolled nobody for an account stored under a different case:
@@ -230,7 +246,10 @@ describe('Invitation routes', () => {
 
     const res = await req(`/user_management/invitations/${created.id}/revoke`, { method: 'POST' });
     expect(res.status).toBe(200);
-    expect((await json(res)).state).toBe('revoked');
+    const revoked = await json(res);
+    expect(revoked.state).toBe('revoked');
+    expect(revoked.revoked_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(revoked.accepted_at).toBeNull();
   });
 
   it('rejects accept on non-pending invitation', async () => {

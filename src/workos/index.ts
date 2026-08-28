@@ -610,6 +610,9 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         inviter_user_id: invConfig.inviter_user_id ?? null,
         role_slug: invConfig.role_slug ?? null,
         expires_at: expiresIn(72 * 60),
+        accepted_at: null,
+        revoked_at: null,
+        accepted_user_id: null,
       });
     }
   }
