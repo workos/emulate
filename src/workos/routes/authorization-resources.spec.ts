@@ -386,6 +386,80 @@ describe('Authorization resource routes', () => {
     expect(detached.parent_resource_id).toBeNull();
   });
 
+  it('rejects parent updates that would create a cycle', async () => {
+    const org = await createOrg('Cycle Org');
+    const create = async (externalId: string, parentResourceId?: string) =>
+      json(
+        await req('/authorization/resources', {
+          method: 'POST',
+          body: JSON.stringify({
+            resource_type_slug: 'project',
+            external_id: externalId,
+            organization_id: org.id,
+            name: externalId,
+            ...(parentResourceId ? { parent_resource_id: parentResourceId } : {}),
+          }),
+        }),
+      );
+
+    const root = await create('cyc-root');
+    const child = await create('cyc-child', root.id);
+    const grandchild = await create('cyc-grandchild', child.id);
+
+    const selfParent = await req(`/authorization/resources/${root.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ parent_resource_id: root.id }),
+    });
+    expect(selfParent.status).toBe(422);
+
+    const descendantParent = await req(`/authorization/resources/${root.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ parent_resource_id: grandchild.id }),
+    });
+    expect(descendantParent.status).toBe(422);
+
+    // The hierarchy is left untouched by the rejected updates.
+    const unchanged = await json(await req(`/authorization/resources/${root.id}`));
+    expect(unchanged.parent_resource_id).toBeNull();
+  });
+
+  it('refuses to delete a resource with dependents unless cascade_delete is set', async () => {
+    const org = await createOrg('Cascade Org');
+    const parent = await json(
+      await req('/authorization/resources', {
+        method: 'POST',
+        body: JSON.stringify({
+          resource_type_slug: 'workspace',
+          external_id: 'casc-ws',
+          organization_id: org.id,
+          name: 'casc-ws',
+        }),
+      }),
+    );
+    const child = await json(
+      await req('/authorization/resources', {
+        method: 'POST',
+        body: JSON.stringify({
+          resource_type_slug: 'project',
+          external_id: 'casc-proj',
+          organization_id: org.id,
+          name: 'casc-proj',
+          parent_resource_id: parent.id,
+        }),
+      }),
+    );
+
+    const refused = await req(`/authorization/resources/${parent.id}`, { method: 'DELETE' });
+    expect(refused.status).toBe(409);
+    expect((await json(refused)).code).toBe('resource_has_dependents');
+    expect((await req(`/authorization/resources/${child.id}`)).status).toBe(200);
+
+    const cascaded = await req(`/authorization/resources/${parent.id}?cascade_delete=true`, { method: 'DELETE' });
+    expect(cascaded.status).toBe(204);
+    expect((await req(`/authorization/resources/${parent.id}`)).status).toBe(404);
+    expect((await req(`/authorization/resources/${child.id}`)).status).toBe(404);
+  });
+
   it('filters resources by external id and parent', async () => {
     const org = await createOrg('ListFilter Org');
     const parent = await json(

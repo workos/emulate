@@ -23,6 +23,23 @@ function findResourceByExternalId(
     .find((r) => r.resource_type_slug === resourceTypeSlug && r.organization_id === organizationId);
 }
 
+// The resource plus every resource beneath it, walking parent_resource_id
+// downward. Used to keep hierarchies acyclic and to cascade deletes.
+function collectSubtree(ws: WorkOSStore, rootId: string): Set<string> {
+  const ids = new Set<string>([rootId]);
+  const queue = [rootId];
+  while (queue.length > 0) {
+    const parentId = queue.shift()!;
+    for (const child of ws.authorizationResources.findBy('parent_resource_id', parentId)) {
+      if (!ids.has(child.id)) {
+        ids.add(child.id);
+        queue.push(child.id);
+      }
+    }
+  }
+  return ids;
+}
+
 // Resolve the parent named by a create/update body: parent_resource_id XOR
 // parent_resource_external_id + parent_resource_type_slug. Returns null when
 // no parent field is present.
@@ -162,22 +179,51 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     if ('description' in body) updates.description = body.description ?? null;
     if ('parent_resource_id' in body || 'parent_resource_external_id' in body || 'parent_resource_type_slug' in body) {
       // Explicit parent_resource_id: null detaches the resource from its parent.
-      updates.parent_resource_id =
+      const nextParentId =
         body.parent_resource_id === null && !body.parent_resource_external_id && !body.parent_resource_type_slug
           ? null
           : (resolveParentResource(ws, body, resource.organization_id)?.id ?? null);
+
+      // Re-parenting under the resource itself or one of its descendants would
+      // make the two resources each other's ancestor, so a role assignment
+      // scoped to either would grant permissions on both.
+      if (nextParentId && collectSubtree(ws, resourceId).has(nextParentId)) {
+        throw validationError(
+          nextParentId === resourceId
+            ? 'A resource cannot be its own parent'
+            : 'A resource cannot be parented to one of its own descendants',
+          [{ field: 'parent_resource_id', code: 'invalid' }],
+        );
+      }
+
+      updates.parent_resource_id = nextParentId;
     }
 
     const updated = ws.authorizationResources.update(resourceId, updates);
     return c.json(formatAuthorizationResource(updated!));
   });
 
+  // Deleting a resource takes its descendants and their role assignments with
+  // it. Without cascade_delete=true a resource that has either is refused,
+  // rather than leaving children pointing at an id that no longer resolves.
   app.delete('/authorization/resources/:resource_id', (c) => {
     const resourceId = c.req.param('resource_id');
     const resource = ws.authorizationResources.get(resourceId);
     if (!resource) throw notFound('AuthorizationResource');
 
-    ws.authorizationResources.delete(resourceId);
+    const subtree = collectSubtree(ws, resourceId);
+    const assignments = [...subtree].flatMap((id) => ws.roleAssignments.findBy('resource_id', id));
+
+    if (new URL(c.req.url).searchParams.get('cascade_delete') !== 'true' && (subtree.size > 1 || assignments.length)) {
+      throw new WorkOSApiError(
+        409,
+        `Resource '${resourceId}' has descendant resources or role assignments. Retry with cascade_delete=true to delete them.`,
+        'resource_has_dependents',
+      );
+    }
+
+    for (const assignment of assignments) ws.roleAssignments.delete(assignment.id);
+    for (const id of subtree) ws.authorizationResources.delete(id);
     return c.body(null, 204);
   });
 
