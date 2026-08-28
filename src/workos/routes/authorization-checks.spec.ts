@@ -167,7 +167,7 @@ describe('Authorization check + role assignment routes', () => {
 
     const resourceRes = await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: org.id }),
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: org.id, name: 'doc-1' }),
     });
     const resource = await json(resourceRes);
 
@@ -185,7 +185,7 @@ describe('Authorization check + role assignment routes', () => {
 
     const resourceRes = await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id }),
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id, name: 'doc-2' }),
     });
     const resource = await json(resourceRes);
 
@@ -226,7 +226,12 @@ describe('Authorization check + role assignment routes', () => {
     const otherOrg = await json(otherOrgRes);
     const resourceRes = await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-other', organization_id: otherOrg.id }),
+      body: JSON.stringify({
+        resource_type_slug: 'doc',
+        external_id: 'doc-other',
+        organization_id: otherOrg.id,
+        name: 'doc-other',
+      }),
     });
     const resource = await json(resourceRes);
 
@@ -260,7 +265,7 @@ describe('Authorization check + role assignment routes', () => {
 
     await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-3', organization_id: org.id }),
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-3', organization_id: org.id, name: 'doc-3' }),
     });
 
     const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
@@ -324,7 +329,7 @@ describe('Authorization check + role assignment routes', () => {
     // Create a resource in the org
     await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'res1', organization_id: org.id }),
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'res1', organization_id: org.id, name: 'res1' }),
     });
 
     const res = await req(`/authorization/organization_memberships/${membership.id}/resources`);
@@ -338,7 +343,12 @@ describe('Authorization check + role assignment routes', () => {
     const ctx = await setup();
     const resourceRes = await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: ctx.org.id }),
+      body: JSON.stringify({
+        resource_type_slug: 'doc',
+        external_id: 'doc-1',
+        organization_id: ctx.org.id,
+        name: 'doc-1',
+      }),
     });
     const resource = await json(resourceRes);
     return { ...ctx, resource };
@@ -440,7 +450,12 @@ describe('Authorization check + role assignment routes', () => {
     const otherOrg = await json(otherOrgRes);
     const resourceRes = await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'other-doc', organization_id: otherOrg.id }),
+      body: JSON.stringify({
+        resource_type_slug: 'doc',
+        external_id: 'other-doc',
+        organization_id: otherOrg.id,
+        name: 'other-doc',
+      }),
     });
     const otherResource = await json(resourceRes);
 
@@ -461,12 +476,22 @@ describe('Authorization check + role assignment routes', () => {
     const otherOrg = await json(otherOrgRes);
     await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: otherOrg.id }),
+      body: JSON.stringify({
+        resource_type_slug: 'doc',
+        external_id: 'doc-1',
+        organization_id: otherOrg.id,
+        name: 'doc-1',
+      }),
     });
 
     await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: ctx.org.id }),
+      body: JSON.stringify({
+        resource_type_slug: 'doc',
+        external_id: 'doc-1',
+        organization_id: ctx.org.id,
+        name: 'doc-1',
+      }),
     });
 
     const res = await req(
@@ -594,7 +619,7 @@ describe('Authorization check + role assignment routes', () => {
     const { membership, adminRole, org } = await setupWithResource();
     await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id }),
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id, name: 'doc-2' }),
     });
 
     // admin:manage granted on doc-1 only
@@ -640,6 +665,7 @@ describe('Authorization check + role assignment routes', () => {
           resource_type_slug: 'doc',
           external_id: 'child-1',
           organization_id: org.id,
+          name: 'child-1',
           parent_resource_id: resource.id,
         }),
       }),
@@ -679,7 +705,7 @@ describe('Authorization check + role assignment routes', () => {
     const { membership, adminRole, org, resource } = await setupWithResource();
     await req('/authorization/resources', {
       method: 'POST',
-      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id }),
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id, name: 'doc-2' }),
     });
 
     // admin:manage on doc-1 only
@@ -707,6 +733,7 @@ describe('Authorization check + role assignment routes', () => {
         resource_type_slug: 'doc',
         external_id: 'child-2',
         organization_id: org.id,
+        name: 'child-2',
         parent_resource_id: resource.id,
       }),
     });
@@ -733,6 +760,7 @@ describe('Authorization check + role assignment routes', () => {
             resource_type_slug: 'project',
             external_id: externalId,
             organization_id: org.id,
+            name: 'test-resource',
             parent_resource_id: resource.id,
           }),
         }),

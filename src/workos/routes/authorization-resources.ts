@@ -72,6 +72,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const resourceTypeSlug = body.resource_type_slug as string;
     const externalId = body.external_id as string;
     const organizationId = body.organization_id as string;
+    const name = body.name as string | undefined;
 
     if (!resourceTypeSlug) {
       throw validationError('resource_type_slug is required', [{ field: 'resource_type_slug', code: 'required' }]);
@@ -81,6 +82,9 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     }
     if (!organizationId) {
       throw validationError('organization_id is required', [{ field: 'organization_id', code: 'required' }]);
+    }
+    if (!name) {
+      throw validationError('name is required', [{ field: 'name', code: 'required' }]);
     }
 
     if (findResourceByExternalId(ws, organizationId, resourceTypeSlug, externalId)) {
@@ -98,9 +102,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
       resource_type_slug: resourceTypeSlug,
       external_id: externalId,
       organization_id: organizationId,
-      // Production requires name; it stays optional here so pre-0.11 callers
-      // keep working.
-      name: (body.name as string | undefined) ?? null,
+      name,
       description: (body.description as string | null | undefined) ?? null,
       parent_resource_id: parent?.id ?? null,
       metadata: (body.metadata as Record<string, string>) ?? {},
