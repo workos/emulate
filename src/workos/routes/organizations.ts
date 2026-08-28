@@ -5,6 +5,7 @@ import {
   generateVerificationToken,
   formatListResponse,
   formatAuthorizedApplication,
+  revokeApiKeysForOwner,
 } from '../helpers.js';
 import type { WorkOSOrganizationDomain } from '../entities.js';
 
@@ -169,6 +170,10 @@ export function organizationRoutes(ctx: RouteContext): void {
 
     ws.organizationDomains.deleteBy('organization_id', org.id);
     ws.organizationMemberships.deleteBy('organization_id', org.id);
+    // Both kinds of key scoped to this org go with it — the org's own, and members' keys
+    // issued inside it, which the membership deletion above has just left unbacked. Same
+    // ownership test the org listing route applies, so nothing it would list survives.
+    revokeApiKeysForOwner(store, ws, (o) => (o.type === 'organization' ? o.id : o.organization_id) === org.id);
 
     ws.organizations.delete(org.id);
     return c.body(null, 204);

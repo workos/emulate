@@ -15,6 +15,7 @@ import {
   findUserByEmail,
   emailsMatch,
   requireEmailField,
+  revokeApiKeysForOwner,
 } from '../helpers.js';
 
 export function userRoutes(ctx: RouteContext): void {
@@ -157,6 +158,9 @@ export function userRoutes(ctx: RouteContext): void {
     for (const ca of ws.connectedAccounts.findBy('user_id', user.id)) {
       ws.connectedAccounts.delete(ca.id);
     }
+    // Keys the user created stop working with the user; left registered, they would keep
+    // authenticating requests on behalf of a principal that no longer exists.
+    revokeApiKeysForOwner(store, ws, (o) => o.type === 'user' && o.id === user.id);
 
     ws.users.delete(user.id);
     return c.body(null, 204);

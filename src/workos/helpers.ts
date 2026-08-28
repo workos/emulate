@@ -6,6 +6,7 @@ import {
   validationError,
   generateId,
   ID_PREFIXES,
+  type ApiKeyMap,
   type CursorPaginatedResult,
   type Entity,
   type Store,
@@ -52,6 +53,7 @@ import type {
   WorkOSClientSecret,
   WorkOSRadarAttempt,
   WorkOSApiKey,
+  WorkOSApiKeyOwner,
   WorkOSEvent,
   WorkOSWebhookEndpoint,
 } from './entities.js';
@@ -1011,6 +1013,24 @@ export function formatRadarAttempt(a: WorkOSRadarAttempt): Record<string, unknow
 export function obfuscateApiKey(key: string): string {
   const prefix = key.startsWith('sk_') ? 'sk_' : key.slice(0, 3);
   return `${prefix}...${key.slice(-4)}`;
+}
+
+/**
+ * Drop every API key whose owner matches, from both the record store and the auth
+ * allow-list. Deleting only the record leaves the secret in the map the middleware holds,
+ * where it keeps authenticating for a principal that no longer exists — so the two stores
+ * have to fall together, the same pairing `DELETE /api_keys/:id` makes.
+ */
+export function revokeApiKeysForOwner(
+  store: Store,
+  ws: WorkOSStore,
+  matches: (owner: WorkOSApiKeyOwner) => boolean,
+): void {
+  const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
+  for (const key of ws.apiKeyRecords.all().filter((k) => matches(k.owner))) {
+    ws.apiKeyRecords.delete(key.id);
+    if (apiKeyMap) delete apiKeyMap[key.key];
+  }
 }
 
 export function formatApiKeyRecord(k: WorkOSApiKey): Record<string, unknown> {

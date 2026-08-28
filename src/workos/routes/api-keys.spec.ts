@@ -253,4 +253,78 @@ describe('API Keys routes', () => {
     expect((await req('/organizations/org_missing/api_keys')).status).toBe(404);
     expect((await req('/user_management/users/user_missing/api_keys')).status).toBe(404);
   });
+
+  const insertMember = (ws: ReturnType<typeof getWorkOSStore>, userId: string) => {
+    ws.users.insert({
+      id: userId,
+      object: 'user',
+      email: `${userId}@acme.test`,
+      name: null,
+      first_name: null,
+      last_name: null,
+      email_verified: true,
+      profile_picture_url: null,
+      last_sign_in_at: null,
+      external_id: null,
+      metadata: {},
+      locale: null,
+      password_hash: null,
+      impersonator: null,
+    });
+    ws.organizationMemberships.insert({
+      object: 'organization_membership',
+      organization_id: 'org_123',
+      user_id: userId,
+      role: { slug: 'member' },
+      status: 'active',
+      external_id: null,
+      metadata: {},
+    });
+  };
+
+  const createUserKey = async (userId: string) =>
+    json(
+      await req(`/user_management/users/${userId}/api_keys`, {
+        method: 'POST',
+        body: JSON.stringify({ name: `${userId} key`, organization_id: 'org_123' }),
+      }),
+    );
+
+  const authStatus = async (value: string) =>
+    (await app.request('/connect/applications', { headers: { Authorization: `Bearer ${value}` } })).status;
+
+  it('revokes the keys of a deleted user', async () => {
+    const ws = getWorkOSStore(store);
+    insertMember(ws, 'user_gone');
+    insertMember(ws, 'user_stays');
+    const doomed = await createUserKey('user_gone');
+    const survivor = await createUserKey('user_stays');
+    expect(await authStatus(doomed.value)).toBe(200);
+
+    expect((await req('/user_management/users/user_gone', { method: 'DELETE' })).status).toBe(204);
+
+    // The record is gone and, more importantly, the secret no longer authenticates —
+    // dropping only the record would leave the allow-list entry accepting requests.
+    expect(ws.apiKeyRecords.get(doomed.id)).toBeUndefined();
+    expect(await authStatus(doomed.value)).toBe(401);
+    // Another member's key is untouched.
+    expect(ws.apiKeyRecords.get(survivor.id)).toBeDefined();
+    expect(await authStatus(survivor.value)).toBe(200);
+  });
+
+  it('revokes the keys of a deleted organization, members included', async () => {
+    const ws = getWorkOSStore(store);
+    insertMember(ws, 'user_member');
+    const orgKey = await json(
+      await req('/organizations/org_123/api_keys', { method: 'POST', body: JSON.stringify({ name: 'Org key' }) }),
+    );
+    const memberKey = await createUserKey('user_member');
+
+    expect((await req('/organizations/org_123', { method: 'DELETE' })).status).toBe(204);
+
+    // Both the org's own key and the member key issued inside it lose their backing org.
+    expect(ws.apiKeyRecords.all()).toHaveLength(0);
+    expect(await authStatus(orgKey.value)).toBe(401);
+    expect(await authStatus(memberKey.value)).toBe(401);
+  });
 });
