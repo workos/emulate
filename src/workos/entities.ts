@@ -328,6 +328,11 @@ export interface WorkOSAuthorizationResource extends Entity {
   resource_type_slug: string;
   external_id: string;
   organization_id: string;
+  // Production requires name on create; rows persisted by pre-0.11 releases
+  // (which had no name field) hold null.
+  name: string | null;
+  description: string | null;
+  parent_resource_id: string | null;
   metadata: Record<string, string>;
 }
 

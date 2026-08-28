@@ -902,7 +902,14 @@ export function formatPermission(p: WorkOSPermission): Record<string, unknown> {
 }
 
 export function formatAuthorizationResource(r: WorkOSAuthorizationResource): Record<string, unknown> {
-  return formatEntity(r);
+  return {
+    ...formatEntity(r),
+    // Rows persisted by pre-0.11 releases predate these columns; the
+    // production shape always carries the keys.
+    name: r.name ?? null,
+    description: r.description ?? null,
+    parent_resource_id: r.parent_resource_id ?? null,
+  };
 }
 
 export function formatRoleAssignment(ra: WorkOSRoleAssignment): Record<string, unknown> {

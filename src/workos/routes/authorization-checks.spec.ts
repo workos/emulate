@@ -579,4 +579,232 @@ describe('Authorization check + role assignment routes', () => {
     });
     expect(res.status).toBe(422);
   });
+
+  it('accepts permission_slug in check (production/SDK contract)', async () => {
+    const { membership } = await setupWithResource();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+      method: 'POST',
+      body: JSON.stringify({ permission_slug: 'posts:read', resource_external_id: 'doc-1', resource_type_slug: 'doc' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await json(res)).authorized).toBe(true);
+  });
+
+  it('scopes check to the resource named in the body', async () => {
+    const { membership, adminRole, org } = await setupWithResource();
+    await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id }),
+    });
+
+    // admin:manage granted on doc-1 only
+    await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: adminRole.id, resource_external_id: 'doc-1', resource_type_slug: 'doc' }),
+    });
+
+    const check = (target: Record<string, unknown>) =>
+      req(`/authorization/organization_memberships/${membership.id}/check`, {
+        method: 'POST',
+        body: JSON.stringify({ permission_slug: 'admin:manage', ...target }),
+      });
+
+    const onDoc1 = await json(await check({ resource_external_id: 'doc-1', resource_type_slug: 'doc' }));
+    expect(onDoc1.authorized).toBe(true);
+
+    const onDoc2 = await json(await check({ resource_external_id: 'doc-2', resource_type_slug: 'doc' }));
+    expect(onDoc2.authorized).toBe(false);
+
+    // Org-wide permissions from the primary role apply on every resource
+    const primaryOnDoc2 = await json(
+      await req(`/authorization/organization_memberships/${membership.id}/check`, {
+        method: 'POST',
+        body: JSON.stringify({
+          permission_slug: 'posts:read',
+          resource_external_id: 'doc-2',
+          resource_type_slug: 'doc',
+        }),
+      }),
+    );
+    expect(primaryOnDoc2.authorized).toBe(true);
+  });
+
+  it('inherits permissions from role assignments on ancestor resources', async () => {
+    const { membership, adminRole, org, resource } = await setupWithResource();
+
+    // doc-1 is the parent of child-1
+    const child = await json(
+      await req('/authorization/resources', {
+        method: 'POST',
+        body: JSON.stringify({
+          resource_type_slug: 'doc',
+          external_id: 'child-1',
+          organization_id: org.id,
+          parent_resource_id: resource.id,
+        }),
+      }),
+    );
+
+    await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: adminRole.id, resource_id: resource.id }),
+    });
+
+    const res = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+      method: 'POST',
+      body: JSON.stringify({ permission_slug: 'admin:manage', resource_id: child.id }),
+    });
+    expect((await json(res)).authorized).toBe(true);
+  });
+
+  it('returns 404 when check names an unknown resource', async () => {
+    const { membership } = await setupWithResource();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+      method: 'POST',
+      body: JSON.stringify({ permission_slug: 'posts:read', resource_id: 'auth_res_nonexistent' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('requires resource_type_slug when check names a resource by external id', async () => {
+    const { membership } = await setupWithResource();
+    const res = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+      method: 'POST',
+      body: JSON.stringify({ permission_slug: 'posts:read', resource_external_id: 'doc-1' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('scopes effective permissions to the resource', async () => {
+    const { membership, adminRole, org, resource } = await setupWithResource();
+    await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-2', organization_id: org.id }),
+    });
+
+    // admin:manage on doc-1 only
+    await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: adminRole.id, resource_id: resource.id }),
+    });
+
+    const onDoc1 = await json(
+      await req(`/authorization/organization_memberships/${membership.id}/resources/doc/doc-1/permissions`),
+    );
+    expect(onDoc1.data.map((p: any) => p.slug).sort()).toEqual(['admin:manage', 'posts:read', 'posts:write']);
+
+    const onDoc2 = await json(
+      await req(`/authorization/organization_memberships/${membership.id}/resources/doc/doc-2/permissions`),
+    );
+    expect(onDoc2.data.map((p: any) => p.slug).sort()).toEqual(['posts:read', 'posts:write']);
+  });
+
+  it('includes ancestor-scoped assignments in effective permissions', async () => {
+    const { membership, adminRole, org, resource } = await setupWithResource();
+    await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({
+        resource_type_slug: 'doc',
+        external_id: 'child-2',
+        organization_id: org.id,
+        parent_resource_id: resource.id,
+      }),
+    });
+
+    await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: adminRole.id, resource_id: resource.id }),
+    });
+
+    const onChild = await json(
+      await req(`/authorization/organization_memberships/${membership.id}/resources/doc/child-2/permissions`),
+    );
+    expect(onChild.data.map((p: any) => p.slug).sort()).toEqual(['admin:manage', 'posts:read', 'posts:write']);
+  });
+
+  it('lists child resources where the membership holds a permission (production contract)', async () => {
+    const { membership, adminRole, org, resource } = await setupWithResource();
+
+    const childOf = async (externalId: string) =>
+      json(
+        await req('/authorization/resources', {
+          method: 'POST',
+          body: JSON.stringify({
+            resource_type_slug: 'project',
+            external_id: externalId,
+            organization_id: org.id,
+            parent_resource_id: resource.id,
+          }),
+        }),
+      );
+    const projectA = await childOf('proj-a');
+    await childOf('proj-b');
+
+    // admin:manage on proj-a only
+    await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: adminRole.id, resource_id: projectA.id }),
+    });
+
+    const scoped = await json(
+      await req(
+        `/authorization/organization_memberships/${membership.id}/resources?permission_slug=admin:manage&parent_resource_id=${resource.id}`,
+      ),
+    );
+    expect(scoped.data.map((r: any) => r.external_id)).toEqual(['proj-a']);
+
+    // Org-wide permission: both children qualify
+    const orgWide = await json(
+      await req(
+        `/authorization/organization_memberships/${membership.id}/resources?permission_slug=posts:read&parent_resource_id=${resource.id}`,
+      ),
+    );
+    expect(orgWide.data.map((r: any) => r.external_id).sort()).toEqual(['proj-a', 'proj-b']);
+
+    // Parent addressed by external id + type slug
+    const byExternal = await json(
+      await req(
+        `/authorization/organization_memberships/${membership.id}/resources?permission_slug=admin:manage&parent_resource_external_id=doc-1&parent_resource_type_slug=doc`,
+      ),
+    );
+    expect(byExternal.data.map((r: any) => r.external_id)).toEqual(['proj-a']);
+  });
+
+  it('requires a parent target when permission_slug is given for the resources listing', async () => {
+    const { membership } = await setupWithResource();
+    const res = await req(
+      `/authorization/organization_memberships/${membership.id}/resources?permission_slug=posts:read`,
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it('filters memberships for a resource by permission_slug', async () => {
+    const { membership, adminRole, org, user, resource } = await setupWithResource();
+
+    // A second membership without the admin role
+    const otherUser = await json(
+      await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'other@test.com' }),
+      }),
+    );
+    await req('/user_management/organization_memberships', {
+      method: 'POST',
+      body: JSON.stringify({ organization_id: org.id, user_id: otherUser.id, role_slug: 'editor' }),
+    });
+
+    await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: adminRole.id, resource_id: resource.id }),
+    });
+
+    const filtered = await json(
+      await req(`/authorization/resources/${resource.id}/organization_memberships?permission_slug=admin:manage`),
+    );
+    expect(filtered.data.length).toBe(1);
+    expect(filtered.data[0].user_id).toBe(user.id);
+
+    const unfiltered = await json(await req(`/authorization/resources/${resource.id}/organization_memberships`));
+    expect(unfiltered.data.length).toBe(2);
+  });
 });

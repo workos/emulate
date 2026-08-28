@@ -1,44 +1,102 @@
 import type { Context } from 'hono';
 import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
 import type { WorkOSAuthorizationResource } from '../entities.js';
-import { getWorkOSStore } from '../store.js';
+import { getWorkOSStore, type WorkOSStore } from '../store.js';
 import { formatRoleAssignment, formatAuthorizationResource, formatListResponse, formatPermission } from '../helpers.js';
 import { resolvePrimaryRole } from '../role-helpers.js';
 
+// The resource itself plus every ancestor reachable through parent_resource_id.
+// Role assignments on an ancestor grant their permissions on all descendants.
+function resourceAncestry(ws: WorkOSStore, resource: WorkOSAuthorizationResource): Set<string> {
+  const ids = new Set<string>();
+  let current: WorkOSAuthorizationResource | undefined = resource;
+  while (current && !ids.has(current.id)) {
+    ids.add(current.id);
+    current = current.parent_resource_id ? ws.authorizationResources.get(current.parent_resource_id) : undefined;
+  }
+  return ids;
+}
+
 /**
- * Gather all permission slugs for a given membership:
- * 1. From the membership's role (role.slug field)
- * 2. From any additional role assignments
+ * Gather the permission slugs a membership holds, from:
+ * 1. The membership's primary role (organization-wide)
+ * 2. Additional role assignments — organization-wide ones always apply;
+ *    resource-scoped ones apply only when checking against that resource or
+ *    one of its descendants.
+ *
+ * When no resource is given the set is membership-wide (every assignment
+ * counts, matching pre-0.11 behavior); production always scopes to a resource.
  */
-function getPermissionsForMembership(ws: ReturnType<typeof getWorkOSStore>, membershipId: string): Set<string> {
+function getPermissionsForMembership(
+  ws: WorkOSStore,
+  membershipId: string,
+  resource?: WorkOSAuthorizationResource,
+): Set<string> {
   const membership = ws.organizationMemberships.get(membershipId);
   if (!membership) return new Set();
 
   const permSlugs = new Set<string>();
+  const addRolePermissions = (roleId: string) => {
+    for (const rp of ws.rolePermissions.findBy('role_id', roleId)) {
+      const perm = ws.permissions.get(rp.permission_id);
+      if (perm) permSlugs.add(perm.slug);
+    }
+  };
 
   // Permissions from the membership's primary role
   const primaryRole = resolvePrimaryRole(ws, membership.organization_id, membership.role.slug);
-  if (primaryRole) {
-    const rps = ws.rolePermissions.findBy('role_id', primaryRole.id);
-    for (const rp of rps) {
-      const perm = ws.permissions.get(rp.permission_id);
-      if (perm) permSlugs.add(perm.slug);
-    }
-  }
+  if (primaryRole) addRolePermissions(primaryRole.id);
 
   // Permissions from additional role assignments
+  const scopeIds = resource ? resourceAncestry(ws, resource) : null;
   const assignments = ws.roleAssignments.findBy('organization_membership_id', membershipId);
   for (const assignment of assignments) {
+    if (scopeIds && assignment.resource_id !== null && !scopeIds.has(assignment.resource_id)) continue;
     const role = ws.roles.get(assignment.role_id);
-    if (!role) continue;
-    const rps = ws.rolePermissions.findBy('role_id', role.id);
-    for (const rp of rps) {
-      const perm = ws.permissions.get(rp.permission_id);
-      if (perm) permSlugs.add(perm.slug);
-    }
+    if (role) addRolePermissions(role.id);
   }
 
   return permSlugs;
+}
+
+// Resolve the resource a request body targets: resource_id, or
+// resource_external_id + resource_type_slug. Returns null when the body names
+// no resource at all.
+function resolveResourceTarget(
+  ws: WorkOSStore,
+  body: Record<string, unknown>,
+  organizationId: string,
+): WorkOSAuthorizationResource | null {
+  const resourceId = body.resource_id as string | undefined;
+  const resourceExternalId = body.resource_external_id as string | undefined;
+  const resourceTypeSlug = body.resource_type_slug as string | undefined;
+
+  if (resourceId) {
+    const resource = ws.authorizationResources.get(resourceId);
+    if (!resource || resource.organization_id !== organizationId) throw notFound('Resource');
+    return resource;
+  }
+
+  if (resourceExternalId) {
+    if (!resourceTypeSlug) {
+      throw validationError('resource_type_slug is required when resource_external_id is provided', [
+        { field: 'resource_type_slug', code: 'required' },
+      ]);
+    }
+    const resource = ws.authorizationResources
+      .findBy('external_id', resourceExternalId)
+      .find((r) => r.resource_type_slug === resourceTypeSlug && r.organization_id === organizationId);
+    if (!resource) throw notFound('Resource');
+    return resource;
+  }
+
+  if (resourceTypeSlug) {
+    throw validationError('resource_external_id is required when resource_type_slug is provided', [
+      { field: 'resource_external_id', code: 'required' },
+    ]);
+  }
+
+  return null;
 }
 
 export function authorizationCheckRoutes(ctx: RouteContext): void {
@@ -52,16 +110,25 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     if (!membership) throw notFound('OrganizationMembership');
 
     const body = await parseJsonBody(c);
-    const permission = body.permission as string;
+    // permission_slug is the production field (what the SDKs send);
+    // `permission` is kept for compatibility with pre-0.11 emulator releases.
+    const permission = (body.permission_slug ?? body.permission) as string | undefined;
     if (!permission) {
-      throw validationError('permission is required', [{ field: 'permission', code: 'required' }]);
+      throw validationError('permission_slug is required', [{ field: 'permission_slug', code: 'required' }]);
     }
 
-    const permSlugs = getPermissionsForMembership(ws, membershipId);
+    // Production requires a resource target; a check without one stays
+    // membership-wide for compatibility with pre-0.11 emulator releases.
+    const resource = resolveResourceTarget(ws, body, membership.organization_id);
+
+    const permSlugs = getPermissionsForMembership(ws, membershipId, resource ?? undefined);
     return c.json({ authorized: permSlugs.has(permission) });
   });
 
-  // List resources accessible to a membership (all resources in the membership's org)
+  // List resources accessible to a membership. Production semantics: child
+  // resources of a required parent where the membership holds a required
+  // permission_slug. Without any of those params (pre-0.11 emulator behavior)
+  // every resource in the membership's organization is returned.
   app.get('/authorization/organization_memberships/:id/resources', (c) => {
     const membershipId = c.req.param('id');
     const membership = ws.organizationMemberships.get(membershipId);
@@ -69,18 +136,46 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
 
     const url = new URL(c.req.url);
     const params = parseListParams(url);
+    const permissionSlug = url.searchParams.get('permission_slug');
+    const parentId = url.searchParams.get('parent_resource_id');
+    const parentTypeSlug = url.searchParams.get('parent_resource_type_slug');
+    const parentExternalId = url.searchParams.get('parent_resource_external_id');
+
+    if (!permissionSlug && !parentId && !parentTypeSlug && !parentExternalId) {
+      const result = ws.authorizationResources.list({
+        ...params,
+        filter: (r) => r.organization_id === membership.organization_id,
+      });
+      return c.json(formatListResponse(result, formatAuthorizationResource));
+    }
+
+    if (!permissionSlug) {
+      throw validationError('permission_slug is required', [{ field: 'permission_slug', code: 'required' }]);
+    }
+    const parent = resolveResourceTarget(
+      ws,
+      { resource_id: parentId, resource_external_id: parentExternalId, resource_type_slug: parentTypeSlug },
+      membership.organization_id,
+    );
+    if (!parent) {
+      throw validationError(
+        'parent_resource_id or parent_resource_external_id + parent_resource_type_slug is required',
+        [{ field: 'parent_resource_id', code: 'required' }],
+      );
+    }
 
     const result = ws.authorizationResources.list({
       ...params,
-      filter: (r) => r.organization_id === membership.organization_id,
+      filter: (r) =>
+        r.parent_resource_id === parent.id && getPermissionsForMembership(ws, membershipId, r).has(permissionSlug),
     });
 
     return c.json(formatListResponse(result, formatAuthorizationResource));
   });
 
-  // Effective permissions for a membership on a resource. The emulator has no
-  // resource-scoped role assignments or ancestor inheritance, so the effective
-  // set is the membership's full permission set; the resource only gates 404s.
+  // Effective permissions for a membership on a resource: the membership's
+  // organization-wide roles plus role assignments scoped to the resource or
+  // any of its ancestors.
   const listEffectivePermissions = (
     c: Context,
     membershipId: string,
@@ -90,7 +185,7 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     if (!membership) throw notFound('OrganizationMembership');
     if (!resource || resource.organization_id !== membership.organization_id) throw notFound('Resource');
 
-    const permSlugs = getPermissionsForMembership(ws, membershipId);
+    const permSlugs = getPermissionsForMembership(ws, membershipId, resource);
 
     const url = new URL(c.req.url);
     const params = parseListParams(url);
@@ -172,31 +267,7 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
       throw notFound('Role');
     }
 
-    const resourceId = body.resource_id as string | undefined;
-    const resourceExternalId = body.resource_external_id as string | undefined;
-    const resourceTypeSlug = body.resource_type_slug as string | undefined;
-
-    let resource: WorkOSAuthorizationResource | null = null;
-    if (resourceId) {
-      resource = ws.authorizationResources.get(resourceId) ?? null;
-      if (!resource || resource.organization_id !== membership.organization_id) throw notFound('Resource');
-    } else if (resourceExternalId) {
-      if (!resourceTypeSlug) {
-        throw validationError('resource_type_slug is required when resource_external_id is provided', [
-          { field: 'resource_type_slug', code: 'required' },
-        ]);
-      }
-      resource =
-        ws.authorizationResources
-          .findBy('external_id', resourceExternalId)
-          .find((r) => r.resource_type_slug === resourceTypeSlug && r.organization_id === membership.organization_id) ??
-        null;
-      if (!resource) throw notFound('Resource');
-    } else if (resourceTypeSlug) {
-      throw validationError('resource_external_id is required when resource_type_slug is provided', [
-        { field: 'resource_external_id', code: 'required' },
-      ]);
-    }
+    const resource = resolveResourceTarget(ws, body, membership.organization_id);
 
     const assignment = ws.roleAssignments.insert({
       object: 'role_assignment',
