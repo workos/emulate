@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 
 const apiKeys: ApiKeyMap = { sk_test_org: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_org', 'Content-Type': 'application/json' };
@@ -11,9 +12,12 @@ function createTestApp() {
 
 describe('Connect routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: ReturnType<typeof createTestApp>['store'];
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const testApp = createTestApp();
+    app = testApp.app;
+    store = testApp.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -98,8 +102,45 @@ describe('Connect routes', () => {
     expect((await json(res)).name).toBe('Get Test');
   });
 
+  it('gets an application by client_id', async () => {
+    const createRes = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Client ID Get Test' }),
+    });
+    const created = await json(createRes);
+
+    const res = await req(`/connect/applications/${created.client_id}`);
+    expect(res.status).toBe(200);
+    expect((await json(res)).id).toBe(created.id);
+  });
+
+  it('prefers an application id over another application client_id with the same value', async () => {
+    const idOwner = await json(
+      await req('/connect/applications', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'ID Owner' }),
+      }),
+    );
+    const clientIdOwner = await json(
+      await req('/connect/applications', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Client ID Owner' }),
+      }),
+    );
+    getWorkOSStore(store).connectApplications.update(clientIdOwner.id, { client_id: idOwner.id });
+
+    const res = await req(`/connect/applications/${idOwner.id}`);
+    expect(res.status).toBe(200);
+    expect((await json(res)).name).toBe('ID Owner');
+  });
+
   it('returns 404 for nonexistent application', async () => {
     const res = await req('/connect/applications/connect_app_nonexistent');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for nonexistent client_id', async () => {
+    const res = await req('/connect/applications/client_nonexistent');
     expect(res.status).toBe(404);
   });
 

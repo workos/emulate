@@ -70,8 +70,9 @@ export function connectRoutes(ctx: RouteContext): void {
   });
 
   // Get application
-  app.get('/connect/applications/:id', (c) => {
-    const application = ws.connectApplications.get(c.req.param('id'));
+  app.get('/connect/applications/:ref', (c) => {
+    const ref = c.req.param('ref');
+    const application = ws.connectApplications.get(ref) ?? ws.connectApplications.findOneBy('client_id', ref);
     if (!application) throw notFound('ConnectApplication');
     return c.json(formatConnectApplication(application));
   });
