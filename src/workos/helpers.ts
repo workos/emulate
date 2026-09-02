@@ -904,7 +904,11 @@ export function formatRole(role: WorkOSRole): Record<string, unknown> {
 }
 
 export function formatPermission(p: WorkOSPermission): Record<string, unknown> {
-  return formatEntity(p);
+  return {
+    ...formatEntity(p),
+    system: false,
+    resource_type_slug: 'organization',
+  };
 }
 
 export function formatAuthorizationResource(r: WorkOSAuthorizationResource): Record<string, unknown> {

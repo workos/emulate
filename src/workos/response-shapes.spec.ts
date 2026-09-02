@@ -199,8 +199,6 @@ const KNOWN_MISSING_REQUIRED: Record<string, readonly string[]> = {
   // The emulator's Role predates the spec's authorization Role: it has no
   // `permissions` array or `resource_type_slug`.
   role: ['permissions', 'resource_type_slug'],
-  // The emulator's Permission lacks the spec's `resource_type_slug` and `system`.
-  permission: ['resource_type_slug', 'system'],
 };
 
 /**

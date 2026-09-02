@@ -29,6 +29,7 @@ describe('Authorization permission routes', () => {
     expect(perm.object).toBe('permission');
     expect(perm.slug).toBe('posts:read');
     expect(perm.name).toBe('Read Posts');
+    expect(perm).toMatchObject({ system: false, resource_type_slug: 'organization' });
     expect(perm.id).toMatch(/^perm_/);
   });
 
