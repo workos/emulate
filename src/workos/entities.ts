@@ -321,6 +321,7 @@ export interface WorkOSPermission extends Entity {
   slug: string;
   name: string;
   description: string | null;
+  resource_type_slug?: string;
 }
 
 export interface WorkOSRolePermission extends Entity {

@@ -907,7 +907,7 @@ export function formatPermission(p: WorkOSPermission): Record<string, unknown> {
   return {
     ...formatEntity(p),
     system: false,
-    resource_type_slug: 'organization',
+    resource_type_slug: p.resource_type_slug ?? 'organization',
   };
 }
 

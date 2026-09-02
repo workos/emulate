@@ -33,6 +33,15 @@ describe('Authorization permission routes', () => {
     expect(perm.id).toMatch(/^perm_/);
   });
 
+  it('preserves a permission resource type', async () => {
+    const res = await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'documents:read', name: 'Read Documents', resource_type_slug: 'document' }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json(res)).resource_type_slug).toBe('document');
+  });
+
   it('rejects duplicate slug', async () => {
     await req('/authorization/permissions', {
       method: 'POST',
@@ -49,6 +58,14 @@ describe('Authorization permission routes', () => {
     const res = await req('/authorization/permissions', {
       method: 'POST',
       body: JSON.stringify({ name: 'No Slug' }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects an invalid resource type', async () => {
+    const res = await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'invalid:scope', name: 'Invalid Scope', resource_type_slug: 42 }),
     });
     expect(res.status).toBe(422);
   });

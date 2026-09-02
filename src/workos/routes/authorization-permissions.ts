@@ -10,12 +10,18 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
     const body = await parseJsonBody(c);
     const slug = body.slug as string;
     const name = body.name as string;
+    const resourceTypeSlug = body.resource_type_slug;
 
     if (!slug || typeof slug !== 'string') {
       throw validationError('slug is required', [{ field: 'slug', code: 'required' }]);
     }
     if (!name || typeof name !== 'string') {
       throw validationError('name is required', [{ field: 'name', code: 'required' }]);
+    }
+    if (resourceTypeSlug !== undefined && (typeof resourceTypeSlug !== 'string' || !resourceTypeSlug)) {
+      throw validationError('resource_type_slug must be a non-empty string', [
+        { field: 'resource_type_slug', code: 'invalid' },
+      ]);
     }
 
     const existing = ws.permissions.findOneBy('slug', slug);
@@ -28,6 +34,7 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
       slug,
       name,
       description: (body.description as string) ?? null,
+      resource_type_slug: resourceTypeSlug ?? 'organization',
     });
 
     return c.json(formatPermission(permission), 201);

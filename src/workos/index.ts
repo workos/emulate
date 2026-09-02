@@ -570,6 +570,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         slug: permConfig.slug,
         name: permConfig.name,
         description: permConfig.description ?? null,
+        resource_type_slug: 'organization',
       });
     }
   }
