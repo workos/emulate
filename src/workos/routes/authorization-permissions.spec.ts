@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
-import { workosPlugin } from '../index.js';
+import { workosPlugin, seedFromConfig } from '../index.js';
+import { validateSeedConfig } from '../config-validator.js';
 
 const apiKeys: ApiKeyMap = { sk_test_perm: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_perm', 'Content-Type': 'application/json' };
@@ -40,6 +41,24 @@ describe('Authorization permission routes', () => {
     });
     expect(res.status).toBe(201);
     expect((await json(res)).resource_type_slug).toBe('document');
+  });
+
+  it('preserves a seeded permission resource type', async () => {
+    const server = createTestApp();
+    seedFromConfig(server.store, 'http://localhost:0', {
+      permissions: [{ slug: 'seeded:read', name: 'Seeded Read', resource_type_slug: 'document' }],
+    });
+    const res = await server.app.request('/authorization/permissions/seeded:read', { headers });
+    expect(res.status).toBe(200);
+    expect((await json(res)).resource_type_slug).toBe('document');
+  });
+
+  it('rejects an invalid seeded resource type', () => {
+    const result = validateSeedConfig({
+      permissions: [{ slug: 'invalid:seed', name: 'Invalid Seed', resource_type_slug: 42 as unknown as string }],
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.path === 'permissions[0].resource_type_slug')).toBe(true);
   });
 
   it('rejects duplicate slug', async () => {

@@ -233,6 +233,7 @@ export interface WorkOSSeedPermission {
   slug: string;
   name: string;
   description?: string;
+  resource_type_slug?: string;
 }
 
 export interface WorkOSSeedWebhookEndpoint {
@@ -570,7 +571,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         slug: permConfig.slug,
         name: permConfig.name,
         description: permConfig.description ?? null,
-        resource_type_slug: 'organization',
+        resource_type_slug: permConfig.resource_type_slug ?? 'organization',
       });
     }
   }

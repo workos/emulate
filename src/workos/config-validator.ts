@@ -591,6 +591,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: perm.name,
           });
         }
+        if (
+          perm.resource_type_slug !== undefined &&
+          (typeof perm.resource_type_slug !== 'string' || !perm.resource_type_slug)
+        ) {
+          errors.push({
+            path: `permissions[${index}].resource_type_slug`,
+            message: 'resource_type_slug must be a non-empty string if provided',
+            value: perm.resource_type_slug,
+          });
+        }
       });
     }
   }
