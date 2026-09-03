@@ -10,5 +10,6 @@ export function authorizationRoleRoutes(ctx: RouteContext): void {
     listFilter: () => (r) => r.type === 'EnvironmentRole',
     insertDefaults: () => ({ organization_id: null }),
     duplicateMessage: 'Role with this slug already exists',
+    duplicateCode: 'role_slug_conflict',
   });
 }

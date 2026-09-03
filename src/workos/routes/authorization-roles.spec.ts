@@ -42,7 +42,8 @@ describe('Authorization environment role routes', () => {
       method: 'POST',
       body: JSON.stringify({ slug: 'dup', name: 'Dup 2' }),
     });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
+    expect((await json(res)).code).toBe('role_slug_conflict');
   });
 
   it('lists environment roles', async () => {
@@ -77,7 +78,7 @@ describe('Authorization environment role routes', () => {
       body: JSON.stringify({ slug: 'upd', name: 'Original' }),
     });
     const res = await req('/authorization/roles/upd', {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify({ name: 'Updated', description: 'new desc' }),
     });
     expect(res.status).toBe(200);

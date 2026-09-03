@@ -50,7 +50,8 @@ describe('Authorization org role routes', () => {
       method: 'POST',
       body: JSON.stringify({ slug: 'dup', name: 'Dup 2' }),
     });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
+    expect((await json(res)).code).toBe('organization_role_slug_conflict');
   });
 
   it('allows same slug in different orgs', async () => {
@@ -105,7 +106,7 @@ describe('Authorization org role routes', () => {
       body: JSON.stringify({ slug: 'upd', name: 'Original' }),
     });
     const res = await req(`/authorization/organizations/${org.id}/roles/upd`, {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify({ name: 'Updated' }),
     });
     expect(res.status).toBe(200);

@@ -1,5 +1,12 @@
 import type { Context } from 'hono';
-import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../core/index.js';
+import {
+  type RouteContext,
+  WorkOSApiError,
+  notFound,
+  validationError,
+  parseJsonBody,
+  parseListParams,
+} from '../core/index.js';
 import type { WorkOSStore } from './store.js';
 import type { WorkOSRole, WorkOSPermission } from './entities.js';
 import { getWorkOSStore } from './store.js';
@@ -71,6 +78,8 @@ export interface RoleRouteConfig {
   listFilter: (c: Context) => (r: WorkOSRole) => boolean;
   insertDefaults: (c: Context) => Partial<WorkOSRole>;
   duplicateMessage: string;
+  /** Spec error code for a taken slug: `role_slug_conflict` or `organization_role_slug_conflict`. */
+  duplicateCode: string;
   validateBeforeCreate?: (ws: WorkOSStore, c: Context) => void;
 }
 
@@ -95,7 +104,8 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
 
     const existing = config.findRole(ws, c, slug);
     if (existing) {
-      throw validationError(config.duplicateMessage, [{ field: 'slug', code: 'duplicate' }]);
+      // Production answers a taken slug with 409, not a 422 field error.
+      throw new WorkOSApiError(409, config.duplicateMessage, config.duplicateCode);
     }
 
     const defaults = config.insertDefaults(c);
@@ -130,7 +140,8 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
     return c.json(formatRole(role));
   });
 
-  app.put(`${pathPrefix}/:slug`, async (c) => {
+  // The spec (and every SDK) updates a role with PATCH; there is no PUT.
+  app.patch(`${pathPrefix}/:slug`, async (c) => {
     const role = config.requireRole(ws, c);
 
     const body = await parseJsonBody(c);
