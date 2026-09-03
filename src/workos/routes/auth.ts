@@ -200,16 +200,29 @@ export function authRoutes(ctx: RouteContext): void {
     // The token `login` is stored under, once a page after the password has needed one.
     let loginToken: string | null = null;
     /**
+     * Drop the record an expired login's open gate was waiting on: the email_verification or
+     * authentication_challenge only that login could have redeemed. Otherwise every abandoned
+     * gated login would keep one such record for the emulator's lifetime after its token went.
+     */
+    const releaseGate = (stale: InteractiveLogin) => {
+      if (stale.email_verification_id) ws.emailVerifications.delete(stale.email_verification_id);
+      if (stale.challenge_id) ws.authChallenges.delete(stale.challenge_id);
+    };
+    /**
      * Persist `login` under its token for the page about to be served, minting the token the
      * first time. A page that is never submitted leaves its token behind, and nothing would
-     * present it again to trip the expiry check, so expired entries are swept at each mint: the
-     * store holds at most the tokens from the last ten minutes rather than one per abandoned login.
+     * present it again to trip the expiry check, so expired entries are swept at each mint, each
+     * with the gate record it references: the store holds at most the logins from the last ten
+     * minutes rather than one per abandoned login.
      */
     const carryLogin = (): string => {
       if (!loginToken) {
-        store.deleteDataByPrefix(STORE_KEY_PREFIXES.interactiveLogin, (v) =>
-          isExpired((v as InteractiveLogin).expires_at),
-        );
+        store.deleteDataByPrefix(STORE_KEY_PREFIXES.interactiveLogin, (v) => {
+          const stale = v as InteractiveLogin;
+          if (!isExpired(stale.expires_at)) return false;
+          releaseGate(stale);
+          return true;
+        });
         loginToken = generateId('pending');
       }
       store.setData(`${STORE_KEY_PREFIXES.interactiveLogin}${loginToken}`, login);
@@ -220,7 +233,9 @@ export function authRoutes(ctx: RouteContext): void {
       const key = pendingToken ? `${STORE_KEY_PREFIXES.interactiveLogin}${pendingToken}` : null;
       let verified = key ? store.getData<InteractiveLogin>(key) : undefined;
       if (key && verified && isExpired(verified.expires_at)) {
-        // Nothing will ever redeem an expired token, so drop it rather than leave it behind.
+        // Nothing will ever redeem an expired token, so drop it, and the record its gate was
+        // waiting on, rather than leave them behind.
+        releaseGate(verified);
         store.deleteData(key);
         verified = undefined;
       }

@@ -417,6 +417,35 @@ describe('Interactive Auth Mode with the password step', () => {
     expect(emulator.store.getData(loginKey(tokenIn(await next.text())))).toBeDefined();
   });
 
+  it('sweeps the verification an abandoned email page was waiting on, along with its token', async () => {
+    const ws = getWorkOSStore(emulator.store);
+    const token = tokenIn(await (await submit({ email: 'unverified@example.com', password: 'correct-horse' })).text());
+    expect(token).not.toBe('');
+    const verificationId = loginFor(token)?.email_verification_id ?? '';
+    expect(ws.emailVerifications.get(verificationId)).toBeDefined();
+    const stored = emulator.store.getData<{ expires_at: string }>(loginKey(token));
+    emulator.store.setData(loginKey(token), { ...stored, expires_at: new Date(Date.now() - 1000).toISOString() });
+
+    // The sweep at the next mint takes the record the gate was waiting on along with the token.
+    expect((await submit({ email: 'multi@example.com', password: 'correct-horse' })).status).toBe(200);
+    expect(emulator.store.getData(loginKey(token))).toBeUndefined();
+    expect(ws.emailVerifications.get(verificationId)).toBeUndefined();
+  });
+
+  it('sweeps the challenge an abandoned one-time-code page was waiting on, along with its token', async () => {
+    const ws = getWorkOSStore(emulator.store);
+    const token = tokenIn(await (await submit({ email: 'mfa@example.com', password: 'correct-horse' })).text());
+    expect(token).not.toBe('');
+    const challengeId = loginFor(token)?.challenge_id ?? '';
+    expect(ws.authChallenges.get(challengeId)).toBeDefined();
+    const stored = emulator.store.getData<{ expires_at: string }>(loginKey(token));
+    emulator.store.setData(loginKey(token), { ...stored, expires_at: new Date(Date.now() - 1000).toISOString() });
+
+    expect((await submit({ email: 'multi@example.com', password: 'correct-horse' })).status).toBe(200);
+    expect(emulator.store.getData(loginKey(token))).toBeUndefined();
+    expect(ws.authChallenges.get(challengeId)).toBeUndefined();
+  });
+
   it('rejects a token minted for another user and asks for the password', async () => {
     const theirs = await submit({ email: 'multi@example.com', password: 'correct-horse' });
     const token = tokenIn(await theirs.text());
@@ -446,6 +475,21 @@ describe('Interactive Auth Mode with the password step', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('name="password"');
     expect(emulator.store.getData(loginKey(token))).toBeUndefined();
+  });
+
+  it('drops the challenge along with an expired token that is presented again', async () => {
+    const ws = getWorkOSStore(emulator.store);
+    const token = tokenIn(await (await submit({ email: 'mfa@example.com', password: 'correct-horse' })).text());
+    const challengeId = loginFor(token)?.challenge_id ?? '';
+    expect(ws.authChallenges.get(challengeId)).toBeDefined();
+    const stored = emulator.store.getData<{ expires_at: string }>(loginKey(token));
+    emulator.store.setData(loginKey(token), { ...stored, expires_at: new Date(Date.now() - 1000).toISOString() });
+
+    const res = await submit({ email: 'mfa@example.com', pending_authentication_token: token });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('name="password"');
+    expect(emulator.store.getData(loginKey(token))).toBeUndefined();
+    expect(ws.authChallenges.get(challengeId)).toBeUndefined();
   });
 
   it('asks an unverified user for the emailed code after the password, before minting anything', async () => {
