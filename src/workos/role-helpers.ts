@@ -57,18 +57,29 @@ export function getRolePermissions(ws: WorkOSStore, roleId: string): WorkOSPermi
   return rps.map((rp) => ws.permissions.get(rp.permission_id)).filter(Boolean) as WorkOSPermission[];
 }
 
-export function replaceRolePermissions(ws: WorkOSStore, roleId: string, permissionSlugs: string[]): WorkOSPermission[] {
-  // Delete existing
-  ws.rolePermissions.deleteBy('role_id', roleId);
-
-  // Insert new
+/**
+ * Replace a role's permission set. Every slug is resolved before the join
+ * table is touched, so an unknown slug answers 404 and leaves the current set
+ * intact rather than half-applied. Returns whether the set actually changed,
+ * which is what decides whether a role.updated event is due, as in production.
+ */
+export function replaceRolePermissions(ws: WorkOSStore, roleId: string, permissionSlugs: string[]): boolean {
+  const next = new Map<string, WorkOSPermission>();
   for (const permSlug of permissionSlugs) {
     const perm = ws.permissions.findOneBy('slug', permSlug);
     if (!perm) throw notFound('Permission');
-    ws.rolePermissions.insert({ role_id: roleId, permission_id: perm.id });
+    next.set(perm.id, perm);
   }
 
-  return getRolePermissions(ws, roleId);
+  const current = new Set(ws.rolePermissions.findBy('role_id', roleId).map((rp) => rp.permission_id));
+  const changed = current.size !== next.size || [...next.keys()].some((id) => !current.has(id));
+  if (!changed) return false;
+
+  ws.rolePermissions.deleteBy('role_id', roleId);
+  for (const perm of next.values()) {
+    ws.rolePermissions.insert({ role_id: roleId, permission_id: perm.id });
+  }
+  return true;
 }
 
 export interface RoleRouteConfig {

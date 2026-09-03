@@ -259,6 +259,24 @@ describe('Authorization environment role routes', () => {
     expect(notArray.status).toBe(422);
   });
 
+  it('leaves permissions intact when a replacement names an unknown slug', async () => {
+    await req('/authorization/permissions', { method: 'POST', body: JSON.stringify({ slug: 'keep', name: 'Keep' }) });
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'atomic', name: 'Atomic' }) });
+    await req('/authorization/roles/atomic/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['keep'] }),
+    });
+
+    const res = await req('/authorization/roles/atomic/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['keep', 'missing'] }),
+    });
+    expect(res.status).toBe(404);
+
+    const role = await json(await req('/authorization/roles/atomic'));
+    expect(role.permissions).toEqual(['keep']);
+  });
+
   it('creates role with default flag', async () => {
     const res = await req('/authorization/roles', {
       method: 'POST',
