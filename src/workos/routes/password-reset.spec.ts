@@ -100,6 +100,20 @@ describe('Password reset routes', () => {
     ]);
   });
 
+  // The link is `${baseUrl}/path`, so a base URL written with a trailing slash would double it
+  // — the server normalizes the option, and this pins that the link still names the endpoint.
+  it('does not double the slash when the base URL ends in one', async () => {
+    const trailing = createServer(workosPlugin, { port: 0, baseUrl: 'http://localhost:0/', apiKeys });
+    const post = (path: string, body: unknown) =>
+      trailing.app.request(path, { method: 'POST', headers, body: JSON.stringify(body) });
+
+    await post('/user_management/users', { email: 'slash@test.com' });
+    const reset = await json(await post('/user_management/password_reset', { email: 'slash@test.com' }));
+    expect(reset.password_reset_url).toBe(
+      `http://localhost:0/user_management/password_reset/confirm?token=${reset.password_reset_token}`,
+    );
+  });
+
   it('returns the same shape when fetched by id', async () => {
     const { reset } = await createUserAndRequestReset();
 

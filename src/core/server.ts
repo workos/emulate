@@ -9,6 +9,11 @@ import type { ServicePlugin, RouteContext } from './plugin.js';
 
 export interface ServerOptions {
   port?: number;
+  /**
+   * The URL the emulator advertises in the links it mints — invitation, password reset, device
+   * verification, SSO logout. A trailing slash is dropped so none of those links carries a doubled
+   * one; a path prefix is kept, being the caller's statement of where the emulator is reachable.
+   */
   baseUrl?: string;
   apiKeys?: ApiKeyMap;
   /**
@@ -26,7 +31,9 @@ export interface ServerOptions {
 
 export function createServer(plugin: ServicePlugin, options: ServerOptions = {}) {
   const port = options.port ?? 4100;
-  const baseUrl = options.baseUrl ?? `http://localhost:${port}`;
+  // Every link the emulator mints is `${baseUrl}/path`, so a trailing slash on the option would
+  // double up in all of them (and in the default `iss`, which is built the same way).
+  const baseUrl = (options.baseUrl ?? `http://localhost:${port}`).replace(/\/+$/, '');
 
   const app = new Hono<WorkOSAppEnv>();
   const store = new Store();
