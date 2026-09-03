@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.12.0](https://github.com/workos/emulate/compare/v0.11.0...v0.12.0) (2026-09-03)
+
+
+### Features
+
+* **auth:** add opt-in password step to interactive login ([#99](https://github.com/workos/emulate/issues/99)) ([993f7f1](https://github.com/workos/emulate/commit/993f7f15d3fd00429dce76b6e833aa8a26fde2db))
+* **authorization:** align roles and permissions with the spec (PATCH, 409 conflicts, resource_type_slug) ([#97](https://github.com/workos/emulate/issues/97)) ([1d1c84c](https://github.com/workos/emulate/commit/1d1c84c21c0e812850d5070f1c55c9bfdb450e6d))
+* **feature-flags:** align with production contract, add seeding and SDK polling ([#96](https://github.com/workos/emulate/issues/96)) ([ae19616](https://github.com/workos/emulate/commit/ae19616c1919dcfb5311fb2c8db85493079c7151))
+* **widgets:** implement /_widgets/ApiKeys for the ApiKeys widget ([#101](https://github.com/workos/emulate/issues/101)) ([5cd33ae](https://github.com/workos/emulate/commit/5cd33ae26a42a07cb3ccaca8e06e5d4fd8ace31f))
+
+
+### Bug Fixes
+
+* **connect:** resolve applications by client ID ([#92](https://github.com/workos/emulate/issues/92)) ([b4afb88](https://github.com/workos/emulate/commit/b4afb889a8efffd4cf6d85de00d0ff077e073e13))
+* emit spec-shaped password_reset_token and password_reset_url ([#100](https://github.com/workos/emulate/issues/100)) ([5e362ee](https://github.com/workos/emulate/commit/5e362eecfa5ecfc22b67dab9617e2156e2f102ca))
+
 ## [0.11.0](https://github.com/workos/emulate/compare/v0.10.0...v0.11.0) (2026-08-28)
 
 
