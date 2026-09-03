@@ -151,4 +151,4 @@ jobs:
           # `--retry-all-errors` retries on TCP reset (curl 56) too, not just
           # connection-refused (curl 7). The container is created before the
           # Node app finishes binding :4100, so the first probe can hit a RST.
-          curl --retry 10 --retry-delay 1 --retry-all-errors --fail http://127.0.0.1:4100/health
+          curl --retry 10 --retry-delay 1 --retry-all-errors --fail http://localhost:4100/health
