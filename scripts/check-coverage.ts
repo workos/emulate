@@ -9,6 +9,7 @@
  *
  * Reports:
  *   - Spec endpoints missing from the emulator
+ *   - Private API surfaces the emulator serves on purpose (see PRIVATE_API_PREFIXES)
  *   - Emulator endpoints not in the spec (custom/internal)
  *   - Coverage percentage
  */
@@ -130,6 +131,14 @@ function routeKey(method: string, path: string): string {
   return `${method} ${normalizePath(path)}`;
 }
 
+/**
+ * Path prefixes of private API surfaces the emulator implements deliberately even though the
+ * public spec never describes them. `/_widgets/*` is what the `@workos-inc/widgets` components
+ * call; its contract comes from the shipped package, not from `@workos/openapi-spec`. Routes
+ * under these prefixes are reported as intentional, not as unknown emulator-only extras.
+ */
+const PRIVATE_API_PREFIXES = ['/_widgets/'];
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -173,11 +182,14 @@ function main(): void {
     }
   }
 
+  // Emulator routes the spec does not describe, split into the private API surfaces the
+  // emulator serves on purpose and everything else.
+  const privateSurface: EmulatorEndpoint[] = [];
   const extra: EmulatorEndpoint[] = [];
   for (const [key, ep] of emulatorMap) {
-    if (!specMap.has(key)) {
-      extra.push(ep);
-    }
+    if (specMap.has(key)) continue;
+    if (PRIVATE_API_PREFIXES.some((prefix) => ep.path.startsWith(prefix))) privateSurface.push(ep);
+    else extra.push(ep);
   }
 
   // Group missing by tag
@@ -200,6 +212,7 @@ function main(): void {
   console.log(`  Emulator endpoints: ${emulatorEndpoints.length}`);
   console.log(`  Covered:            ${coveredCount}/${total} (${pct}%)`);
   console.log(`  Missing:            ${missing.length}`);
+  console.log(`  Private API surface:   ${privateSurface.length}`);
   console.log(`  Extra (emulator-only): ${extra.length}`);
   console.log('');
 
@@ -214,6 +227,15 @@ function main(): void {
       }
       console.log('');
     }
+  }
+
+  if (privateSurface.length > 0) {
+    console.log('--- Private API surfaces (intentionally outside the public spec) ---');
+    console.log('');
+    for (const ep of privateSurface.sort((a, b) => a.path.localeCompare(b.path))) {
+      console.log(`    ${ep.method.padEnd(6)} ${ep.path}  (${ep.file}:${ep.line})`);
+    }
+    console.log('');
   }
 
   if (extra.length > 0) {

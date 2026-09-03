@@ -236,7 +236,9 @@ export const FEATURES: FeatureDef[] = [
   {
     name: 'Widgets',
     tags: ['widgets'],
-    notes: 'Mints widget tokens only.',
+    emulatorCreateRoutes: ['/_widgets'],
+    notes:
+      'Mints widget tokens and serves the private `/_widgets/ApiKeys/*` routes the org-scope `<ApiKeys>` widget calls; that surface is outside the public spec, so it is not counted here. Other widgets and `scope="user"` API keys are not implemented.',
   },
   {
     name: 'Radar',

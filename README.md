@@ -512,6 +512,46 @@ only registers values for authentication without creating resources. A map-form 
 requests but has no `api_key` resource behind it, so validating one returns `{"api_key": null}` —
 use the array form for keys your code validates.
 
+## Widgets
+
+`POST /widgets/token` mints the session token the `@workos-inc/widgets` components authenticate
+with, as the SDKs' `widgets.getToken()` calls it. The requested scopes are minted under the
+`permissions` claim and the token expires in an hour — the two claims the widget client reads to
+decide whether it may render and when to refresh.
+
+The components never call the public REST API; they call a private `/_widgets/*` surface. The
+emulator serves the routes the org-scope `<ApiKeys>` widget uses, as a translation layer over the
+same store the public API-key routes use — so a key created in the widget authenticates requests,
+and a key created through `POST /organizations/{id}/api_keys` (or seeded) shows up in the widget:
+
+| Method   | Path                                      |
+| -------- | ----------------------------------------- |
+| `GET`    | `/_widgets/ApiKeys/organization-api-keys` |
+| `POST`   | `/_widgets/ApiKeys/organization-api-keys` |
+| `DELETE` | `/_widgets/ApiKeys/{apiKeyId}`            |
+| `POST`   | `/_widgets/ApiKeys/{apiKeyId}/expire`     |
+| `GET`    | `/_widgets/ApiKeys/permissions`           |
+
+Point the widgets provider at the emulator and hand it a token minted with the
+`widgets:api-keys:manage` scope:
+
+```tsx
+<WorkOsWidgets apiHostname="localhost" port={4100} https={false}>
+  <ApiKeys authToken={token} />
+</WorkOsWidgets>
+```
+
+`/_widgets/*` requests authenticate with the widget token, not an API key, and the organization is
+the token's `org_id`: keys are only ever listed, created, revoked, or expired within it, and another
+organization's key is a `404`. A missing, expired, or otherwise invalid token — or one minted
+without the widget's scope — is a `403`, the status the widget client treats as a token problem: it
+refetches the token once, then renders its expired-session or incorrect-permissions state.
+`GET /_widgets/ApiKeys/permissions` serves the environment's permissions (seeded, or created via
+`POST /authorization/permissions`), which is what fills the create dialog's checklist.
+
+Not implemented yet: the `scope="user"` variant (`/_widgets/UserApiKeys/*`) and the other widgets'
+`/_widgets/*` routes.
+
 ## Testing Your Login Flow End-to-End
 
 The emulator implements the full [workos.com/docs](https://workos.com/docs) login story: every resource creation and authentication outcome fires a signed webhook, with event names and payload shapes generated from the WorkOS OpenAPI spec. You can run your app's entire login flow — hosted authorize, callback, token exchange, webhook handling — against the emulator without touching the real API.
