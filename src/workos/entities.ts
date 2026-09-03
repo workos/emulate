@@ -147,6 +147,20 @@ export interface WorkOSAuthorizationCode extends Entity {
   code_challenge_method: string | null;
   /** The OAuth client that initiated the authorization, bound to the code so the token claim can't be spoofed at redemption. */
   client_id: string | null;
+  /**
+   * How the user proved who they were on the way to this code, when the emulator knows. The
+   * interactive password page records 'Password'; the default auto-redirect checks nothing and
+   * leaves this null, so the exchange reports the OAuth grant it always has rather than a method
+   * nobody verified.
+   */
+  auth_method: string | null;
+  /**
+   * The gate the interactive login cleared last on the way to this code — 'EmailVerification' or
+   * 'MFA' — when it had to clear one. The exchange then reports what the API grant for that step
+   * reports: the gate's event, with the session recording `auth_method` as the primary. Null when
+   * the password alone earned the code, and always null from the auto-redirect.
+   */
+  step_up_method: string | null;
 }
 
 export interface WorkOSIdentity extends Entity {

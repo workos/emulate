@@ -18,7 +18,6 @@ import {
   isExpired,
   expiresIn,
   assertAllowedRedirectUri,
-  sealSession,
   AUTH_METHOD_SESSION_VALUES,
   resolveResponseAuthMethod,
   resolveSessionResponseAuthMethod,
@@ -34,7 +33,13 @@ import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
 import type { WorkOSInvitation, WorkOSSSOAuthorization, WorkOSUser } from '../entities.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
-import { renderLoginPage, renderDeviceVerifyPage, renderOrganizationSelectPage } from '../login-page.js';
+import {
+  renderLoginPage,
+  renderDeviceVerifyPage,
+  renderOrganizationSelectPage,
+  renderPasswordPage,
+  renderCodePage,
+} from '../login-page.js';
 
 interface PendingAuth {
   user_id: string;
@@ -42,6 +47,27 @@ interface PendingAuth {
   auth_method: string;
   /** Carried across an MFA challenge so the second factor doesn't drop a pending invitation. */
   invitation_token?: string | null;
+}
+
+/**
+ * A password the interactive page has already checked, and how far past it the login has got.
+ * Every page that can follow — email verification, the second factor, the organization choice —
+ * carries a token for one of these rather than the password itself, so a secret never sits in a
+ * hidden field, and a POST that leaves the token out cannot skip a check.
+ */
+interface InteractiveLogin {
+  user_id: string;
+  /** The primary method, 'Password': what the session will record. */
+  auth_method: string;
+  expires_at: string;
+  /** The gate cleared last, 'EmailVerification' or 'MFA', which the exchange reports the way the API grant for it would. */
+  step_up_method: string | null;
+  /** The email_verification whose code the verification page is waiting for, while that gate is open. */
+  email_verification_id: string | null;
+  /** The authentication_challenge whose code the one-time-code page is waiting for, while that gate is open. */
+  challenge_id: string | null;
+  /** Whether the second factor has been cleared for this login; the factor stays enrolled, so the record has to say. */
+  mfa_verified: boolean;
 }
 
 /**
@@ -65,6 +91,12 @@ interface AuthorizeParams {
   clientId: string | null;
   /** Which organization the session should be scoped to, when the caller already knows. */
   organizationId: string | null;
+  /** What the interactive password page submitted; null until the form reaches that step. */
+  password: string | null;
+  /** What a verification page submitted — the emailed or the authenticator code; null until the form reaches such a step. */
+  code: string | null;
+  /** Proof from an earlier password page that this login is already verified, carried across every page after it. */
+  pendingToken: string | null;
 }
 
 export function authRoutes(ctx: RouteContext): void {
@@ -85,8 +117,33 @@ export function authRoutes(ctx: RouteContext): void {
     return orgs;
   }
 
+  /**
+   * The authorize parameters a page carries through its form, so the POST that follows finishes
+   * the request the GET started. `email` and `organization_id` are added by the pages that know
+   * them.
+   */
+  function carriedFields(params: AuthorizeParams): Record<string, string> {
+    const fields: Record<string, string> = { redirect_uri: params.redirectUri };
+    if (params.state) fields.state = params.state;
+    if (params.codeChallenge) fields.code_challenge = params.codeChallenge;
+    if (params.codeChallengeMethod) fields.code_challenge_method = params.codeChallengeMethod;
+    if (params.clientId) fields.client_id = params.clientId;
+    return fields;
+  }
+
   function resolveAndRedirect(c: any, params: AuthorizeParams) {
-    const { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint, clientId, organizationId } = params;
+    const {
+      redirectUri,
+      state,
+      codeChallenge,
+      codeChallengeMethod,
+      loginHint,
+      clientId,
+      organizationId,
+      password,
+      code,
+      pendingToken,
+    } = params;
 
     assertAllowedRedirectUri(redirectUri, store);
 
@@ -125,19 +182,230 @@ export function authRoutes(ctx: RouteContext): void {
       );
     }
 
+    const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
+
+    // The password step. Hosted AuthKit asks a user who has a password for it straight after
+    // the email, before any organization question, and that order is kept here. Opt-in, because
+    // the one-step email page is what every existing browser suite was written against. Only a
+    // user who has a password is asked: a passwordless account has nothing to check, and a page
+    // demanding a secret nobody set would be a dead end rather than fidelity.
+    //
+    // A verified login is remembered under a short-lived token rather than re-sent, so no later
+    // page carries the password, and a POST that arrives without a valid token lands back on the
+    // password page instead of skipping it. The same token carries the login through the gates
+    // the `password` grant puts between a correct password and a session — an unverified
+    // mailbox, then an enrolled second factor — so the browser flow cannot sign in an account
+    // the API would have stopped.
+    let login: InteractiveLogin | null = null;
+    // The token `login` is stored under, once a page after the password has needed one.
+    let loginToken: string | null = null;
+    /**
+     * Drop the record an expired login's open gate was waiting on: the email_verification or
+     * authentication_challenge only that login could have redeemed. Otherwise every abandoned
+     * gated login would keep one such record for the emulator's lifetime after its token went.
+     */
+    const releaseGate = (stale: InteractiveLogin) => {
+      if (stale.email_verification_id) ws.emailVerifications.delete(stale.email_verification_id);
+      if (stale.challenge_id) ws.authChallenges.delete(stale.challenge_id);
+    };
+    /**
+     * Persist `login` under its token for the page about to be served, minting the token the
+     * first time. A page that is never submitted leaves its token behind, and nothing would
+     * present it again to trip the expiry check, so expired entries are swept at each mint, each
+     * with the gate record it references: the store holds at most the logins from the last ten
+     * minutes rather than one per abandoned login.
+     */
+    const carryLogin = (): string => {
+      if (!loginToken) {
+        store.deleteDataByPrefix(STORE_KEY_PREFIXES.interactiveLogin, (v) => {
+          const stale = v as InteractiveLogin;
+          if (!isExpired(stale.expires_at)) return false;
+          releaseGate(stale);
+          return true;
+        });
+        loginToken = generateId('pending');
+      }
+      store.setData(`${STORE_KEY_PREFIXES.interactiveLogin}${loginToken}`, login);
+      return loginToken;
+    };
+
+    if (interactive && store.getData<boolean>(STORE_KEYS.interactivePassword) && user.password_hash) {
+      const key = pendingToken ? `${STORE_KEY_PREFIXES.interactiveLogin}${pendingToken}` : null;
+      let verified = key ? store.getData<InteractiveLogin>(key) : undefined;
+      if (key && verified && isExpired(verified.expires_at)) {
+        // Nothing will ever redeem an expired token, so drop it, and the record its gate was
+        // waiting on, rather than leave them behind.
+        releaseGate(verified);
+        store.deleteData(key);
+        verified = undefined;
+      }
+
+      const fields = carriedFields(params);
+      if (organizationId) fields.organization_id = organizationId;
+      // Back to the email page with the same authorize parameters, minus the address itself:
+      // "a different account" means a different email.
+      const backHref = `/user_management/authorize?${new URLSearchParams(fields).toString()}`;
+      /**
+       * The failure the matching API grant records, so a webhook consumer sees a browser login
+       * fail the way an API one does. The page is then re-rendered rather than the callback
+       * reached: a mistyped secret is something the user retries, not an outcome the app acts on.
+       */
+      const failStep = (method: string, error: { code: string; message: string }) =>
+        emitAuthenticationEvent({
+          eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+          method,
+          status: 'failed',
+          userId: user.id,
+          email: user.email,
+          ipAddress: c.req.header('x-forwarded-for') ?? null,
+          userAgent: c.req.header('user-agent') ?? null,
+          error,
+        });
+
+      if (verified && verified.user_id === user.id) {
+        login = verified;
+        loginToken = pendingToken;
+      } else {
+        const page = (error?: string) =>
+          renderPasswordPage({
+            email: user.email,
+            formAction: '/user_management/authorize',
+            hiddenFields: { ...fields, email: user.email },
+            backHref,
+            error,
+          });
+
+        if (password === null) return c.html(page());
+
+        if (!verifyPassword(password, user.password_hash)) {
+          failStep('Password', { code: 'invalid_credentials', message: `Invalid credentials for '${user.email}'.` });
+          return c.html(page('Incorrect password. Try again.'), 401);
+        }
+        login = {
+          user_id: user.id,
+          auth_method: 'Password',
+          expires_at: expiresIn(10),
+          step_up_method: null,
+          email_verification_id: null,
+          challenge_id: null,
+          mfa_verified: false,
+        };
+      }
+
+      // The gates, in the order hosted AuthKit shows them and the `password` grant checks them:
+      // the unverified mailbox first, since challenging a second factor for an account whose
+      // first contact detail is unproven would hand out a challenge production never issues.
+      // Each is a page that carries the token, so a POST that skips one — an organization
+      // choice, say — lands back on the gate it skipped. A code is spent on the gate it clears.
+      let unspentCode = code;
+      const codePage = (options: { title: string; lead: string; error?: string }) =>
+        c.html(
+          renderCodePage({
+            ...options,
+            email: user.email,
+            formAction: '/user_management/authorize',
+            hiddenFields: { ...fields, email: user.email, pending_authentication_token: carryLogin() },
+            backHref,
+          }),
+          options.error ? 401 : 200,
+        );
+
+      if (!user.email_verified) {
+        const verificationPage = (error?: string) =>
+          codePage({ title: 'Verify your email', lead: 'Enter the code we sent to', error });
+        let pending = login.email_verification_id ? ws.emailVerifications.get(login.email_verification_id) : undefined;
+        let error: string | undefined;
+        if (pending && isExpired(pending.expires_at)) {
+          ws.emailVerifications.delete(pending.id);
+          pending = undefined;
+          if (unspentCode !== null) {
+            failStep('EmailVerification', { code: 'expired_code', message: 'Code has expired' });
+            error = 'That code has expired. A new one has been sent.';
+          }
+        }
+        if (!pending) {
+          // Creating the record is what delivers the code, on the email_verification.created
+          // webhook, the way every emailed code leaves the emulator.
+          pending = ws.emailVerifications.insert({
+            object: 'email_verification',
+            user_id: user.id,
+            email: user.email,
+            code: generateCode(),
+            expires_at: expiresIn(10),
+          });
+          login.email_verification_id = pending.id;
+          return verificationPage(error);
+        }
+        if (unspentCode === null) return verificationPage();
+        if (pending.code !== unspentCode) {
+          failStep('EmailVerification', { code: 'invalid_code', message: 'Invalid code' });
+          return verificationPage('Incorrect code. Try again.');
+        }
+        // What the email-verification grant does with a good code, short of the session it would
+        // issue: the mailbox is proven for good, not only for this login.
+        ws.users.update(user.id, { email_verified: true });
+        ws.emailVerifications.delete(pending.id);
+        login.email_verification_id = null;
+        login.step_up_method = 'EmailVerification';
+        unspentCode = null;
+      }
+
+      const factors = ws.authFactors.findBy('user_id', user.id);
+      if (factors.length > 0 && !login.mfa_verified) {
+        const challengePage = (error?: string) =>
+          codePage({
+            title: 'Enter your one-time code',
+            lead: 'Enter the code from the authenticator enrolled for',
+            error,
+          });
+        let pending = login.challenge_id ? ws.authChallenges.get(login.challenge_id) : undefined;
+        let error: string | undefined;
+        if (pending && isExpired(pending.expires_at)) {
+          ws.authChallenges.delete(pending.id);
+          pending = undefined;
+          if (unspentCode !== null) {
+            failStep('MFA', { code: 'expired_challenge', message: 'Challenge has expired' });
+            error = 'That code has expired. A new challenge has been issued.';
+          }
+        }
+        if (!pending) {
+          // The challenge the `password` grant's mfa_challenge step creates, for the same factor.
+          // Its code is delivered nowhere, as a TOTP code is not; a test reads it from the stored
+          // challenge, as it does to finish the mfa-totp grant.
+          pending = ws.authChallenges.insert({
+            object: 'authentication_challenge',
+            user_id: user.id,
+            factor_id: factors[0].id,
+            expires_at: expiresIn(10),
+            code: generateCode(),
+          });
+          login.challenge_id = pending.id;
+          return challengePage(error);
+        }
+        if (unspentCode === null) return challengePage();
+        if (pending.code && unspentCode !== pending.code) {
+          failStep('MFA', { code: 'invalid_one_time_code', message: 'Invalid one-time code' });
+          return challengePage('Incorrect code. Try again.');
+        }
+        ws.authChallenges.delete(pending.id);
+        login.challenge_id = null;
+        login.mfa_verified = true;
+        login.step_up_method = 'MFA';
+      }
+    }
+
     // Hosted AuthKit asks which organization here, before it mints anything, so the client's
     // exchange always succeeds. Resolving it at the exchange instead would answer a browser
     // client with organization_selection_required, which it cannot act on mid-callback.
     // Interactive only: a headless caller drives the documented API and handles that response
     // itself, and this is the one mode that can put a page in front of a human.
-    if (!organizationId && store.getData<boolean>(STORE_KEYS.interactiveAuth)) {
+    if (!organizationId && interactive) {
       const selectable = activeOrganizationsFor(user.id);
       if (selectable.length > 1) {
-        const hiddenFields: Record<string, string> = { redirect_uri: redirectUri, email: user.email };
-        if (state) hiddenFields.state = state;
-        if (codeChallenge) hiddenFields.code_challenge = codeChallenge;
-        if (codeChallengeMethod) hiddenFields.code_challenge_method = codeChallengeMethod;
-        if (clientId) hiddenFields.client_id = clientId;
+        const hiddenFields: Record<string, string> = { ...carriedFields(params), email: user.email };
+        // The verified login rides along under its token, so an organization POST that leaves
+        // it out cannot skip the checks that got here.
+        if (login) hiddenFields.pending_authentication_token = carryLogin();
 
         return c.html(
           renderOrganizationSelectPage({
@@ -159,7 +427,12 @@ export function authRoutes(ctx: RouteContext): void {
       code_challenge: codeChallenge ?? null,
       code_challenge_method: codeChallengeMethod ?? null,
       client_id: clientId,
+      auth_method: login?.auth_method ?? null,
+      step_up_method: login?.step_up_method ?? null,
     });
+    // One code per verified login: the token is spent once it has minted something. Deleted
+    // rather than overwritten, so a long-lived emulator does not keep one entry per login.
+    if (loginToken) store.deleteData(`${STORE_KEY_PREFIXES.interactiveLogin}${loginToken}`);
 
     const redirect = new URL(redirectUri);
     redirect.searchParams.set('code', authCode.code);
@@ -220,6 +493,9 @@ export function authRoutes(ctx: RouteContext): void {
       loginHint,
       clientId,
       organizationId,
+      password: null,
+      code: null,
+      pendingToken: null,
     });
   });
 
@@ -238,6 +514,10 @@ export function authRoutes(ctx: RouteContext): void {
       loginHint: (form.email as string) ?? null,
       clientId: (form.client_id as string) ?? null,
       organizationId: (form.organization_id as string) ?? null,
+      // A string, even an empty one, is an attempt; absent means the form has not asked yet.
+      password: typeof form.password === 'string' ? form.password : null,
+      code: typeof form.code === 'string' ? form.code : null,
+      pendingToken: (form.pending_authentication_token as string) ?? null,
     });
   });
 
@@ -290,7 +570,6 @@ export function authRoutes(ctx: RouteContext): void {
     const body = await parseOAuthBody(c);
     const grantType = body.grant_type as string | undefined;
     const clientId = body.client_id as string | undefined;
-    const clientSecret = body.client_secret as string | undefined;
 
     // Every malformed-request failure on this endpoint is OAuth-shaped, and not by inference:
     // the spec's authenticate 400 lists `invalid_request` among its {error, error_description}
@@ -631,7 +910,13 @@ export function authRoutes(ctx: RouteContext): void {
         // redemption-time request parameter.
         grantClientId = authCode.client_id ?? undefined;
         ws.authCodes.delete(authCode.id);
-        authMethod = 'OAuth';
+        // The interactive password page records how it verified the user and, when the login had
+        // a gate to clear on the way, which one came last. The exchange then reports what the API
+        // grant for that step reports: the gate's event, with the session recording the primary
+        // method, exactly as the mfa-totp and email-verification grants leave it. The auto-redirect
+        // verifies nothing and leaves both null, so the grant stays the OAuth it always was.
+        authMethod = authCode.step_up_method ?? authCode.auth_method ?? 'OAuth';
+        if (authCode.step_up_method && authCode.auth_method) sessionAuthMethod = authCode.auth_method;
         break;
       }
 
@@ -1150,19 +1435,6 @@ export function authRoutes(ctx: RouteContext): void {
       client_id: tokenClientId ?? null,
     });
 
-    // Compute sealed session when client_secret is provided
-    const apiKey = c.req
-      .header('Authorization')
-      ?.replace(/^Bearer\s+/i, '')
-      .trim();
-    const sealKey = clientSecret ?? apiKey;
-    const sealedSession = sealKey
-      ? sealSession(
-          { access_token: accessToken, refresh_token: newRefreshToken.token, session_id: session.id },
-          sealKey,
-        )
-      : null;
-
     // Emit authentication event (hybrid Option B for action-specific events)
     if (isFreshLogin) {
       emitAuthenticationEvent({
@@ -1196,7 +1468,10 @@ export function authRoutes(ctx: RouteContext): void {
         : resolveSessionResponseAuthMethod(session.auth_method, {
             oauthProvider: updatedUser.oauth_provider,
           }),
-      sealed_session: sealedSession,
+      // Production never returns sealed_session for API requests: the SDKs seal client-side
+      // with a caller-supplied cookie password the server never sees. A non-null value here
+      // pushes authkit-nextjs session cookies past the 4096-byte browser cap (issue #93).
+      sealed_session: null,
       impersonator: updatedUser.impersonator ?? undefined,
     });
   };

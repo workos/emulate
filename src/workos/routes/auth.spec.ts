@@ -840,8 +840,13 @@ describe('Auth routes', () => {
   });
 
   // --- Sealed session tests ---
+  // Production never returns sealed_session for API requests: session sealing is done
+  // client-side by the SDKs with a caller-supplied cookie password the server never sees.
+  // A non-null value here pushes authkit-nextjs session cookies past the 4096-byte browser
+  // cap (issue #93), so the field is always null regardless of which credentials the
+  // request carries.
 
-  it('returns sealed_session when client_secret provided', async () => {
+  it('returns sealed_session: null even when client_secret is provided', async () => {
     await req('/user_management/users', {
       method: 'POST',
       body: JSON.stringify({ email: 'sealed@test.com', password: 'pw', email_verified: true }),
@@ -858,8 +863,46 @@ describe('Auth routes', () => {
       }),
     });
     const body = await json(res);
-    expect(body.sealed_session).toBeTruthy();
-    expect(typeof body.sealed_session).toBe('string');
+    expect(body.sealed_session).toBeNull();
+  });
+
+  it('returns sealed_session: null for the SDK refresh-token call shape', async () => {
+    // @workos-inc/node's authenticateWithRefreshToken sends both an Authorization: Bearer
+    // header (the API key) and the same key as client_secret in the body — exactly the
+    // shape that used to opt into sealing via `clientSecret ?? apiKey`.
+    await req('/user_management/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'sealed-refresh@test.com', password: 'pw', email_verified: true }),
+    });
+
+    const authRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'password',
+        client_id: 'test_client',
+        email: 'sealed-refresh@test.com',
+        password: 'pw',
+      }),
+    });
+    expect(authRes.status).toBe(200);
+    const authBody = await json(authRes);
+
+    const refreshRes = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sk_test_auth' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: authBody.refresh_token,
+        client_id: 'test_client',
+        client_secret: 'sk_test_auth',
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    const refreshBody = await json(refreshRes);
+    expect(refreshBody.sealed_session).toBeNull();
+    expect(refreshBody.access_token).toBeTruthy();
+    expect(refreshBody.refresh_token).toBeTruthy();
   });
 
   // --- Grant type alias tests ---

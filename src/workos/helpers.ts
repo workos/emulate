@@ -1,4 +1,4 @@
-import { randomBytes, createHash, createCipheriv } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { isIPv6 } from 'node:net';
 import { domainToASCII } from 'node:url';
 import {
@@ -1169,17 +1169,4 @@ export function formatWebhookEndpoint(
     created_at: ep.created_at,
     updated_at: ep.updated_at,
   };
-}
-
-export function sealSession(
-  data: { access_token: string; refresh_token: string; session_id: string },
-  apiKey: string,
-): string {
-  const key = createHash('sha256').update(apiKey).digest();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const plaintext = JSON.stringify(data);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, encrypted]).toString('base64');
 }
