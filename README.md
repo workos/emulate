@@ -96,6 +96,7 @@ workos-emulate
 workos-emulate --port 9100 --json
 workos-emulate --seed workos-emulate.config.yaml
 workos-emulate --interactive          # serve login pages for E2E browser testing
+workos-emulate --interactive-password # ...and ask a user who has a password for it
 workos-emulate --signing-key ci-key.pem --issuer https://api.workos.com  # stable JWKS and iss
 workos-emulate --redirect-hosts app.example.test  # allow a non-localhost redirect_uri
 workos-emulate --version
@@ -545,7 +546,7 @@ Point your SDK's base URL at the emulator and follow the AuthKit quickstart exac
 
 1. **Create a user** — `POST /user_management/users` → a `user.created` webhook arrives.
 2. **Redirect to AuthKit** — send the browser to `GET /user_management/authorize?redirect_uri=...&state=...`. By default the emulator immediately redirects back to your callback with a `code`; with `--interactive` it serves a real login page first.
-3. **Exchange the code** — your callback calls `POST /user_management/authenticate` with `grant_type=authorization_code`. You get back the user, `access_token`, and `refresh_token` — and `session.created` plus `authentication.oauth_succeeded` webhooks arrive.
+3. **Exchange the code** — your callback calls `POST /user_management/authenticate` with `grant_type=authorization_code`. You get back the user, `access_token`, and `refresh_token` — and `session.created` plus `authentication.oauth_succeeded` webhooks arrive (`authentication.password_succeeded` instead, when the [interactive password page](#requiring-a-password) checked the login).
 4. **Other methods work the same way** — password, Magic Auth, email verification, MFA, and SSO logins all emit their spec-named `authentication.*_succeeded` events; failed attempts emit `authentication.*_failed` with an `error: { code, message }` object.
 
 Codes that WorkOS would deliver by email are delivered to you in the webhook payload instead: `magic_auth.created` carries the Magic Auth `code`, `password_reset.created` carries the reset `token`, and `email_verification.created` carries the verification `code`. Your test can drive the whole flow from webhooks alone — see `src/e2e.spec.ts` for a complete worked example.
@@ -1211,8 +1212,9 @@ When interactive mode is on:
 1. Your app redirects to `/sso/authorize?connection=...&redirect_uri=...` (or `/user_management/authorize?...`)
 2. The emulator serves a login page instead of auto-redirecting
 3. The browser (or agent) fills in the email field and submits the form
-4. If the user belongs to more than one organization, the emulator asks which one, as hosted AuthKit does
-5. The emulator creates an auth code and redirects back to your app's callback URL
+4. With the [password option](#requiring-a-password) on, a user who has a password is asked for it next
+5. If the user belongs to more than one organization, the emulator asks which one, as hosted AuthKit does
+6. The emulator creates an auth code and redirects back to your app's callback URL
 
 The `login_hint` parameter pre-fills the email field, so agent browsers can skip typing if desired.
 
@@ -1234,6 +1236,40 @@ test('multi-organization login', async ({ page }) => {
 
   // Only shown when the user belongs to several organizations
   await page.click('text=Acme');
+
+  await expect(page).toHaveURL(/dashboard/);
+});
+```
+
+### Requiring a password
+
+The login page asks for an email and nothing else, so a suite signs in as anyone with one form fill. Pass `--interactive-password` (CLI) or `interactiveAuth: { password: true }` (programmatic) to add the step hosted AuthKit puts next: a user who has a password is asked for it after the email and before any organization question.
+
+```bash
+workos-emulate --interactive-password --seed workos-emulate.config.yaml
+```
+
+```ts
+const emulator = await createEmulator({
+  interactiveAuth: { password: true },
+  seed: { users: [{ email: 'alice@example.com', password: 'correct-horse' }] },
+});
+```
+
+- The page shows the email read-only above an `input[name="password"]`, with a "Use a different account" link back to the email page. A user without a password skips it, so a sign-up or a passwordless seed behaves exactly as before.
+- A wrong password re-renders the page with an inline error (HTTP 401) and emits `authentication.password_failed` with `invalid_credentials`, the same event the `password` grant emits. Nothing reaches your callback until the password is right.
+- Once it is, the code the callback receives remembers how it was earned: the exchange emits `authentication.password_succeeded` rather than `authentication.oauth_succeeded`, and the response carries `"authentication_method": "Password"`.
+- The organization page, when there is one, follows the password page and carries a short-lived token rather than the password. Posting an `organization_id` without that token lands back on the password page.
+- MFA challenges and the email-verification gate are not part of the page. Plain `--interactive` is unchanged.
+
+```ts
+test('password login', async ({ page }) => {
+  await page.goto('http://localhost:3000/login');
+  await page.fill('input[name="email"]', 'alice@example.com');
+  await page.click('button[type="submit"]');
+
+  await page.fill('input[name="password"]', 'correct-horse');
+  await page.click('button[type="submit"]');
 
   await expect(page).toHaveURL(/dashboard/);
 });

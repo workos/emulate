@@ -33,7 +33,12 @@ import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
 import type { WorkOSInvitation, WorkOSSSOAuthorization, WorkOSUser } from '../entities.js';
 import { STORE_KEYS, STORE_KEY_PREFIXES } from '../constants.js';
-import { renderLoginPage, renderDeviceVerifyPage, renderOrganizationSelectPage } from '../login-page.js';
+import {
+  renderLoginPage,
+  renderDeviceVerifyPage,
+  renderOrganizationSelectPage,
+  renderPasswordPage,
+} from '../login-page.js';
 
 interface PendingAuth {
   user_id: string;
@@ -41,6 +46,17 @@ interface PendingAuth {
   auth_method: string;
   /** Carried across an MFA challenge so the second factor doesn't drop a pending invitation. */
   invitation_token?: string | null;
+}
+
+/**
+ * A password the interactive page has already checked. The organization page that can follow
+ * carries a token for one of these rather than the password itself, so a secret never sits in a
+ * hidden field, and an organization POST that leaves the token out cannot skip the check.
+ */
+interface InteractiveLogin {
+  user_id: string;
+  auth_method: string;
+  expires_at: string;
 }
 
 /**
@@ -64,6 +80,10 @@ interface AuthorizeParams {
   clientId: string | null;
   /** Which organization the session should be scoped to, when the caller already knows. */
   organizationId: string | null;
+  /** What the interactive password page submitted; null until the form reaches that step. */
+  password: string | null;
+  /** Proof from an earlier password page that this login is already verified, carried across the organization page. */
+  pendingToken: string | null;
 }
 
 export function authRoutes(ctx: RouteContext): void {
@@ -84,8 +104,32 @@ export function authRoutes(ctx: RouteContext): void {
     return orgs;
   }
 
+  /**
+   * The authorize parameters a page carries through its form, so the POST that follows finishes
+   * the request the GET started. `email` and `organization_id` are added by the pages that know
+   * them.
+   */
+  function carriedFields(params: AuthorizeParams): Record<string, string> {
+    const fields: Record<string, string> = { redirect_uri: params.redirectUri };
+    if (params.state) fields.state = params.state;
+    if (params.codeChallenge) fields.code_challenge = params.codeChallenge;
+    if (params.codeChallengeMethod) fields.code_challenge_method = params.codeChallengeMethod;
+    if (params.clientId) fields.client_id = params.clientId;
+    return fields;
+  }
+
   function resolveAndRedirect(c: any, params: AuthorizeParams) {
-    const { redirectUri, state, codeChallenge, codeChallengeMethod, loginHint, clientId, organizationId } = params;
+    const {
+      redirectUri,
+      state,
+      codeChallenge,
+      codeChallengeMethod,
+      loginHint,
+      clientId,
+      organizationId,
+      password,
+      pendingToken,
+    } = params;
 
     assertAllowedRedirectUri(redirectUri, store);
 
@@ -124,19 +168,86 @@ export function authRoutes(ctx: RouteContext): void {
       );
     }
 
+    const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
+
+    // The password step. Hosted AuthKit asks a user who has a password for it straight after
+    // the email, before any organization question, and that order is kept here. Opt-in, because
+    // the one-step email page is what every existing browser suite was written against. Only a
+    // user who has a password is asked: a passwordless account has nothing to check, and a page
+    // demanding a secret nobody set would be a dead end rather than fidelity.
+    //
+    // A verified login is remembered under a short-lived token rather than re-sent, so the
+    // organization page never carries the password, and an organization POST that arrives
+    // without a valid token lands back on the password page instead of skipping it.
+    let codeAuthMethod: string | null = null;
+    let verifiedLoginKey: string | null = null;
+    if (interactive && store.getData<boolean>(STORE_KEYS.interactivePassword) && user.password_hash) {
+      const key = pendingToken ? `${STORE_KEY_PREFIXES.interactiveLogin}${pendingToken}` : null;
+      const verified = key ? store.getData<InteractiveLogin>(key) : undefined;
+      if (verified && verified.user_id === user.id && !isExpired(verified.expires_at)) {
+        codeAuthMethod = verified.auth_method;
+        verifiedLoginKey = key;
+      } else {
+        const fields = carriedFields(params);
+        if (organizationId) fields.organization_id = organizationId;
+        // Back to the email page with the same authorize parameters, minus the address itself:
+        // "a different account" means a different email.
+        const backHref = `/user_management/authorize?${new URLSearchParams(fields).toString()}`;
+        const page = (error?: string) =>
+          renderPasswordPage({
+            email: user.email,
+            formAction: '/user_management/authorize',
+            hiddenFields: { ...fields, email: user.email },
+            backHref,
+            error,
+          });
+
+        if (password === null) return c.html(page());
+
+        if (!verifyPassword(password, user.password_hash)) {
+          // The same failure the `password` grant records, so a webhook consumer sees a browser
+          // login fail the way an API one does. Re-rendered rather than sent to the callback: a
+          // mistyped password is something the user retries, not an outcome the app acts on.
+          emitAuthenticationEvent({
+            eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
+            method: 'Password',
+            status: 'failed',
+            userId: user.id,
+            email: user.email,
+            ipAddress: c.req.header('x-forwarded-for') ?? null,
+            userAgent: c.req.header('user-agent') ?? null,
+            error: { code: 'invalid_credentials', message: `Invalid credentials for '${user.email}'.` },
+          });
+          return c.html(page('Incorrect password. Try again.'), 401);
+        }
+        codeAuthMethod = 'Password';
+      }
+    }
+
     // Hosted AuthKit asks which organization here, before it mints anything, so the client's
     // exchange always succeeds. Resolving it at the exchange instead would answer a browser
     // client with organization_selection_required, which it cannot act on mid-callback.
     // Interactive only: a headless caller drives the documented API and handles that response
     // itself, and this is the one mode that can put a page in front of a human.
-    if (!organizationId && store.getData<boolean>(STORE_KEYS.interactiveAuth)) {
+    if (!organizationId && interactive) {
       const selectable = activeOrganizationsFor(user.id);
       if (selectable.length > 1) {
-        const hiddenFields: Record<string, string> = { redirect_uri: redirectUri, email: user.email };
-        if (state) hiddenFields.state = state;
-        if (codeChallenge) hiddenFields.code_challenge = codeChallenge;
-        if (codeChallengeMethod) hiddenFields.code_challenge_method = codeChallengeMethod;
-        if (clientId) hiddenFields.client_id = clientId;
+        const hiddenFields: Record<string, string> = { ...carriedFields(params), email: user.email };
+        if (codeAuthMethod) {
+          // Reuse the token that got here when there is one; otherwise this is the first page
+          // after the password, and the check it just passed is what the token records.
+          let token = verifiedLoginKey ? pendingToken : null;
+          if (!token) {
+            token = generateId('pending');
+            const login: InteractiveLogin = {
+              user_id: user.id,
+              auth_method: codeAuthMethod,
+              expires_at: expiresIn(10),
+            };
+            store.setData(`${STORE_KEY_PREFIXES.interactiveLogin}${token}`, login);
+          }
+          hiddenFields.pending_authentication_token = token;
+        }
 
         return c.html(
           renderOrganizationSelectPage({
@@ -158,7 +269,10 @@ export function authRoutes(ctx: RouteContext): void {
       code_challenge: codeChallenge ?? null,
       code_challenge_method: codeChallengeMethod ?? null,
       client_id: clientId,
+      auth_method: codeAuthMethod,
     });
+    // One code per verified login: the token is spent once it has minted something.
+    if (verifiedLoginKey) store.setData(verifiedLoginKey, undefined);
 
     const redirect = new URL(redirectUri);
     redirect.searchParams.set('code', authCode.code);
@@ -219,6 +333,8 @@ export function authRoutes(ctx: RouteContext): void {
       loginHint,
       clientId,
       organizationId,
+      password: null,
+      pendingToken: null,
     });
   });
 
@@ -237,6 +353,9 @@ export function authRoutes(ctx: RouteContext): void {
       loginHint: (form.email as string) ?? null,
       clientId: (form.client_id as string) ?? null,
       organizationId: (form.organization_id as string) ?? null,
+      // A string, even an empty one, is an attempt; absent means the form has not asked yet.
+      password: typeof form.password === 'string' ? form.password : null,
+      pendingToken: (form.pending_authentication_token as string) ?? null,
     });
   });
 
@@ -629,7 +748,9 @@ export function authRoutes(ctx: RouteContext): void {
         // redemption-time request parameter.
         grantClientId = authCode.client_id ?? undefined;
         ws.authCodes.delete(authCode.id);
-        authMethod = 'OAuth';
+        // The interactive password page records how it verified the user; the auto-redirect
+        // verifies nothing and leaves this null, so the grant stays the OAuth it always was.
+        authMethod = authCode.auth_method ?? 'OAuth';
         break;
       }
 

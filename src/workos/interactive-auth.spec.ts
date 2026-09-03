@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { createEmulator, type Emulator } from '../index.js';
+import { getWorkOSStore } from './store.js';
 
 describe('Interactive Auth Mode', () => {
   let emulator: Emulator;
@@ -200,6 +201,211 @@ describe('Interactive Auth Mode after reset()', () => {
       expect(after.headers.get('content-type')).toContain('text/html');
     } finally {
       await emulator.close();
+    }
+  });
+});
+
+/**
+ * The opt-in password step. Plain interactive mode stays one form fill per login; only
+ * `interactiveAuth: { password: true }` puts a password page between the email and the code.
+ */
+describe('Interactive Auth Mode with the password step', () => {
+  let emulator: Emulator;
+  const CALLBACK = 'http://localhost:3000/callback';
+
+  const submit = (fields: Record<string, string>) =>
+    fetch(`${emulator.url}/user_management/authorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ redirect_uri: CALLBACK, state: 's1', client_id: 'client_test', ...fields }),
+      redirect: 'manual',
+    });
+
+  const exchange = async (location: string) => {
+    const code = new URL(location).searchParams.get('code');
+    const res = await fetch(`${emulator.url}/user_management/authenticate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'client_test' }),
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as Record<string, any>;
+  };
+
+  const authEvents = () =>
+    getWorkOSStore(emulator.store)
+      .events.all()
+      .filter((e: { event: string }) => e.event.startsWith('authentication.'))
+      .map((e: { event: string; data: Record<string, unknown> }) => ({ event: e.event, data: e.data }));
+
+  beforeAll(async () => {
+    emulator = await createEmulator({
+      port: 0,
+      interactiveAuth: { password: true },
+      seed: {
+        users: [
+          { email: 'locked@example.com', password: 'correct-horse' },
+          { email: 'open@example.com' },
+          { email: 'multi@example.com', password: 'correct-horse' },
+        ],
+        organizations: [
+          { name: 'Alpha', memberships: [{ email: 'multi@example.com' }] },
+          { name: 'Beta', memberships: [{ email: 'multi@example.com' }] },
+        ],
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await emulator.close();
+  });
+
+  it('asks a user who has a password for it after the email, instead of minting a code', async () => {
+    const res = await submit({ email: 'locked@example.com' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    const html = await res.text();
+    expect(html).toContain('name="password"');
+    // The email travels as a hidden field so the POST checks against the same account.
+    expect(html).toContain('name="email" value="locked@example.com"');
+    // And the way back keeps the authorize parameters without the address.
+    expect(html).toMatch(/href="\/user_management\/authorize\?redirect_uri=[^"]*state=s1[^"]*"/);
+    expect(html).not.toMatch(/href="[^"]*email=/);
+  });
+
+  it('skips the page for a user without a password', async () => {
+    const res = await submit({ email: 'open@example.com' });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toContain('code=');
+  });
+
+  it('re-renders with an inline error on a wrong password and emits authentication.password_failed', async () => {
+    const before = authEvents().length;
+    const res = await submit({ email: 'locked@example.com', password: 'not-the-password' });
+    expect(res.status).toBe(401);
+    const html = await res.text();
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('name="password"');
+    expect(html).not.toContain('not-the-password');
+
+    const failed = authEvents().slice(before);
+    expect(failed).toHaveLength(1);
+    expect(failed[0].event).toBe('authentication.password_failed');
+    expect(failed[0].data).toMatchObject({ email: 'locked@example.com', error: { code: 'invalid_credentials' } });
+  });
+
+  it('mints a code after the right password, and the exchange reports Password', async () => {
+    const before = authEvents().length;
+    const res = await submit({ email: 'locked@example.com', password: 'correct-horse' });
+    expect(res.status).toBe(302);
+    const location = res.headers.get('location') ?? '';
+    expect(location).toContain(`${CALLBACK}?code=`);
+    expect(location).toContain('state=s1');
+
+    const body = await exchange(location);
+    expect(body.user.email).toBe('locked@example.com');
+    expect(body.authentication_method).toBe('Password');
+
+    const events = authEvents()
+      .slice(before)
+      .map((e) => e.event);
+    expect(events).toEqual(['authentication.password_succeeded']);
+  });
+
+  it('asks for the organization after the password, carrying a token rather than the password', async () => {
+    const first = await submit({ email: 'multi@example.com' });
+    expect(first.status).toBe(200);
+    const firstHtml = await first.text();
+    expect(firstHtml).toContain('name="password"');
+    expect(firstHtml).not.toContain('Select an organization');
+
+    const second = await submit({ email: 'multi@example.com', password: 'correct-horse' });
+    expect(second.status).toBe(200);
+    const orgHtml = await second.text();
+    expect(orgHtml).toContain('Select an organization');
+    expect(orgHtml).not.toContain('correct-horse');
+    const token = orgHtml.match(/name="pending_authentication_token" value="([^"]+)"/)?.[1] ?? '';
+    expect(token).not.toBe('');
+    const orgId = orgHtml.match(/name="organization_id" value="([^"]+)"/)?.[1] ?? '';
+    expect(orgId).not.toBe('');
+
+    const third = await submit({
+      email: 'multi@example.com',
+      organization_id: orgId,
+      pending_authentication_token: token,
+    });
+    expect(third.status).toBe(302);
+    const body = await exchange(third.headers.get('location') ?? '');
+    expect(body.organization_id).toBe(orgId);
+    expect(body.authentication_method).toBe('Password');
+
+    // Spent: presenting the same token again lands back on the password page.
+    const replay = await submit({
+      email: 'multi@example.com',
+      organization_id: orgId,
+      pending_authentication_token: token,
+    });
+    expect(replay.status).toBe(200);
+    expect(await replay.text()).toContain('name="password"');
+  });
+
+  it('sends an organization choice that arrives without a verified login back to the password page', async () => {
+    const list = await fetch(`${emulator.url}/organizations`, {
+      headers: { Authorization: `Bearer ${emulator.apiKey}` },
+    });
+    const orgId = ((await list.json()) as { data: Array<{ id: string }> }).data[0].id;
+
+    const bypass = await submit({ email: 'multi@example.com', organization_id: orgId });
+    expect(bypass.status).toBe(200);
+    const html = await bypass.text();
+    expect(html).toContain('name="password"');
+    // The pre-selected organization survives the detour.
+    expect(html).toContain(`name="organization_id" value="${orgId}"`);
+
+    const done = await submit({ email: 'multi@example.com', organization_id: orgId, password: 'correct-horse' });
+    expect(done.status).toBe(302);
+    const body = await exchange(done.headers.get('location') ?? '');
+    expect(body.organization_id).toBe(orgId);
+  });
+
+  it('is off under plain interactiveAuth: true, which stays one step', async () => {
+    const plain = await createEmulator({
+      port: 0,
+      interactiveAuth: true,
+      seed: { users: [{ email: 'plain@example.com', password: 'pw' }] },
+    });
+    try {
+      const res = await fetch(`${plain.url}/user_management/authorize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ redirect_uri: CALLBACK, email: 'plain@example.com' }),
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toContain('code=');
+    } finally {
+      await plain.close();
+    }
+  });
+
+  it('survives reset()', async () => {
+    const own = await createEmulator({
+      port: 0,
+      interactiveAuth: { password: true },
+      seed: { users: [{ email: 'again@example.com', password: 'pw' }] },
+    });
+    try {
+      own.reset();
+      const res = await fetch(`${own.url}/user_management/authorize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ redirect_uri: CALLBACK, email: 'again@example.com' }),
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain('name="password"');
+    } finally {
+      await own.close();
     }
   });
 });

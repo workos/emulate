@@ -231,3 +231,73 @@ function renderHiddenInputs(fields: Record<string, string>): string {
 function esc(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+export interface PasswordPageOptions {
+  /** Who is signing in, shown read-only so the page reads as the second step of one sign-in. */
+  email: string;
+  formAction: string;
+  /** Carried through with `email` included, so the POST checks the password against the account the previous page resolved. */
+  hiddenFields: Record<string, string>;
+  /** Where "Use a different account" leads: the email page, with the same authorize parameters. */
+  backHref: string;
+  /** Shown above the field after a failed attempt. */
+  error?: string;
+}
+
+/**
+ * The screen hosted AuthKit shows a user who has a password: after the email, before any
+ * organization question. Served only when the interactive password option is on, because the
+ * one-step email page is what existing browser suites were written against.
+ *
+ * A failed attempt re-renders this page with the error inline rather than redirecting to the
+ * callback with an error parameter, the way an unknown email does. A mistyped password is
+ * something the user retries on the spot; the application only hears about the login once it
+ * has succeeded. No JavaScript, like the other pages, so a plain form POST is the whole protocol.
+ */
+export function renderPasswordPage(options: PasswordPageOptions): string {
+  const { email, formAction, hiddenFields, backHref, error } = options;
+
+  const hiddenInputs = renderHiddenInputs(hiddenFields);
+  const alert = error ? `\n    <p class="error" role="alert">${esc(error)}</p>` : '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Enter your password — WorkOS Emulate</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f5;display:flex;justify-content:center;align-items:center;min-height:100vh}
+    .card{background:#fff;border-radius:8px;padding:40px;width:400px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+    .badge{display:inline-block;background:#6366f1;color:#fff;font-size:11px;font-weight:600;padding:3px 8px;border-radius:4px;margin-bottom:16px;letter-spacing:.5px}
+    h1{font-size:22px;font-weight:600;margin-bottom:8px}
+    .sub{color:#6b7280;font-size:14px;margin-bottom:24px}
+    .sub strong{color:#111827;font-weight:500}
+    .error{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:6px;padding:10px 12px;font-size:13px;margin-bottom:16px}
+    label{display:block;font-size:14px;font-weight:500;margin-bottom:6px}
+    input[type="password"]{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;outline:none}
+    input[type="password"]:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.1)}
+    input[aria-invalid="true"]{border-color:#f87171}
+    button{width:100%;padding:10px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;margin-top:16px}
+    button:hover{background:#4f46e5}
+    .switch{display:block;margin-top:20px;font-size:13px;color:#6b7280;text-align:center;text-decoration:none}
+    .switch:hover{color:#111827;text-decoration:underline}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">WORKOS EMULATE</div>
+    <h1>Enter your password</h1>
+    <p class="sub">Signing in as <strong>${esc(email)}</strong>.</p>${alert}
+    <form method="POST" action="${esc(formAction)}">
+        ${hiddenInputs}
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autofocus autocomplete="current-password"${error ? ' aria-invalid="true"' : ''}>
+        <button type="submit">Continue</button>
+    </form>
+    <a class="switch" href="${esc(backHref)}">Use a different account</a>
+  </div>
+</body>
+</html>`;
+}
