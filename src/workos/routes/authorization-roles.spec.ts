@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
-import { workosPlugin, seedFromConfig } from '../index.js';
+import { workosPlugin, seedFromConfig, getWorkOSStore } from '../index.js';
 import { validateSeedConfig } from '../config-validator.js';
 
 const apiKeys: ApiKeyMap = { sk_test_role: { environment: 'test' } };
@@ -12,9 +12,12 @@ function createTestApp() {
 
 describe('Authorization environment role routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: ReturnType<typeof createTestApp>['store'];
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -275,6 +278,68 @@ describe('Authorization environment role routes', () => {
 
     const role = await json(await req('/authorization/roles/atomic'));
     expect(role.permissions).toEqual(['keep']);
+  });
+
+  it('emits role.updated only when the permission set changes', async () => {
+    for (const slug of ['ev-a', 'ev-b']) {
+      await req('/authorization/permissions', { method: 'POST', body: JSON.stringify({ slug, name: slug }) });
+    }
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'evented', name: 'Evented' }) });
+    const updates = () => getWorkOSStore(store).events.findBy('event', 'role.updated');
+
+    await req('/authorization/roles/evented/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['ev-a'] }),
+    });
+    expect(updates()).toHaveLength(1);
+    expect(updates()[0]!.data).toMatchObject({ slug: 'evented', permissions: ['ev-a'] });
+
+    // The same set again changes nothing and emits nothing
+    await req('/authorization/roles/evented/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['ev-a'] }),
+    });
+    expect(updates()).toHaveLength(1);
+
+    await req('/authorization/roles/evented/permissions', { method: 'POST', body: JSON.stringify({ slug: 'ev-b' }) });
+    expect(updates()).toHaveLength(2);
+    expect([...(updates()[1]!.data as any).permissions].sort()).toEqual(['ev-a', 'ev-b']);
+
+    // Re-attaching is a no-op
+    await req('/authorization/roles/evented/permissions', { method: 'POST', body: JSON.stringify({ slug: 'ev-b' }) });
+    expect(updates()).toHaveLength(2);
+  });
+
+  it('emits role.deleted without permissions, as production does', async () => {
+    await req('/authorization/permissions', { method: 'POST', body: JSON.stringify({ slug: 'gone', name: 'Gone' }) });
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'doomed', name: 'Doomed' }) });
+    await req('/authorization/roles/doomed/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['gone'] }),
+    });
+
+    await req('/authorization/roles/doomed', { method: 'DELETE' });
+
+    const deleted = getWorkOSStore(store).events.findBy('event', 'role.deleted');
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.data).toMatchObject({ slug: 'doomed', resource_type_slug: 'organization' });
+    expect(deleted[0]!.data).not.toHaveProperty('permissions');
+  });
+
+  it('formats a directly inserted role without a resource type using the default', async () => {
+    getWorkOSStore(store).roles.insert({
+      object: 'role',
+      slug: 'legacy',
+      name: 'Legacy',
+      description: null,
+      type: 'EnvironmentRole',
+      organization_id: null,
+      is_default_role: false,
+      priority: 0,
+    });
+    const res = await req('/authorization/roles/legacy');
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ resource_type_slug: 'organization', permissions: [] });
   });
 
   it('creates role with default flag', async () => {

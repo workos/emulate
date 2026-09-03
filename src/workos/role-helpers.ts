@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import {
   type RouteContext,
+  type Store,
   WorkOSApiError,
   notFound,
   validationError,
@@ -9,8 +10,9 @@ import {
 } from '../core/index.js';
 import type { WorkOSStore } from './store.js';
 import type { WorkOSRole, WorkOSPermission } from './entities.js';
+import type { EventBus } from './event-bus.js';
 import { getWorkOSStore } from './store.js';
-import { DEFAULT_RESOURCE_TYPE_SLUG, isValidResourceTypeSlug } from './constants.js';
+import { DEFAULT_RESOURCE_TYPE_SLUG, EVENTS, STORE_KEYS, isValidResourceTypeSlug } from './constants.js';
 import { formatRole, formatPermission, formatListResponse } from './helpers.js';
 
 export function findEnvRole(ws: WorkOSStore, slug: string): WorkOSRole | undefined {
@@ -80,6 +82,19 @@ export function replaceRolePermissions(ws: WorkOSStore, roleId: string, permissi
     ws.rolePermissions.insert({ role_id: roleId, permission_id: perm.id });
   }
   return true;
+}
+
+/**
+ * Production emits `role.updated` (or `organization_role.updated`) when a
+ * role's permission set changes through the permissions endpoints without
+ * touching the role row, so this goes to the bus directly rather than through
+ * the collection hooks.
+ */
+export function emitRolePermissionsUpdated(store: Store, ws: WorkOSStore, role: WorkOSRole): void {
+  store.getData<EventBus>(STORE_KEYS.eventBus)?.emit({
+    event: role.type === 'OrganizationRole' ? EVENTS.organizationRoleUpdated : EVENTS.roleUpdated,
+    data: formatRole(role, ws),
+  });
 }
 
 export interface RoleRouteConfig {
@@ -180,10 +195,12 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
   app.delete(`${pathPrefix}/:slug`, (c) => {
     const role = config.requireRole(ws, c);
 
+    // The role row goes first so the deleted event, emitted from the collection
+    // hook, can still resolve the role's permissions; the joins cascade after.
+    ws.roles.delete(role.id);
     ws.rolePermissions.deleteBy('role_id', role.id);
     ws.roleAssignments.deleteBy('role_id', role.id);
 
-    ws.roles.delete(role.id);
     return c.body(null, 204);
   });
 
@@ -210,7 +227,9 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
       throw validationError('permissions must be an array of slugs', [{ field: 'permissions', code: 'invalid' }]);
     }
 
-    replaceRolePermissions(ws, role.id, permissionSlugs as string[]);
+    if (replaceRolePermissions(ws, role.id, permissionSlugs as string[])) {
+      emitRolePermissionsUpdated(store, ws, role);
+    }
     return c.json(formatRole(role, ws));
   });
 
@@ -225,9 +244,12 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
     const permission = ws.permissions.findOneBy('slug', slug);
     if (!permission) throw notFound('Permission');
 
-    // Re-attaching is a no-op rather than a duplicate join row.
+    // Re-attaching is a no-op rather than a duplicate join row, and emits nothing.
     const attached = ws.rolePermissions.findBy('role_id', role.id).some((rp) => rp.permission_id === permission.id);
-    if (!attached) ws.rolePermissions.insert({ role_id: role.id, permission_id: permission.id });
+    if (!attached) {
+      ws.rolePermissions.insert({ role_id: role.id, permission_id: permission.id });
+      emitRolePermissionsUpdated(store, ws, role);
+    }
 
     return c.json(formatRole(role, ws));
   });

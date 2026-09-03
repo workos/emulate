@@ -1003,11 +1003,18 @@ export const workosPlugin: ServicePlugin = {
           event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleUpdated : EVENTS.roleUpdated,
           data: formatRole(r, ws),
         }),
-      onDelete: (r) =>
-        eventBus.emit({
-          event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleDeleted : EVENTS.roleDeleted,
-          data: formatRole(r, ws),
-        }),
+      onDelete: (r) => {
+        // The role routes delete the role row before cascading its joins, so the
+        // permissions are still resolvable here. Production's organization_role.deleted
+        // carries them; its role.deleted never does.
+        const data = formatRole(r, ws);
+        if (r.type === 'OrganizationRole') {
+          eventBus.emit({ event: EVENTS.organizationRoleDeleted, data });
+        } else {
+          delete data.permissions;
+          eventBus.emit({ event: EVENTS.roleDeleted, data });
+        }
+      },
     });
     ws.permissions.setHooks({
       onInsert: (p) => eventBus.emit({ event: EVENTS.permissionCreated, data: formatPermission(p) }),

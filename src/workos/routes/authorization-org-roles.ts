@@ -1,7 +1,7 @@
 import { type RouteContext, notFound, validationError, parseJsonBody } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatRole } from '../helpers.js';
-import { findOrgRole, requireOrgRole, registerRoleRoutes } from '../role-helpers.js';
+import { emitRolePermissionsUpdated, findOrgRole, requireOrgRole, registerRoleRoutes } from '../role-helpers.js';
 
 export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -67,6 +67,7 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
     if (!rp) throw notFound('RolePermission');
 
     ws.rolePermissions.delete(rp.id);
+    emitRolePermissionsUpdated(store, ws, role);
     // The spec answers with the updated role, not an empty 204.
     return c.json(formatRole(role, ws));
   });
