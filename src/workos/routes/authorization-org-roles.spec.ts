@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
-import { workosPlugin } from '../index.js';
+import { workosPlugin, getWorkOSStore } from '../index.js';
 
 const apiKeys: ApiKeyMap = { sk_test_orgrole: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_orgrole', 'Content-Type': 'application/json' };
@@ -11,9 +11,12 @@ function createTestApp() {
 
 describe('Authorization org role routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: ReturnType<typeof createTestApp>['store'];
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -38,6 +41,17 @@ describe('Authorization org role routes', () => {
     expect(role.type).toBe('OrganizationRole');
     expect(role.organization_id).toBe(org.id);
     expect(role.slug).toBe('org-admin');
+    expect(role.resource_type_slug).toBe('organization');
+  });
+
+  it('preserves an org role resource type', async () => {
+    const org = await createOrg('Scoped Org');
+    const res = await req(`/authorization/organizations/${org.id}/roles`, {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'doc-editor', name: 'Doc Editor', resource_type_slug: 'document' }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json(res)).resource_type_slug).toBe('document');
   });
 
   it('rejects duplicate slug within same org', async () => {
@@ -50,7 +64,8 @@ describe('Authorization org role routes', () => {
       method: 'POST',
       body: JSON.stringify({ slug: 'dup', name: 'Dup 2' }),
     });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
+    expect((await json(res)).code).toBe('organization_role_slug_conflict');
   });
 
   it('allows same slug in different orgs', async () => {
@@ -105,7 +120,7 @@ describe('Authorization org role routes', () => {
       body: JSON.stringify({ slug: 'upd', name: 'Original' }),
     });
     const res = await req(`/authorization/organizations/${org.id}/roles/upd`, {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify({ name: 'Updated' }),
     });
     expect(res.status).toBe(200);
@@ -149,6 +164,29 @@ describe('Authorization org role routes', () => {
     expect(body.data[1].priority).toBe(1);
   });
 
+  it('emits organization_role.deleted with the permissions the role held', async () => {
+    const org = await createOrg('Deleted Org');
+    await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'org-gone', name: 'Gone' }),
+    });
+    await req(`/authorization/organizations/${org.id}/roles`, {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'org-doomed', name: 'Doomed' }),
+    });
+    await req(`/authorization/organizations/${org.id}/roles/org-doomed/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['org-gone'] }),
+    });
+
+    const res = await req(`/authorization/organizations/${org.id}/roles/org-doomed`, { method: 'DELETE' });
+    expect(res.status).toBe(204);
+
+    const deleted = getWorkOSStore(store).events.findBy('event', 'organization_role.deleted');
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.data).toMatchObject({ slug: 'org-doomed', permissions: ['org-gone'] });
+  });
+
   it('manages org role permissions', async () => {
     const org = await createOrg('Perm Org');
 
@@ -170,7 +208,7 @@ describe('Authorization org role routes', () => {
 
     // Set permissions
     await req(`/authorization/organizations/${org.id}/roles/org-editor/permissions`, {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['org-read', 'org-write'] }),
     });
 
@@ -183,7 +221,13 @@ describe('Authorization org role routes', () => {
     const delRes = await req(`/authorization/organizations/${org.id}/roles/org-editor/permissions/org-write`, {
       method: 'DELETE',
     });
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(200);
+    expect((await json(delRes)).permissions).toEqual(['org-read']);
+
+    // Both the set and the removal changed the permission set, so each emitted
+    const updated = getWorkOSStore(store).events.findBy('event', 'organization_role.updated');
+    expect(updated).toHaveLength(2);
+    expect(updated[1]!.data).toMatchObject({ slug: 'org-editor', permissions: ['org-read'] });
 
     // Verify removal
     const afterRes = await req(`/authorization/organizations/${org.id}/roles/org-editor/permissions`);

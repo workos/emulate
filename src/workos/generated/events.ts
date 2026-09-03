@@ -8,6 +8,13 @@
 export const EVENTS = {
   actionAuthenticationDenied: 'action.authentication.denied',
   actionUserRegistrationDenied: 'action.user_registration.denied',
+  agentBlueprintCreated: 'agent.blueprint.created',
+  agentBlueprintDeleted: 'agent.blueprint.deleted',
+  agentBlueprintUpdated: 'agent.blueprint.updated',
+  agentInstanceCreated: 'agent.instance.created',
+  agentInstanceDeleted: 'agent.instance.deleted',
+  agentInstanceSessionCreated: 'agent.instance.session.created',
+  agentInstanceSessionRevoked: 'agent.instance.session.revoked',
   agentRegistrationClaimAttemptCreated: 'agent.registration.claim.attempt.created',
   agentRegistrationClaimCompleted: 'agent.registration.claim.completed',
   agentRegistrationCreated: 'agent.registration.created',
@@ -94,6 +101,10 @@ export const EVENTS = {
   pipesConnectedAccountDisconnected: 'pipes.connected_account.disconnected',
   pipesConnectedAccountReauthorizationNeeded: 'pipes.connected_account.reauthorization_needed',
   radarChallengeCreated: 'radar.challenge_created',
+  resourceExportCompleted: 'resource_export.completed',
+  resourceExportCreated: 'resource_export.created',
+  resourceExportDownloaded: 'resource_export.downloaded',
+  resourceExportFailed: 'resource_export.failed',
   roleCreated: 'role.created',
   roleDeleted: 'role.deleted',
   roleUpdated: 'role.updated',
@@ -123,6 +134,13 @@ export type WorkOSEventName = (typeof EVENTS)[keyof typeof EVENTS];
 
 /** Event names subscribable via webhook endpoints (CreateWebhookEndpointDto). */
 export const SUBSCRIBABLE_EVENTS: readonly WorkOSEventName[] = [
+  'agent.blueprint.created',
+  'agent.blueprint.deleted',
+  'agent.blueprint.updated',
+  'agent.instance.created',
+  'agent.instance.deleted',
+  'agent.instance.session.created',
+  'agent.instance.session.revoked',
   'agent.registration.claim.attempt.created',
   'agent.registration.claim.completed',
   'agent.registration.created',
@@ -227,6 +245,7 @@ export interface AuthenticationEventData {
   user_id: string | null;
   email: string | null;
   error?: { code: string; message: string };
+  provider?: string;
   sso?: { organization_id: string | null; connection_id: string | null; session_id: string | null };
 }
 
@@ -258,6 +277,82 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
         'email',
         'ip_address',
         'user_agent',
+      ],
+    },
+    'agent.blueprint.created': {
+      required: [
+        'object',
+        'id',
+        'name',
+        'description',
+        'permissions',
+        'invocable_by',
+        'session_settings',
+        'created_at',
+        'updated_at',
+      ],
+    },
+    'agent.blueprint.deleted': { required: ['object', 'id', 'name', 'created_at', 'updated_at'] },
+    'agent.blueprint.updated': {
+      required: [
+        'object',
+        'id',
+        'name',
+        'description',
+        'permissions',
+        'invocable_by',
+        'session_settings',
+        'created_at',
+        'updated_at',
+      ],
+    },
+    'agent.instance.created': {
+      required: [
+        'object',
+        'id',
+        'agent_blueprint_id',
+        'organization_id',
+        'organization_membership_id',
+        'type',
+        'created_at',
+        'updated_at',
+      ],
+    },
+    'agent.instance.deleted': {
+      required: [
+        'object',
+        'id',
+        'agent_blueprint_id',
+        'organization_id',
+        'organization_membership_id',
+        'type',
+        'created_at',
+        'updated_at',
+      ],
+    },
+    'agent.instance.session.created': {
+      required: [
+        'object',
+        'id',
+        'agent_instance_id',
+        'organization_id',
+        'expires_at',
+        'revoked_at',
+        'created_at',
+        'updated_at',
+        'permission_slugs',
+      ],
+    },
+    'agent.instance.session.revoked': {
+      required: [
+        'object',
+        'id',
+        'agent_instance_id',
+        'organization_id',
+        'expires_at',
+        'revoked_at',
+        'created_at',
+        'updated_at',
       ],
     },
     'agent.registration.claim.attempt.created': {
@@ -881,6 +976,10 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
       ],
     },
     'radar.challenge_created': { type: 'email', required: ['type', 'radar_challenge_id', 'user_id', 'email'] },
+    'resource_export.completed': { required: ['id', 'resource_type'] },
+    'resource_export.created': { required: ['id', 'resource_type'] },
+    'resource_export.downloaded': { required: ['id', 'resource_type'] },
+    'resource_export.failed': { required: ['id', 'resource_type'] },
     'role.created': { required: ['object', 'slug', 'resource_type_slug', 'created_at', 'updated_at'] },
     'role.deleted': { required: ['object', 'slug', 'resource_type_slug', 'created_at', 'updated_at'] },
     'role.updated': { required: ['object', 'slug', 'resource_type_slug', 'created_at', 'updated_at'] },
@@ -972,10 +1071,10 @@ export const EVENT_DATA_REQUIREMENTS: Record<string, { type?: string; status?: s
     'vault.metadata.read': { required: ['actor_id', 'actor_source', 'actor_name', 'kv_name'] },
     'vault.names.listed': { required: ['actor_id', 'actor_source', 'actor_name'] },
     'waitlist_user.approved': {
-      required: ['object', 'id', 'email', 'state', 'approved_at', 'created_at', 'updated_at'],
+      required: ['id', 'email', 'state', 'approved_at', 'created_at', 'updated_at', 'object'],
     },
     'waitlist_user.created': {
-      required: ['object', 'id', 'email', 'state', 'approved_at', 'created_at', 'updated_at'],
+      required: ['id', 'email', 'state', 'approved_at', 'created_at', 'updated_at', 'object'],
     },
-    'waitlist_user.denied': { required: ['object', 'id', 'email', 'state', 'approved_at', 'created_at', 'updated_at'] },
+    'waitlist_user.denied': { required: ['id', 'email', 'state', 'approved_at', 'created_at', 'updated_at', 'object'] },
   };

@@ -101,14 +101,15 @@ export interface FeatureDef {
 export const FEATURES: FeatureDef[] = [
   {
     name: 'Organizations',
-    tags: ['organizations', 'organization-domains'],
+    tags: ['organizations', 'organization-domains', 'organizations.it-contacts'],
     seedKeys: ['organizations'],
+    notes: 'IT contact endpoints are not implemented.',
   },
   {
     name: 'User Management',
-    tags: ['user-management.users', 'user-management.session-tokens'],
+    tags: ['user-management.users', 'user-management.session-tokens', 'user-management.waitlists'],
     seedKeys: ['users'],
-    notes: 'Email-change confirm/send endpoints are not implemented.',
+    notes: 'Email-change confirm/send and waitlist endpoints are not implemented.',
   },
   {
     name: 'Authentication',
@@ -155,7 +156,7 @@ export const FEATURES: FeatureDef[] = [
     tags: ['authorization', 'permissions'],
     seedKeys: ['roles', 'permissions'],
     notes:
-      'Checks and effective-permission listings honor resource-scoped role assignments and ancestor inheritance (`parent_resource_id`); group role assignments are not implemented.',
+      'Checks and effective-permission listings honor resource-scoped role assignments and ancestor inheritance (`parent_resource_id`); group role assignments are not implemented. Resource types are not modeled: any `resource_type_slug` is accepted on roles and permissions, and permission scopes are not checked against the role scope.',
   },
   {
     name: 'Audit Logs',
@@ -248,7 +249,18 @@ export const FEATURES: FeatureDef[] = [
   },
   {
     name: 'Agents',
-    tags: ['agents'],
+    tags: [
+      'agents.blueprints',
+      'agents.blueprints.tokens',
+      'agents.instances',
+      'agents.registrations',
+      'agents.sessions',
+    ],
+    notes: 'Not implemented.',
+  },
+  {
+    name: 'Platform Teams',
+    tags: ['platform.teams'],
     notes: 'Not implemented.',
   },
 ];
@@ -299,33 +311,42 @@ export function parseSpecOperations(spec: SupportSpec): SpecOperation[] {
   return operations;
 }
 
+/** A route `registerRoleRoutes` registers beneath each caller's `pathPrefix`. */
+export interface RoleHelperRoute {
+  method: string;
+  suffix: string;
+}
+
 /**
- * Routes that `registerRoleRoutes` in `src/workos/role-helpers.ts` registers
- * for each path prefix. Kept in sync with that helper — if it gains or loses
- * a route, this list must be updated.
+ * Read the routes `registerRoleRoutes` (src/workos/role-helpers.ts) registers
+ * from its own source, so the matrix cannot drift from the helper. A
+ * registration is either `app.verb(pathPrefix, …)` (empty suffix) or
+ * `app.verb(\`${pathPrefix}/suffix\`, …)`.
  */
-const ROLE_HELPER_ROUTES: ReadonlyArray<{ method: string; suffix: string }> = [
-  { method: 'POST', suffix: '' },
-  { method: 'GET', suffix: '' },
-  { method: 'GET', suffix: '/:slug' },
-  { method: 'PUT', suffix: '/:slug' },
-  { method: 'DELETE', suffix: '/:slug' },
-  { method: 'GET', suffix: '/:slug/permissions' },
-  { method: 'POST', suffix: '/:slug/permissions' },
-];
+export function parseRoleHelperRoutes(source: string): RoleHelperRoute[] {
+  const routes: RoleHelperRoute[] = [];
+  const pattern = /app\.(get|post|put|patch|delete)\((?:pathPrefix|`\$\{pathPrefix\}([^`]*)`)\s*,/g;
+  for (const match of source.matchAll(pattern)) {
+    routes.push({ method: match[1].toUpperCase(), suffix: match[2] ?? '' });
+  }
+  return routes;
+}
 
 /**
  * Extract route registrations from route source. Handles three patterns:
  *   - `app.method('/literal')` — direct literal paths
  *   - `app.method(`\`${prefix}/suffix\``) — template literals whose variable
  *     is a `const` assigned a literal string earlier in the same file
- *   - `registerRoleRoutes(ctx, { pathPrefix: … })` — helper that registers a
- *     known set of routes under the given prefix
+ *   - `registerRoleRoutes(ctx, { pathPrefix: … })` — helper whose routes are
+ *     parsed from its own source (`roleHelperRoutes`) and expanded under the prefix
  *
  * Static parsing rather than booting the server keeps codegen free of side
  * effects (a real boot binds a port and seeds a store).
  */
-export function parseEmulatorRoutes(sources: string[]): EmulatorRoute[] {
+export function parseEmulatorRoutes(
+  sources: string[],
+  roleHelperRoutes: ReadonlyArray<RoleHelperRoute> = [],
+): EmulatorRoute[] {
   const routes: EmulatorRoute[] = [];
   const literalPattern = /app\.(get|post|put|patch|delete)\('([^']+)'/g;
   const templatePattern = /app\.(get|post|put|patch|delete)\(`([^`]+)`/g;
@@ -358,7 +379,7 @@ export function parseEmulatorRoutes(sources: string[]): EmulatorRoute[] {
       if (path) routes.push({ method: match[1].toUpperCase(), path });
     }
 
-    // 4. registerRoleRoutes helper — expand the known routes from pathPrefix
+    // 4. registerRoleRoutes helper — expand the helper's own routes under each pathPrefix
     for (const match of source.matchAll(helperPattern)) {
       let prefix = match[1].trim();
       if (prefix.startsWith("'") && prefix.endsWith("'")) {
@@ -367,7 +388,7 @@ export function parseEmulatorRoutes(sources: string[]): EmulatorRoute[] {
         prefix = vars.get(prefix) ?? '';
       }
       if (!prefix) continue;
-      for (const r of ROLE_HELPER_ROUTES) {
+      for (const r of roleHelperRoutes) {
         routes.push({ method: r.method, path: prefix + r.suffix });
       }
     }

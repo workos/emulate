@@ -41,7 +41,7 @@ import { dataIntegrationRoutes } from './routes/data-integrations.js';
 import { webhookEndpointRoutes } from './routes/webhook-endpoints.js';
 import { eventRoutes } from './routes/events.js';
 import { EventBus } from './event-bus.js';
-import { STORE_KEYS, EVENTS } from './constants.js';
+import { STORE_KEYS, EVENTS, DEFAULT_RESOURCE_TYPE_SLUG } from './constants.js';
 import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
 import { environmentIdFor, flagEventContext } from './flag-context.js';
@@ -229,12 +229,14 @@ export interface WorkOSSeedRole {
   is_default_role?: boolean;
   priority?: number;
   permissions?: string[];
+  resource_type_slug?: string;
 }
 
 export interface WorkOSSeedPermission {
   slug: string;
   name: string;
   description?: string;
+  resource_type_slug?: string;
 }
 
 export interface WorkOSSeedWebhookEndpoint {
@@ -617,6 +619,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         slug: permConfig.slug,
         name: permConfig.name,
         description: permConfig.description ?? null,
+        resource_type_slug: permConfig.resource_type_slug ?? DEFAULT_RESOURCE_TYPE_SLUG,
       });
     }
   }
@@ -632,6 +635,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         organization_id: roleConfig.organization_id ?? null,
         is_default_role: roleConfig.is_default_role ?? false,
         priority: roleConfig.priority ?? 0,
+        resource_type_slug: roleConfig.resource_type_slug ?? DEFAULT_RESOURCE_TYPE_SLUG,
       });
 
       if (roleConfig.permissions) {
@@ -992,18 +996,25 @@ export const workosPlugin: ServicePlugin = {
       onInsert: (r) =>
         eventBus.emit({
           event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleCreated : EVENTS.roleCreated,
-          data: formatRole(r),
+          data: formatRole(r, ws),
         }),
       onUpdate: (r) =>
         eventBus.emit({
           event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleUpdated : EVENTS.roleUpdated,
-          data: formatRole(r),
+          data: formatRole(r, ws),
         }),
-      onDelete: (r) =>
-        eventBus.emit({
-          event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleDeleted : EVENTS.roleDeleted,
-          data: formatRole(r),
-        }),
+      onDelete: (r) => {
+        // The role routes delete the role row before cascading its joins, so the
+        // permissions are still resolvable here. Production's organization_role.deleted
+        // carries them; its role.deleted never does.
+        const data = formatRole(r, ws);
+        if (r.type === 'OrganizationRole') {
+          eventBus.emit({ event: EVENTS.organizationRoleDeleted, data });
+        } else {
+          delete data.permissions;
+          eventBus.emit({ event: EVENTS.roleDeleted, data });
+        }
+      },
     });
     ws.permissions.setHooks({
       onInsert: (p) => eventBus.emit({ event: EVENTS.permissionCreated, data: formatPermission(p) }),

@@ -3,6 +3,7 @@
  */
 import type { WorkOSSeedConfig } from './index.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
+import { isValidResourceTypeSlug } from './constants.js';
 import { normalizeEmail, type NormalizedEmail } from './helpers.js';
 
 /**
@@ -563,6 +564,13 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: role.type,
           });
         }
+        if (!isValidResourceTypeSlug(role.resource_type_slug)) {
+          errors.push({
+            path: `roles[${index}].resource_type_slug`,
+            message: 'resource_type_slug must be a non-empty string if provided',
+            value: role.resource_type_slug,
+          });
+        }
       });
     }
   }
@@ -589,6 +597,13 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             path: `permissions[${index}].name`,
             message: 'name is required and must be a string',
             value: perm.name,
+          });
+        }
+        if (!isValidResourceTypeSlug(perm.resource_type_slug)) {
+          errors.push({
+            path: `permissions[${index}].resource_type_slug`,
+            message: 'resource_type_slug must be a non-empty string if provided',
+            value: perm.resource_type_slug,
           });
         }
       });

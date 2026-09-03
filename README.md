@@ -264,12 +264,19 @@ roles:
   - slug: admin
     name: Admin
     permissions: [posts:read, posts:write]
+  - slug: document-editor
+    name: Document Editor
+    permissions: [documents:read]
+    resource_type_slug: document # optional; defaults to organization
 
 permissions:
   - slug: posts:read
     name: Read Posts
   - slug: posts:write
     name: Write Posts
+  - slug: documents:read
+    name: Read Documents
+    resource_type_slug: document # optional; defaults to organization
 ```
 
 ### Pinning organization and user ids

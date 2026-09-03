@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
-import { workosPlugin } from '../index.js';
+import { workosPlugin, seedFromConfig } from '../index.js';
+import { validateSeedConfig } from '../config-validator.js';
 
 const apiKeys: ApiKeyMap = { sk_test_perm: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_perm', 'Content-Type': 'application/json' };
@@ -29,7 +30,48 @@ describe('Authorization permission routes', () => {
     expect(perm.object).toBe('permission');
     expect(perm.slug).toBe('posts:read');
     expect(perm.name).toBe('Read Posts');
+    expect(perm).toMatchObject({ system: false, resource_type_slug: 'organization' });
     expect(perm.id).toMatch(/^perm_/);
+  });
+
+  it('preserves a permission resource type', async () => {
+    const res = await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'documents:read', name: 'Read Documents', resource_type_slug: 'document' }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json(res)).resource_type_slug).toBe('document');
+  });
+
+  it('preserves a seeded permission resource type', async () => {
+    const server = createTestApp();
+    seedFromConfig(server.store, 'http://localhost:0', {
+      permissions: [{ slug: 'seeded:read', name: 'Seeded Read', resource_type_slug: 'document' }],
+    });
+    const res = await server.app.request('/authorization/permissions/seeded:read', { headers });
+    expect(res.status).toBe(200);
+    expect((await json(res)).resource_type_slug).toBe('document');
+  });
+
+  it.each([[42 as unknown as string], ['']])('rejects an invalid seeded resource type %p', (resource_type_slug) => {
+    const result = validateSeedConfig({
+      permissions: [{ slug: 'invalid:seed', name: 'Invalid Seed', resource_type_slug }],
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.path === 'permissions[0].resource_type_slug')).toBe(true);
+  });
+
+  it('keeps the resource type when a permission is updated', async () => {
+    await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'documents:write', name: 'Write Documents', resource_type_slug: 'document' }),
+    });
+    const res = await req('/authorization/permissions/documents:write', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Edit Documents' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ name: 'Edit Documents', resource_type_slug: 'document' });
   });
 
   it('rejects duplicate slug', async () => {
@@ -41,7 +83,8 @@ describe('Authorization permission routes', () => {
       method: 'POST',
       body: JSON.stringify({ slug: 'dup', name: 'Dup 2' }),
     });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
+    expect((await json(res)).code).toBe('permission_slug_conflict');
   });
 
   it('rejects missing slug', async () => {
@@ -50,6 +93,15 @@ describe('Authorization permission routes', () => {
       body: JSON.stringify({ name: 'No Slug' }),
     });
     expect(res.status).toBe(422);
+  });
+
+  it.each([[42], ['']])('rejects an invalid resource type %p', async (resource_type_slug) => {
+    const res = await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'invalid:scope', name: 'Invalid Scope', resource_type_slug }),
+    });
+    expect(res.status).toBe(422);
+    expect((await json(res)).errors).toEqual([{ field: 'resource_type_slug', code: 'invalid' }]);
   });
 
   it('lists permissions', async () => {
@@ -90,7 +142,7 @@ describe('Authorization permission routes', () => {
       body: JSON.stringify({ slug: 'upd', name: 'Original' }),
     });
     const res = await req('/authorization/permissions/upd', {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify({ name: 'Updated', description: 'desc' }),
     });
     expect(res.status).toBe(200);
@@ -122,7 +174,7 @@ describe('Authorization permission routes', () => {
       body: JSON.stringify({ slug: 'cascade-role', name: 'Cascade Role' }),
     });
     await req('/authorization/roles/cascade-role/permissions', {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['cascade-perm'] }),
     });
 

@@ -1,7 +1,7 @@
 import { type RouteContext, notFound, validationError, parseJsonBody } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatRole } from '../helpers.js';
-import { findOrgRole, requireOrgRole, registerRoleRoutes } from '../role-helpers.js';
+import { emitRolePermissionsUpdated, findOrgRole, requireOrgRole, registerRoleRoutes } from '../role-helpers.js';
 
 export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -36,7 +36,7 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
 
     return c.json({
       object: 'list',
-      data: updated.map(formatRole),
+      data: updated.map((r) => formatRole(r, ws)),
       list_metadata: { before: null, after: null },
     });
   });
@@ -49,6 +49,7 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
     listFilter: (c) => (r) => r.organization_id === c.req.param('orgId')! && r.type === 'OrganizationRole',
     insertDefaults: (c) => ({ organization_id: c.req.param('orgId')! }),
     duplicateMessage: 'Role with this slug already exists in this organization',
+    duplicateCode: 'organization_role_slug_conflict',
     validateBeforeCreate: (ws, c) => {
       const org = ws.organizations.get(c.req.param('orgId')!);
       if (!org) throw notFound('Organization');
@@ -66,6 +67,8 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
     if (!rp) throw notFound('RolePermission');
 
     ws.rolePermissions.delete(rp.id);
-    return c.body(null, 204);
+    emitRolePermissionsUpdated(store, ws, role);
+    // The spec answers with the updated role, not an empty 204.
+    return c.json(formatRole(role, ws));
   });
 }
