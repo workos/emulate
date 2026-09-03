@@ -1044,6 +1044,91 @@ export function revokeApiKeysForOwner(
   }
 }
 
+/** The organization a key is scoped to: the owner org, or the org a user-owned key was issued in. */
+export function apiKeyOrganizationId(k: WorkOSApiKey): string {
+  return k.owner.type === 'organization' ? k.owner.id : k.owner.organization_id;
+}
+
+export interface IssueApiKeyInput {
+  name: string;
+  owner: WorkOSApiKeyOwner;
+  permissions: string[];
+  /** ISO-8601 expiry, or null for a key that never expires. */
+  expiresAt: string | null;
+  /** Auth environment; decides the `sk_live_`/`sk_test_` prefix and travels into the allow-list. */
+  environment: string;
+}
+
+/**
+ * Mint an API key: create the `api_key` record and register the secret in the auth allow-list
+ * (the same object the middleware holds by reference) so the new key authenticates real
+ * requests. Both the public routes and the widgets surface issue keys through here, so the two
+ * stores cannot drift apart. Returns the plaintext secret alongside the record — it is shown to
+ * the caller exactly once and never serialized again.
+ */
+export function issueApiKey(
+  store: Store,
+  ws: WorkOSStore,
+  input: IssueApiKeyInput,
+): { record: WorkOSApiKey; value: string } {
+  const value = `sk_${input.environment === 'production' ? 'live' : 'test'}_${generateVerificationToken()}`;
+  const record = ws.apiKeyRecords.insert({
+    object: 'api_key',
+    name: input.name,
+    key: value,
+    environment: input.environment,
+    owner: input.owner,
+    permissions: input.permissions,
+    last_used_at: null,
+    expires_at: input.expiresAt,
+  });
+  const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {};
+  apiKeyMap[value] = { environment: input.environment, expiresAt: record.expires_at };
+  store.setData(STORE_KEYS.apiKeyMap, apiKeyMap);
+  return { record, value };
+}
+
+/**
+ * Delete one API key from both the record store and the auth allow-list, so the key stops
+ * authenticating and not merely stops resolving — see `revokeApiKeysForOwner`.
+ */
+export function deleteApiKey(store: Store, ws: WorkOSStore, record: WorkOSApiKey): void {
+  ws.apiKeyRecords.delete(record.id);
+  const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
+  if (apiKeyMap) delete apiKeyMap[record.key];
+}
+
+export function isApiKeyExpired(record: WorkOSApiKey): boolean {
+  return record.expires_at !== null && Date.parse(record.expires_at) <= Date.now();
+}
+
+/**
+ * Set an API key's expiry: `null` clears it so the key never expires, a future timestamp
+ * schedules it, and anything else — a past timestamp or none at all — expires the key now.
+ * The allow-list entry moves in step, so the middleware enforces the new expiry on the next
+ * request. A key that has already expired cannot be re-scheduled, as in production.
+ */
+export function expireApiKey(
+  store: Store,
+  ws: WorkOSStore,
+  record: WorkOSApiKey,
+  expiresAt: string | null | undefined,
+): WorkOSApiKey {
+  if (isApiKeyExpired(record)) {
+    throw new WorkOSApiError(409, 'API key is already expired', 'api_key_already_expired');
+  }
+  const next =
+    expiresAt === null
+      ? null
+      : typeof expiresAt === 'string' && Date.parse(expiresAt) > Date.now()
+        ? expiresAt
+        : new Date().toISOString();
+  const updated = ws.apiKeyRecords.update(record.id, { expires_at: next })!;
+  const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
+  if (apiKeyMap?.[record.key]) apiKeyMap[record.key].expiresAt = next;
+  return updated;
+}
+
 export function formatApiKeyRecord(k: WorkOSApiKey): Record<string, unknown> {
   return {
     object: 'api_key',

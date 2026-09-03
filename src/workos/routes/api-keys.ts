@@ -5,11 +5,17 @@ import {
   parseJsonBody,
   parseListParams,
   validationError,
-  WorkOSApiError,
 } from '../../core/index.js';
 import type { ApiKeyMap } from '../../core/index.js';
 import type { WorkOSApiKeyOwner } from '../entities.js';
-import { formatApiKeyRecord, formatListResponse, generateVerificationToken } from '../helpers.js';
+import {
+  apiKeyOrganizationId,
+  deleteApiKey,
+  expireApiKey,
+  formatApiKeyRecord,
+  formatListResponse,
+  issueApiKey,
+} from '../helpers.js';
 import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
 
@@ -37,20 +43,13 @@ export function apiKeyRoutes(ctx: RouteContext): void {
       ]);
     }
 
-    const value = `sk_${environment === 'production' ? 'live' : 'test'}_${generateVerificationToken()}`;
-    const record = ws.apiKeyRecords.insert({
-      object: 'api_key',
+    const { record, value } = issueApiKey(store, ws, {
       name,
-      key: value,
-      environment,
       owner,
       permissions: (body.permissions as string[] | undefined) ?? [],
-      last_used_at: null,
-      expires_at: (expiresAt as string | undefined) ?? null,
+      expiresAt: (expiresAt as string | undefined) ?? null,
+      environment,
     });
-    const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {};
-    apiKeyMap[value] = { environment, expiresAt: record.expires_at };
-    store.setData(STORE_KEYS.apiKeyMap, apiKeyMap);
     return { ...formatApiKeyRecord(record), value };
   };
 
@@ -74,24 +73,18 @@ export function apiKeyRoutes(ctx: RouteContext): void {
     return c.json({ api_key: record ? formatApiKeyRecord(record) : null });
   });
 
-  // Delete an API key record
+  // Delete an API key record, and drop its value from the auth allow-list so a deleted key
+  // stops authenticating, not just stops resolving.
   app.delete('/api_keys/:id', (c) => {
     const record = ws.apiKeyRecords.get(c.req.param('id'));
     if (!record) throw notFound('ApiKey');
-    ws.apiKeyRecords.delete(record.id);
-    // Also drop the value from the auth allow-list (the same object the middleware holds
-    // by reference) so a deleted key stops authenticating, not just stops resolving.
-    const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
-    if (apiKeyMap) delete apiKeyMap[record.key];
+    deleteApiKey(store, ws, record);
     return c.body(null, 204);
   });
 
   app.post('/api_keys/:id/expire', async (c) => {
     const record = ws.apiKeyRecords.get(c.req.param('id'));
     if (!record) throw notFound('ApiKey');
-    if (record.expires_at && Date.parse(record.expires_at) <= Date.now()) {
-      throw new WorkOSApiError(409, 'API key is already expired', 'api_key_already_expired');
-    }
 
     const body = c.req.raw.body ? await parseJsonBody(c) : {};
     if (body.expires_at !== undefined && body.expires_at !== null && typeof body.expires_at !== 'string') {
@@ -105,15 +98,7 @@ export function apiKeyRoutes(ctx: RouteContext): void {
       ]);
     }
 
-    const expiresAt =
-      body.expires_at === null
-        ? null
-        : typeof body.expires_at === 'string' && Date.parse(body.expires_at) > Date.now()
-          ? body.expires_at
-          : new Date().toISOString();
-    const updated = ws.apiKeyRecords.update(record.id, { expires_at: expiresAt })!;
-    const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
-    if (apiKeyMap?.[record.key]) apiKeyMap[record.key].expiresAt = expiresAt;
+    const updated = expireApiKey(store, ws, record, body.expires_at as string | null | undefined);
     return c.json(formatApiKeyRecord(updated));
   });
 
@@ -126,7 +111,7 @@ export function apiKeyRoutes(ctx: RouteContext): void {
     const params = parseListParams(new URL(c.req.url));
     const result = ws.apiKeyRecords.list({
       ...params,
-      filter: (k) => (k.owner.type === 'organization' ? k.owner.id : k.owner.organization_id) === orgId,
+      filter: (k) => apiKeyOrganizationId(k) === orgId,
     });
     return c.json(formatListResponse(result, formatApiKeyRecord));
   });
