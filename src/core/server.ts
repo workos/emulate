@@ -3,7 +3,7 @@ import { cors } from 'hono/cors';
 import { Store } from './store.js';
 import { JWTManager, type SigningKeyOptions } from './jwt.js';
 import { createApiErrorHandler, requestIdMiddleware } from './middleware/error-handler.js';
-import { authMiddleware, type ApiKeyMap, type WorkOSAppEnv } from './middleware/auth.js';
+import { authMiddleware, widgetAuthMiddleware, type ApiKeyMap, type WorkOSAppEnv } from './middleware/auth.js';
 import { errorHooksMiddleware } from './error-hooks.js';
 import type { ServicePlugin, RouteContext } from './plugin.js';
 
@@ -53,6 +53,12 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
   // Auth middleware — single catch-all instance
   const auth = authMiddleware(apiKeys);
 
+  // The private surface the `@workos-inc/widgets` components call. A browser widget never holds
+  // an API key; it authenticates with the JWT `POST /widgets/token` minted, so this prefix gets
+  // its own authenticator rather than a place on the public list.
+  const WIDGETS_PREFIX = '/_widgets/';
+  const widgetAuth = widgetAuthMiddleware(jwt);
+
   const PUBLIC_PATHS = new Set([
     '/health',
     '/user_management/authorize',
@@ -85,6 +91,7 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
     // Skip auth for public paths
     if (PUBLIC_PATHS.has(path)) return next();
     if (OPENID_CONFIGURATION.test(path)) return next();
+    if (path.startsWith(WIDGETS_PREFIX)) return widgetAuth(c, next);
     for (const prefix of PUBLIC_PATH_PREFIXES) {
       if (path.startsWith(prefix)) {
         // data-integrations: only /authorize subpath is public

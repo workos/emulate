@@ -32,8 +32,12 @@ export {
 export {
   authMiddleware,
   isApiKeyEntryExpired,
+  widgetAuthMiddleware,
+  widgetForbidden,
+  WIDGET_TOKEN_AUDIENCE,
   type WorkOSAppEnv,
   type WorkOSAuthContext,
+  type WidgetAuthContext,
   type ApiKeyMap,
   type ApiKeyEntry,
 } from './middleware/auth.js';
