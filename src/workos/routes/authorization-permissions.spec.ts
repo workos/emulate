@@ -53,14 +53,12 @@ describe('Authorization permission routes', () => {
     expect((await json(res)).resource_type_slug).toBe('document');
   });
 
-  it('rejects an invalid seeded resource type', () => {
-    for (const resource_type_slug of [42 as unknown as string, '']) {
-      const result = validateSeedConfig({
-        permissions: [{ slug: 'invalid:seed', name: 'Invalid Seed', resource_type_slug }],
-      });
-      expect(result.valid).toBe(false);
-      expect(result.errors.some((error) => error.path === 'permissions[0].resource_type_slug')).toBe(true);
-    }
+  it.each([[42 as unknown as string], ['']])('rejects an invalid seeded resource type %p', (resource_type_slug) => {
+    const result = validateSeedConfig({
+      permissions: [{ slug: 'invalid:seed', name: 'Invalid Seed', resource_type_slug }],
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.path === 'permissions[0].resource_type_slug')).toBe(true);
   });
 
   it('keeps the resource type when a permission is updated', async () => {
@@ -97,15 +95,13 @@ describe('Authorization permission routes', () => {
     expect(res.status).toBe(422);
   });
 
-  it('rejects an invalid resource type', async () => {
-    for (const resource_type_slug of [42, '']) {
-      const res = await req('/authorization/permissions', {
-        method: 'POST',
-        body: JSON.stringify({ slug: 'invalid:scope', name: 'Invalid Scope', resource_type_slug }),
-      });
-      expect(res.status).toBe(422);
-      expect((await json(res)).errors).toEqual([{ field: 'resource_type_slug', code: 'invalid' }]);
-    }
+  it.each([[42], ['']])('rejects an invalid resource type %p', async (resource_type_slug) => {
+    const res = await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'invalid:scope', name: 'Invalid Scope', resource_type_slug }),
+    });
+    expect(res.status).toBe(422);
+    expect((await json(res)).errors).toEqual([{ field: 'resource_type_slug', code: 'invalid' }]);
   });
 
   it('lists permissions', async () => {
