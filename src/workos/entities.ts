@@ -147,6 +147,13 @@ export interface WorkOSAuthorizationCode extends Entity {
    * nobody verified.
    */
   auth_method: string | null;
+  /**
+   * The gate the interactive login cleared last on the way to this code — 'EmailVerification' or
+   * 'MFA' — when it had to clear one. The exchange then reports what the API grant for that step
+   * reports: the gate's event, with the session recording `auth_method` as the primary. Null when
+   * the password alone earned the code, and always null from the auto-redirect.
+   */
+  step_up_method: string | null;
 }
 
 export interface WorkOSIdentity extends Entity {
