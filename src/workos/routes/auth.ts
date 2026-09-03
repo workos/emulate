@@ -243,6 +243,12 @@ export function authRoutes(ctx: RouteContext): void {
           // after the password, and the check it just passed is what the token records.
           let token = verifiedLoginKey ? pendingToken : null;
           if (!token) {
+            // A page that is never submitted leaves its token behind, and nothing would present
+            // it again to trip the expiry check above. Sweep those here, so the store holds at
+            // most the tokens minted in the last ten minutes rather than one per abandoned login.
+            store.deleteDataByPrefix(STORE_KEY_PREFIXES.interactiveLogin, (v) =>
+              isExpired((v as InteractiveLogin).expires_at),
+            );
             token = generateId('pending');
             const login: InteractiveLogin = {
               user_id: user.id,

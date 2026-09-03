@@ -374,6 +374,24 @@ describe('Interactive Auth Mode with the password step', () => {
     expect(body.organization_id).toBe(orgId);
   });
 
+  it('sweeps the token of an abandoned organization page once it has expired', async () => {
+    const abandoned = await submit({ email: 'multi@example.com', password: 'correct-horse' });
+    expect(abandoned.status).toBe(200);
+    const token = (await abandoned.text()).match(/name="pending_authentication_token" value="([^"]+)"/)?.[1] ?? '';
+    expect(token).not.toBe('');
+    const key = `${STORE_KEY_PREFIXES.interactiveLogin}${token}`;
+    const stored = emulator.store.getData<{ expires_at: string }>(key);
+    expect(stored).toBeDefined();
+    // Age it past its ten minutes without waiting them out.
+    emulator.store.setData(key, { ...stored, expires_at: new Date(Date.now() - 1000).toISOString() });
+
+    // The next login that mints a token sweeps the stale one and keeps only its own.
+    const next = await submit({ email: 'multi@example.com', password: 'correct-horse' });
+    expect(next.status).toBe(200);
+    expect(emulator.store.getData(key)).toBeUndefined();
+    expect(emulator.store.deleteDataByPrefix(STORE_KEY_PREFIXES.interactiveLogin)).toBe(1);
+  });
+
   it('is off under plain interactiveAuth: true, which stays one step', async () => {
     const plain = await createEmulator({
       port: 0,
