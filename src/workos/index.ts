@@ -994,17 +994,17 @@ export const workosPlugin: ServicePlugin = {
       onInsert: (r) =>
         eventBus.emit({
           event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleCreated : EVENTS.roleCreated,
-          data: formatRole(r),
+          data: formatRole(r, ws),
         }),
       onUpdate: (r) =>
         eventBus.emit({
           event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleUpdated : EVENTS.roleUpdated,
-          data: formatRole(r),
+          data: formatRole(r, ws),
         }),
       onDelete: (r) =>
         eventBus.emit({
           event: r.type === 'OrganizationRole' ? EVENTS.organizationRoleDeleted : EVENTS.roleDeleted,
-          data: formatRole(r),
+          data: formatRole(r, ws),
         }),
     });
     ws.permissions.setHooks({

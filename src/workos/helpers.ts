@@ -908,8 +908,14 @@ export function formatAuthChallenge(c: WorkOSAuthenticationChallenge): Record<st
   return formatEntity(c, { exclude: AUTH_CHALLENGE_EXCLUDE });
 }
 
-export function formatRole(role: WorkOSRole): Record<string, unknown> {
-  return formatEntity(role);
+export function formatRole(role: WorkOSRole, ws: WorkOSStore): Record<string, unknown> {
+  // Production inlines the role's permission slugs; the emulator keeps them in a
+  // join table, so resolve them here rather than at every call site.
+  const permissions = ws.rolePermissions
+    .findBy('role_id', role.id)
+    .map((rp) => ws.permissions.get(rp.permission_id)?.slug)
+    .filter((slug): slug is string => typeof slug === 'string');
+  return { ...formatEntity(role), permissions };
 }
 
 export function formatPermission(p: WorkOSPermission): Record<string, unknown> {

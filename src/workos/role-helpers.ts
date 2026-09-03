@@ -120,7 +120,7 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
       priority: typeof body.priority === 'number' ? body.priority : 0,
     });
 
-    return c.json(formatRole(role), 201);
+    return c.json(formatRole(role, ws), 201);
   });
 
   app.get(pathPrefix, (c) => {
@@ -132,12 +132,12 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
       filter: config.listFilter(c),
     });
 
-    return c.json(formatListResponse(result, formatRole));
+    return c.json(formatListResponse(result, (r) => formatRole(r, ws)));
   });
 
   app.get(`${pathPrefix}/:slug`, (c) => {
     const role = config.requireRole(ws, c);
-    return c.json(formatRole(role));
+    return c.json(formatRole(role, ws));
   });
 
   // The spec (and every SDK) updates a role with PATCH; there is no PUT.
@@ -152,7 +152,7 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
     if ('priority' in body) updates.priority = body.priority;
 
     const updated = ws.roles.update(role.id, updates);
-    return c.json(formatRole(updated!));
+    return c.json(formatRole(updated!, ws));
   });
 
   app.delete(`${pathPrefix}/:slug`, (c) => {
@@ -165,7 +165,8 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
     return c.body(null, 204);
   });
 
-  // Role permissions management
+  // Not in the spec — production inlines permission slugs on the role instead.
+  // Kept as the only way to read the full permission objects for a role.
   app.get(`${pathPrefix}/:slug/permissions`, (c) => {
     const role = config.requireRole(ws, c);
     const permissions = getRolePermissions(ws, role.id);
@@ -177,21 +178,35 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
     });
   });
 
+  // Spec: PUT replaces the whole set, POST attaches one; both answer with the role.
+  app.put(`${pathPrefix}/:slug/permissions`, async (c) => {
+    const role = config.requireRole(ws, c);
+
+    const body = await parseJsonBody(c);
+    const permissionSlugs = body.permissions;
+    if (!Array.isArray(permissionSlugs) || permissionSlugs.some((slug) => typeof slug !== 'string')) {
+      throw validationError('permissions must be an array of slugs', [{ field: 'permissions', code: 'invalid' }]);
+    }
+
+    replaceRolePermissions(ws, role.id, permissionSlugs as string[]);
+    return c.json(formatRole(role, ws));
+  });
+
   app.post(`${pathPrefix}/:slug/permissions`, async (c) => {
     const role = config.requireRole(ws, c);
 
     const body = await parseJsonBody(c);
-    const permissionSlugs = body.permissions as string[];
-    if (!Array.isArray(permissionSlugs)) {
-      throw validationError('permissions must be an array of slugs', [{ field: 'permissions', code: 'invalid' }]);
+    const slug = body.slug;
+    if (!slug || typeof slug !== 'string') {
+      throw validationError('slug is required', [{ field: 'slug', code: 'required' }]);
     }
+    const permission = ws.permissions.findOneBy('slug', slug);
+    if (!permission) throw notFound('Permission');
 
-    const permissions = replaceRolePermissions(ws, role.id, permissionSlugs);
+    // Re-attaching is a no-op rather than a duplicate join row.
+    const attached = ws.rolePermissions.findBy('role_id', role.id).some((rp) => rp.permission_id === permission.id);
+    if (!attached) ws.rolePermissions.insert({ role_id: role.id, permission_id: permission.id });
 
-    return c.json({
-      object: 'list',
-      data: permissions.map((p) => formatPermission(p)),
-      list_metadata: { before: null, after: null },
-    });
+    return c.json(formatRole(role, ws));
   });
 }

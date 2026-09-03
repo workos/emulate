@@ -36,7 +36,7 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
 
     return c.json({
       object: 'list',
-      data: updated.map(formatRole),
+      data: updated.map((r) => formatRole(r, ws)),
       list_metadata: { before: null, after: null },
     });
   });
@@ -67,6 +67,7 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
     if (!rp) throw notFound('RolePermission');
 
     ws.rolePermissions.delete(rp.id);
-    return c.body(null, 204);
+    // The spec answers with the updated role, not an empty 204.
+    return c.json(formatRole(role, ws));
   });
 }

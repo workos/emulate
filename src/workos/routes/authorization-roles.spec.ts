@@ -118,12 +118,17 @@ describe('Authorization environment role routes', () => {
 
     // Set permissions
     const setRes = await req('/authorization/roles/editor/permissions', {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['read', 'write'] }),
     });
     expect(setRes.status).toBe(200);
     const setBody = await json(setRes);
-    expect(setBody.data.length).toBe(2);
+    expect(setBody.object).toBe('role');
+    expect([...setBody.permissions].sort()).toEqual(['read', 'write']);
+
+    // The role itself carries the slugs, as in production
+    const roleRes = await req('/authorization/roles/editor');
+    expect([...(await json(roleRes)).permissions].sort()).toEqual(['read', 'write']);
 
     // Get permissions
     const getRes = await req('/authorization/roles/editor/permissions');
@@ -149,13 +154,13 @@ describe('Authorization environment role routes', () => {
 
     // Set to p1
     await req('/authorization/roles/rep/permissions', {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['p1'] }),
     });
 
     // Replace with p2
     await req('/authorization/roles/rep/permissions', {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['p2'] }),
     });
 
@@ -163,6 +168,50 @@ describe('Authorization environment role routes', () => {
     const body = await json(res);
     expect(body.data.length).toBe(1);
     expect(body.data[0].slug).toBe('p2');
+  });
+
+  it('adds a single permission with POST', async () => {
+    for (const slug of ['add-a', 'add-b']) {
+      await req('/authorization/permissions', { method: 'POST', body: JSON.stringify({ slug, name: slug }) });
+    }
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'adder', name: 'Adder' }) });
+    await req('/authorization/roles/adder/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['add-a'] }),
+    });
+
+    const res = await req('/authorization/roles/adder/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'add-b' }),
+    });
+    expect(res.status).toBe(200);
+    expect([...(await json(res)).permissions].sort()).toEqual(['add-a', 'add-b']);
+
+    // Re-attaching is a no-op, not a duplicate
+    const again = await req('/authorization/roles/adder/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'add-b' }),
+    });
+    expect([...(await json(again)).permissions].sort()).toEqual(['add-a', 'add-b']);
+  });
+
+  it('rejects malformed permission changes', async () => {
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'strict', name: 'Strict' }) });
+
+    const missing = await req('/authorization/roles/strict/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'nope' }),
+    });
+    expect(missing.status).toBe(404);
+
+    const noSlug = await req('/authorization/roles/strict/permissions', { method: 'POST', body: JSON.stringify({}) });
+    expect(noSlug.status).toBe(422);
+
+    const notArray = await req('/authorization/roles/strict/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: 'read' }),
+    });
+    expect(notArray.status).toBe(422);
   });
 
   it('creates role with default flag', async () => {

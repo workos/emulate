@@ -214,7 +214,7 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'directory', output: formatDirectory(directory) },
   { objectType: 'directory_group', output: formatDirectoryGroup(directoryGroup) },
   { objectType: 'directory_user', output: formatDirectoryUser(directoryUser) },
-  { objectType: 'role', output: formatRole(role) },
+  { objectType: 'role', output: formatRole(role, ws) },
   { objectType: 'permission', output: formatPermission(permission) },
   { objectType: 'api_key', output: formatApiKeyRecord(apiKey) },
   { objectType: 'password_reset', output: formatPasswordReset(passwordReset) },
@@ -230,8 +230,8 @@ const KNOWN_MISSING_REQUIRED: Record<string, readonly string[]> = {
   // WorkOSConnection carries only `state`.
   connection: ['status'],
   // The emulator's Role predates the spec's authorization Role: it has no
-  // `permissions` array or `resource_type_slug`.
-  role: ['permissions', 'resource_type_slug'],
+  // `resource_type_slug`.
+  role: ['resource_type_slug'],
 };
 
 /**

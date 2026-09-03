@@ -171,7 +171,7 @@ describe('Authorization org role routes', () => {
 
     // Set permissions
     await req(`/authorization/organizations/${org.id}/roles/org-editor/permissions`, {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['org-read', 'org-write'] }),
     });
 
@@ -184,7 +184,8 @@ describe('Authorization org role routes', () => {
     const delRes = await req(`/authorization/organizations/${org.id}/roles/org-editor/permissions/org-write`, {
       method: 'DELETE',
     });
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(200);
+    expect((await json(delRes)).permissions).toEqual(['org-read']);
 
     // Verify removal
     const afterRes = await req(`/authorization/organizations/${org.id}/roles/org-editor/permissions`);

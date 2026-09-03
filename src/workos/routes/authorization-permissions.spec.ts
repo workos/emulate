@@ -174,7 +174,7 @@ describe('Authorization permission routes', () => {
       body: JSON.stringify({ slug: 'cascade-role', name: 'Cascade Role' }),
     });
     await req('/authorization/roles/cascade-role/permissions', {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['cascade-perm'] }),
     });
 

@@ -65,7 +65,7 @@ describe('Authorization check + role assignment routes', () => {
       body: JSON.stringify({ slug: 'editor', name: 'Editor' }),
     });
     await req('/authorization/roles/editor/permissions', {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['posts:read', 'posts:write'] }),
     });
 
@@ -76,7 +76,7 @@ describe('Authorization check + role assignment routes', () => {
     });
     const adminRole = await json(adminRes);
     await req('/authorization/roles/admin-role/permissions', {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['admin:manage'] }),
     });
 
@@ -511,7 +511,7 @@ describe('Authorization check + role assignment routes', () => {
       body: JSON.stringify({ slug: 'editor', name: 'Org Editor' }),
     });
     await req(`/authorization/organizations/${org.id}/roles/editor/permissions`, {
-      method: 'POST',
+      method: 'PUT',
       body: JSON.stringify({ permissions: ['posts:read'] }),
     });
 
