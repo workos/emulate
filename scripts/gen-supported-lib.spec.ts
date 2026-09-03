@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   type SupportSpec,
   type FeatureDef,
@@ -8,6 +9,7 @@ import {
   routeKey,
   parseSpecOperations,
   parseEmulatorRoutes,
+  parseRoleHelperRoutes,
   parseSeedConfigKeys,
   deriveSetup,
   buildMatrix,
@@ -61,6 +63,19 @@ const fixtureRouteSource = `
   app.get('/directories/:id', (c) => {});
   app.delete('/directories/:id', (c) => {});
 `;
+
+// Mirrors how registerRoleRoutes registers under its pathPrefix parameter.
+const fixtureRoleHelperSource = `
+  app.post(pathPrefix, async (c) => {});
+  app.get(pathPrefix, (c) => {});
+  app.get(\`\${pathPrefix}/:slug\`, (c) => {});
+  app.patch(\`\${pathPrefix}/:slug\`, async (c) => {});
+  app.delete(\`\${pathPrefix}/:slug\`, (c) => {});
+  app.get(\`\${pathPrefix}/:slug/permissions\`, (c) => {});
+  app.put(\`\${pathPrefix}/:slug/permissions\`, async (c) => {});
+  app.post(\`\${pathPrefix}/:slug/permissions\`, async (c) => {});
+`;
+const fixtureRoleHelperRoutes = parseRoleHelperRoutes(fixtureRoleHelperSource);
 
 const fixtureSeedKeys = ['organizations', 'users'];
 
@@ -163,14 +178,15 @@ describe('parseEmulatorRoutes', () => {
       `  roleType: 'EnvironmentRole',`,
       `});`,
     ].join('\n');
-    const routes = parseEmulatorRoutes([source]);
+    const routes = parseEmulatorRoutes([source], fixtureRoleHelperRoutes);
     expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual([
       'POST /authorization/roles',
       'GET /authorization/roles',
       'GET /authorization/roles/:slug',
-      'PUT /authorization/roles/:slug',
+      'PATCH /authorization/roles/:slug',
       'DELETE /authorization/roles/:slug',
       'GET /authorization/roles/:slug/permissions',
+      'PUT /authorization/roles/:slug/permissions',
       'POST /authorization/roles/:slug/permissions',
     ]);
   });
@@ -183,9 +199,37 @@ describe('parseEmulatorRoutes', () => {
       `  roleType: 'OrganizationRole',`,
       `});`,
     ].join('\n');
-    const routes = parseEmulatorRoutes([source]);
-    expect(routes).toHaveLength(7);
+    const routes = parseEmulatorRoutes([source], fixtureRoleHelperRoutes);
+    expect(routes).toHaveLength(8);
     expect(routes[0]).toEqual({ method: 'POST', path: '/authorization/organizations/:orgId/roles' });
+  });
+});
+
+describe('parseRoleHelperRoutes', () => {
+  it('reads every registration under pathPrefix, bare or templated', () => {
+    expect(fixtureRoleHelperRoutes).toHaveLength(8);
+    expect(fixtureRoleHelperRoutes[0]).toEqual({ method: 'POST', suffix: '' });
+    expect(fixtureRoleHelperRoutes).toContainEqual({ method: 'PATCH', suffix: '/:slug' });
+    expect(fixtureRoleHelperRoutes).toContainEqual({ method: 'PUT', suffix: '/:slug/permissions' });
+  });
+
+  it('ignores registrations that are not under pathPrefix', () => {
+    const routes = parseRoleHelperRoutes(`app.get('/literal', h); app.get(other, h); app.get(\`\${other}/x\`, h);`);
+    expect(routes).toHaveLength(0);
+  });
+
+  it('expands nothing for registerRoleRoutes when no helper routes are supplied', () => {
+    expect(parseEmulatorRoutes([`registerRoleRoutes(ctx, { pathPrefix: '/authorization/roles' });`])).toHaveLength(0);
+  });
+
+  it('still matches the real helper, so the matrix cannot drift from it', () => {
+    const real = parseRoleHelperRoutes(
+      readFileSync(new URL('../src/workos/role-helpers.ts', import.meta.url), 'utf-8'),
+    );
+    expect(real.length).toBeGreaterThan(0);
+    expect(real).toContainEqual({ method: 'PATCH', suffix: '/:slug' });
+    expect(real).toContainEqual({ method: 'PUT', suffix: '/:slug/permissions' });
+    expect(real).toContainEqual({ method: 'POST', suffix: '/:slug/permissions' });
   });
 });
 

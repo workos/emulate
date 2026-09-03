@@ -26,12 +26,14 @@ import {
   type SupportSpec,
   parseSpecOperations,
   parseEmulatorRoutes,
+  parseRoleHelperRoutes,
   parseSeedConfigKeys,
   buildMatrix,
   generateSupportedMarkdown,
 } from './gen-supported-lib.js';
 
 const ROUTES_DIR = 'src/workos/routes';
+const ROLE_HELPER_FILE = 'src/workos/role-helpers.ts';
 const SERVER_FILE = 'src/core/server.ts';
 const INDEX_FILE = 'src/index.ts';
 
@@ -96,7 +98,15 @@ async function main(): Promise<void> {
     ext === '.yaml' || ext === '.yml' ? (YAML.parse(raw) as SupportSpec) : (JSON.parse(raw) as SupportSpec);
 
   const operations = parseSpecOperations(spec);
-  const routes = parseEmulatorRoutes(readRouteSources());
+  // The role helper registers its routes under a caller-supplied prefix, so its
+  // source is parsed on its own; an empty result means the parser drifted from
+  // how the helper registers routes, which must fail loudly rather than quietly
+  // dropping every role endpoint from the table.
+  const roleHelperRoutes = parseRoleHelperRoutes(readFileSync(resolve(ROLE_HELPER_FILE), 'utf-8'));
+  if (roleHelperRoutes.length === 0) {
+    throw new Error(`No route registrations found in ${ROLE_HELPER_FILE}; update parseRoleHelperRoutes.`);
+  }
+  const routes = parseEmulatorRoutes(readRouteSources(), roleHelperRoutes);
   const seedKeys = parseSeedConfigKeys(readFileSync(resolve(INDEX_FILE), 'utf-8'));
 
   // buildMatrix throws on an unmapped spec tag or a stale seed key — that is
