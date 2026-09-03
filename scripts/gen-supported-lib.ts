@@ -101,14 +101,15 @@ export interface FeatureDef {
 export const FEATURES: FeatureDef[] = [
   {
     name: 'Organizations',
-    tags: ['organizations', 'organization-domains'],
+    tags: ['organizations', 'organization-domains', 'organizations.it-contacts'],
     seedKeys: ['organizations'],
+    notes: 'IT contact endpoints are not implemented.',
   },
   {
     name: 'User Management',
-    tags: ['user-management.users', 'user-management.session-tokens'],
+    tags: ['user-management.users', 'user-management.session-tokens', 'user-management.waitlists'],
     seedKeys: ['users'],
-    notes: 'Email-change confirm/send endpoints are not implemented.',
+    notes: 'Email-change confirm/send and waitlist endpoints are not implemented.',
   },
   {
     name: 'Authentication',
@@ -245,7 +246,18 @@ export const FEATURES: FeatureDef[] = [
   },
   {
     name: 'Agents',
-    tags: ['agents'],
+    tags: [
+      'agents.blueprints',
+      'agents.blueprints.tokens',
+      'agents.instances',
+      'agents.registrations',
+      'agents.sessions',
+    ],
+    notes: 'Not implemented.',
+  },
+  {
+    name: 'Platform Teams',
+    tags: ['platform.teams'],
     notes: 'Not implemented.',
   },
 ];

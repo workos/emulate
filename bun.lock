@@ -15,7 +15,7 @@
         "@types/bun": "^1.3.14",
         "@types/node": "~22.19.7",
         "@types/semver": "^7.7.1",
-        "@workos/openapi-spec": "^0.59.0",
+        "@workos/openapi-spec": "^0.80.0",
         "husky": "^9.1.7",
         "oxfmt": "^0.62.0",
         "oxlint": "^1.77.0",
@@ -148,7 +148,7 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
-    "@workos/openapi-spec": ["@workos/openapi-spec@0.59.0", "", {}, "sha512-AGmrXTYdA1OluGb9vDtC21HQVqavVtVv5WpNjyBPo6OviBFfA1whzzkdwcgv0oG0DXnttqr0NsRQa7FxP6X0ug=="],
+    "@workos/openapi-spec": ["@workos/openapi-spec@0.80.0", "", {}, "sha512-jMAJVVvnWEdT3cq8G8H7U7gWJ3gIC19gRmkxB7DEA7YU2NXbhfGOt2Z4GDtspgljRt/GAp/pPT2+B5oaLIUyjw=="],
 
     "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
 
