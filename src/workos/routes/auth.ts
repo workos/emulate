@@ -18,7 +18,6 @@ import {
   isExpired,
   expiresIn,
   assertAllowedRedirectUri,
-  sealSession,
   AUTH_METHOD_SESSION_VALUES,
   resolveResponseAuthMethod,
   resolveSessionResponseAuthMethod,
@@ -290,7 +289,6 @@ export function authRoutes(ctx: RouteContext): void {
     const body = await parseOAuthBody(c);
     const grantType = body.grant_type as string | undefined;
     const clientId = body.client_id as string | undefined;
-    const clientSecret = body.client_secret as string | undefined;
 
     // Every malformed-request failure on this endpoint is OAuth-shaped, and not by inference:
     // the spec's authenticate 400 lists `invalid_request` among its {error, error_description}
@@ -1150,19 +1148,6 @@ export function authRoutes(ctx: RouteContext): void {
       client_id: tokenClientId ?? null,
     });
 
-    // Compute sealed session when client_secret is provided
-    const apiKey = c.req
-      .header('Authorization')
-      ?.replace(/^Bearer\s+/i, '')
-      .trim();
-    const sealKey = clientSecret ?? apiKey;
-    const sealedSession = sealKey
-      ? sealSession(
-          { access_token: accessToken, refresh_token: newRefreshToken.token, session_id: session.id },
-          sealKey,
-        )
-      : null;
-
     // Emit authentication event (hybrid Option B for action-specific events)
     if (isFreshLogin) {
       emitAuthenticationEvent({
@@ -1196,7 +1181,10 @@ export function authRoutes(ctx: RouteContext): void {
         : resolveSessionResponseAuthMethod(session.auth_method, {
             oauthProvider: updatedUser.oauth_provider,
           }),
-      sealed_session: sealedSession,
+      // Production never returns sealed_session for API requests: the SDKs seal client-side
+      // with a caller-supplied cookie password the server never sees. A non-null value here
+      // pushes authkit-nextjs session cookies past the 4096-byte browser cap (issue #93).
+      sealed_session: null,
       impersonator: updatedUser.impersonator ?? undefined,
     });
   };
