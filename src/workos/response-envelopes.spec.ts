@@ -48,6 +48,7 @@ interface Fixtures {
   membershipId: string;
   clientId: string;
   passwordResetToken: string;
+  passwordResetId: string;
 }
 
 /** Each case names a catalog operation and returns that operation's live response body. */
@@ -77,6 +78,14 @@ const CASES: readonly EnvelopeCase[] = [
         user_id: f.userId,
         scopes: ['widgets:users-table:manage'],
       })(app),
+  },
+  {
+    operation: 'POST /user_management/password_reset',
+    request: post('/user_management/password_reset', { email: 'alice@acme.com' }),
+  },
+  {
+    operation: 'GET /user_management/password_reset/{id}',
+    request: (app, f) => get(`/user_management/password_reset/${f.passwordResetId}`)(app),
   },
   {
     operation: 'POST /user_management/password_reset/confirm',
@@ -119,8 +128,8 @@ const KNOWN_MISSING_REQUIRED: Record<string, readonly string[]> = {
   // The emulator returns the `email_verification` resource — including its `code` — so a
   // test harness can complete the flow without an email channel. Production returns
   // `{ user }` and delivers the code out of band, which a local emulator cannot do. This
-  // is the same deliberate trade as the other flow resources (magic auth, password reset
-  // send); see the SECRET_FIELDS scope note in response-shapes.spec.ts.
+  // is the same deliberate trade as magic auth; see the SECRET_FIELDS scope note in
+  // response-shapes.spec.ts.
   'POST /user_management/users/{id}/email_verification/send': ['user'],
 };
 
@@ -163,7 +172,7 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
     const userId = ws.users.findOneBy('email', 'alice@acme.com')!.id;
 
     // A membership carrying a role, so the permission check has something to authorize
-    // against; and a password reset, so confirm resolves a real token.
+    // against; and password resets, so confirm resolves a real token and GET-by-id a real record.
     const membershipId = ws.organizationMemberships.insert({
       object: 'organization_membership',
       user_id: userId,
@@ -173,13 +182,19 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       metadata: {},
       external_id: null,
     }).id;
-    const passwordResetToken = ws.passwordResets.insert({
-      object: 'password_reset',
-      user_id: userId,
-      email: 'alice@acme.com',
-      token: 'pw_reset_envelope',
-      expires_at: new Date(Date.now() + 600_000).toISOString(),
-    }).token;
+    const insertPasswordReset = (token: string) =>
+      ws.passwordResets.insert({
+        object: 'password_reset',
+        user_id: userId,
+        email: 'alice@acme.com',
+        password_reset_token: token,
+        password_reset_url: `${BASE_URL}/user_management/password_reset/confirm?token=${token}`,
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+      });
+    // Two resets: confirm spends the one it is handed, so GET-by-id reads another and the two
+    // cases do not depend on the order they run in.
+    const passwordResetToken = insertPasswordReset('pw_reset_envelope').password_reset_token;
+    const passwordResetId = insertPasswordReset('pw_reset_envelope_get').id;
 
     const fixtures: Fixtures = {
       organizationId,
@@ -187,6 +202,7 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       membershipId,
       clientId: 'client_billing',
       passwordResetToken,
+      passwordResetId,
     };
 
     for (const { operation, request } of CASES) {

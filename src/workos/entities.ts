@@ -103,11 +103,18 @@ export interface WorkOSEmailVerification extends Entity {
   expires_at: string;
 }
 
+/**
+ * Field names follow the spec's `PasswordReset` schema — `password_reset_token`, not a bare
+ * `token` — so the stored record serializes as-is. The SDKs deserialize `password_reset_token`;
+ * the wire shape drifted to `token` once already (issue #98).
+ */
 export interface WorkOSPasswordReset extends Entity {
   object: 'password_reset';
   user_id: string;
   email: string;
-  token: string;
+  password_reset_token: string;
+  /** Baked at creation from the emulator's base URL, like an invitation's `accept_invitation_url`. */
+  password_reset_url: string;
   expires_at: string;
 }
 

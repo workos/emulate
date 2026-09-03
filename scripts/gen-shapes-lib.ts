@@ -42,6 +42,8 @@ export interface ShapeMapEntry {
  * Scoped to the pure-data resources whose emulator output should mirror the
  * spec 1:1. Auth/flow payloads (authenticate, authorize) deliberately stay out
  * — their shapes are covered by the event catalog's EVENT_DATA_REQUIREMENTS.
+ * The password reset is the one flow resource included: the spec documents its
+ * token (`password_reset_token`), so on the wire it is pure data too.
  */
 export const OBJECT_SCHEMA_MAP: readonly ShapeMapEntry[] = [
   { objectType: 'user', schemaName: 'UserlandUser' },
@@ -53,6 +55,7 @@ export const OBJECT_SCHEMA_MAP: readonly ShapeMapEntry[] = [
   { objectType: 'role', schemaName: 'Role' },
   { objectType: 'permission', schemaName: 'AuthorizationPermission' },
   { objectType: 'api_key', schemaName: 'ApiKey' },
+  { objectType: 'password_reset', schemaName: 'PasswordReset' },
 ];
 
 export interface EnvelopeMapEntry {
@@ -90,6 +93,10 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
     status: '200',
     schemaName: 'ResetPasswordResponse',
   },
+  // Resource bodies rather than wrappers — but the route is the surface the SDKs read, and the
+  // one that drifted to a bare `token` (issue #98). The resource catalog only sees the formatter.
+  { method: 'POST', path: '/user_management/password_reset', status: '201', schemaName: 'PasswordReset' },
+  { method: 'GET', path: '/user_management/password_reset/{id}', status: '200', schemaName: 'PasswordReset' },
   {
     method: 'POST',
     path: '/user_management/users/{id}/email_verification/send',

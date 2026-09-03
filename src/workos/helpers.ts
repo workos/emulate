@@ -351,8 +351,12 @@ export function formatEmailVerification(ev: WorkOSEmailVerification): Record<str
   return formatEntity(ev);
 }
 
+// The spec's PasswordReset carries `created_at` but no `updated_at`: a reset is never modified,
+// only spent. Every other stored field is already wire-named.
+const PASSWORD_RESET_EXCLUDE = new Set([...INTERNAL_FIELDS, 'updated_at']);
+
 export function formatPasswordReset(pr: WorkOSPasswordReset): Record<string, unknown> {
-  return formatEntity(pr);
+  return formatEntity(pr, { exclude: PASSWORD_RESET_EXCLUDE });
 }
 
 export function formatMagicAuth(ma: WorkOSMagicAuth): Record<string, unknown> {

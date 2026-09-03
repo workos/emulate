@@ -300,11 +300,11 @@ describe('Password Reset', () => {
         body: JSON.stringify({ email: 'reset@test.com' }),
       }),
     );
-    expect(pr.token).toBeDefined();
+    expect(pr.password_reset_token).toBeDefined();
 
     const confirmRes = await req('/user_management/password_reset/confirm', {
       method: 'POST',
-      body: JSON.stringify({ token: pr.token, new_password: 'new' }),
+      body: JSON.stringify({ token: pr.password_reset_token, new_password: 'new' }),
     });
     expect(confirmRes.status).toBe(200);
   });
@@ -331,7 +331,7 @@ describe('Password Reset', () => {
     // so the token is now invalid
     const confirmRes = await req('/user_management/password_reset/confirm', {
       method: 'POST',
-      body: JSON.stringify({ token: pr.token, new_password: 'new' }),
+      body: JSON.stringify({ token: pr.password_reset_token, new_password: 'new' }),
     });
     // Token was cleaned up → 400 invalid token (not a 500)
     expect(confirmRes.status).toBeLessThan(500);

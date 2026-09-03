@@ -107,7 +107,8 @@ export interface PasswordResetEventData {
   id: string;
   user_id: string;
   email: string;
-  token: string;
+  password_reset_token: string;
+  password_reset_url: string;
   expires_at: string;
   created_at: string;
 }

@@ -308,7 +308,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
 
     const createdWebhook = await waitForWebhook('password_reset.created', { after: cursor });
     expectSpecShape(createdWebhook);
-    const token = createdWebhook.data.token as string;
+    const token = createdWebhook.data.password_reset_token as string;
     expect(token).toBeTruthy();
 
     const confirmRes = await api('/user_management/password_reset/confirm', {

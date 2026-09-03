@@ -28,6 +28,7 @@ import {
   formatRole,
   formatPermission,
   formatApiKeyRecord,
+  formatPasswordReset,
 } from './helpers.js';
 import { RESPONSE_SHAPE_REQUIREMENTS } from './generated/response-shapes.js';
 import type {
@@ -40,6 +41,7 @@ import type {
   WorkOSRole,
   WorkOSPermission,
   WorkOSApiKey,
+  WorkOSPasswordReset,
 } from './entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -173,6 +175,19 @@ const apiKey: WorkOSApiKey = {
   updated_at: TS,
 };
 
+const passwordReset: WorkOSPasswordReset = {
+  id: 'password_reset_01',
+  object: 'password_reset',
+  user_id: 'user_01',
+  email: 'alice@example.com',
+  password_reset_token: '0123456789abcdef0123456789abcdef',
+  password_reset_url:
+    'http://localhost:4100/user_management/password_reset/confirm?token=0123456789abcdef0123456789abcdef',
+  expires_at: TS,
+  created_at: TS,
+  updated_at: TS,
+};
+
 const store = new Store();
 const ws = getWorkOSStore(store);
 
@@ -186,6 +201,7 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'role', output: formatRole(role) },
   { objectType: 'permission', output: formatPermission(permission) },
   { objectType: 'api_key', output: formatApiKeyRecord(apiKey) },
+  { objectType: 'password_reset', output: formatPasswordReset(passwordReset) },
 ];
 
 /**
@@ -220,11 +236,16 @@ const KNOWN_EXTRA_FIELDS: Record<string, readonly string[]> = {
  *
  * Scope note: this set deliberately omits auth-code/token field names
  * (`code`, `token`, ...). Those belong to flow resources — email verification,
- * magic auth, password reset, client secrets — whose formatters intentionally
- * surface the value so a test harness can complete the flow without an
- * out-of-band channel. The real API hides them; an emulator must not, which is
- * exactly why those formatters are not in this catalog. Listing those names
- * here would imply a coverage this loop does not provide.
+ * magic auth, client secrets — whose formatters intentionally surface the
+ * value so a test harness can complete the flow without an out-of-band
+ * channel. The real API hides them; an emulator must not, which is exactly
+ * why those formatters are not in this catalog. Listing those names here
+ * would imply a coverage this loop does not provide.
+ *
+ * A password reset is the flow resource that *is* in the catalog: its spec
+ * schema documents `password_reset_token` — the endpoint exists so an app can
+ * send its own email — so emitting the token is conformance, not a leak, and
+ * emitting it under any other name is the drift issue #98 reported.
  *
  * An API key is the exception among credential-bearing resources: production
  * returns its raw value only once, at creation, so `formatApiKeyRecord` emits
