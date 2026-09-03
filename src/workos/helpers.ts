@@ -11,7 +11,13 @@ import {
   type Entity,
   type Store,
 } from '../core/index.js';
-import { EVENTS, STORE_KEYS, type AuthenticationEventData, type WorkOSEventName } from './constants.js';
+import {
+  DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG,
+  EVENTS,
+  STORE_KEYS,
+  type AuthenticationEventData,
+  type WorkOSEventName,
+} from './constants.js';
 import type { WorkOSStore } from './store.js';
 import type { EventBus } from './event-bus.js';
 import type {
@@ -906,8 +912,11 @@ export function formatRole(role: WorkOSRole): Record<string, unknown> {
 export function formatPermission(p: WorkOSPermission): Record<string, unknown> {
   return {
     ...formatEntity(p),
+    // The emulator has no WorkOS-managed system permissions; everything is user-defined.
     system: false,
-    resource_type_slug: p.resource_type_slug ?? 'organization',
+    // Rows inserted without a scope (direct store inserts, pre-scope releases)
+    // still format with the default so the spec-required key is always present.
+    resource_type_slug: p.resource_type_slug ?? DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG,
   };
 }
 

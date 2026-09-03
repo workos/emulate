@@ -54,11 +54,26 @@ describe('Authorization permission routes', () => {
   });
 
   it('rejects an invalid seeded resource type', () => {
-    const result = validateSeedConfig({
-      permissions: [{ slug: 'invalid:seed', name: 'Invalid Seed', resource_type_slug: 42 as unknown as string }],
+    for (const resource_type_slug of [42 as unknown as string, '']) {
+      const result = validateSeedConfig({
+        permissions: [{ slug: 'invalid:seed', name: 'Invalid Seed', resource_type_slug }],
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((error) => error.path === 'permissions[0].resource_type_slug')).toBe(true);
+    }
+  });
+
+  it('keeps the resource type when a permission is updated', async () => {
+    await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'documents:write', name: 'Write Documents', resource_type_slug: 'document' }),
     });
-    expect(result.valid).toBe(false);
-    expect(result.errors.some((error) => error.path === 'permissions[0].resource_type_slug')).toBe(true);
+    const res = await req('/authorization/permissions/documents:write', {
+      method: 'PUT',
+      body: JSON.stringify({ name: 'Edit Documents' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ name: 'Edit Documents', resource_type_slug: 'document' });
   });
 
   it('rejects duplicate slug', async () => {
@@ -82,11 +97,14 @@ describe('Authorization permission routes', () => {
   });
 
   it('rejects an invalid resource type', async () => {
-    const res = await req('/authorization/permissions', {
-      method: 'POST',
-      body: JSON.stringify({ slug: 'invalid:scope', name: 'Invalid Scope', resource_type_slug: 42 }),
-    });
-    expect(res.status).toBe(422);
+    for (const resource_type_slug of [42, '']) {
+      const res = await req('/authorization/permissions', {
+        method: 'POST',
+        body: JSON.stringify({ slug: 'invalid:scope', name: 'Invalid Scope', resource_type_slug }),
+      });
+      expect(res.status).toBe(422);
+      expect((await json(res)).errors).toEqual([{ field: 'resource_type_slug', code: 'invalid' }]);
+    }
   });
 
   it('lists permissions', async () => {

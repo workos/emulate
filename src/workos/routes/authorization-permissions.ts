@@ -1,6 +1,7 @@
 import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatPermission, formatListResponse } from '../helpers.js';
+import { DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG } from '../constants.js';
 
 export function authorizationPermissionRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -18,6 +19,8 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
     if (!name || typeof name !== 'string') {
       throw validationError('name is required', [{ field: 'name', code: 'required' }]);
     }
+    // Resource types are not modeled by the emulator (no registry, no endpoint),
+    // so any non-empty slug is accepted. Production requires a defined type.
     if (resourceTypeSlug !== undefined && (typeof resourceTypeSlug !== 'string' || !resourceTypeSlug)) {
       throw validationError('resource_type_slug must be a non-empty string', [
         { field: 'resource_type_slug', code: 'invalid' },
@@ -34,7 +37,7 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
       slug,
       name,
       description: (body.description as string) ?? null,
-      resource_type_slug: resourceTypeSlug ?? 'organization',
+      resource_type_slug: resourceTypeSlug ?? DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG,
     });
 
     return c.json(formatPermission(permission), 201);

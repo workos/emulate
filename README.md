@@ -269,6 +269,9 @@ permissions:
     name: Read Posts
   - slug: posts:write
     name: Write Posts
+  - slug: documents:read
+    name: Read Documents
+    resource_type_slug: document # optional; defaults to organization
 ```
 
 ### Pinning organization and user ids

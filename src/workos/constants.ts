@@ -18,6 +18,14 @@ export const STORE_KEY_PREFIXES = {
 } as const;
 
 /**
+ * Resource type a permission is scoped to when the caller supplies none.
+ * Production scopes permissions to the built-in `organization` resource type
+ * by default; the emulator does the same so every response carries the
+ * spec-required `resource_type_slug`.
+ */
+export const DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG = 'organization';
+
+/**
  * WorkOS event catalog, generated from the OpenAPI spec.
  * Regenerate with: npm run gen:events -- path/to/open-api-spec.yaml
  */

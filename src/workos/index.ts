@@ -41,7 +41,7 @@ import { dataIntegrationRoutes } from './routes/data-integrations.js';
 import { webhookEndpointRoutes } from './routes/webhook-endpoints.js';
 import { eventRoutes } from './routes/events.js';
 import { EventBus } from './event-bus.js';
-import { STORE_KEYS, EVENTS } from './constants.js';
+import { STORE_KEYS, EVENTS, DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG } from './constants.js';
 import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
 import {
@@ -571,7 +571,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         slug: permConfig.slug,
         name: permConfig.name,
         description: permConfig.description ?? null,
-        resource_type_slug: permConfig.resource_type_slug ?? 'organization',
+        resource_type_slug: permConfig.resource_type_slug ?? DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG,
       });
     }
   }
