@@ -128,6 +128,8 @@ describe('Connect routes', () => {
       }),
     );
     getWorkOSStore(store).connectApplications.update(clientIdOwner.id, { client_id: idOwner.id });
+    // Sanity-check the collision is real: the client_id index now resolves to the other app.
+    expect(getWorkOSStore(store).connectApplications.findOneBy('client_id', idOwner.id)?.id).toBe(clientIdOwner.id);
 
     const res = await req(`/connect/applications/${idOwner.id}`);
     expect(res.status).toBe(200);
@@ -179,5 +181,20 @@ describe('Connect routes', () => {
 
     const delRes = await req(`/connect/client_secrets/${secret.id}`, { method: 'DELETE' });
     expect(delRes.status).toBe(204);
+  });
+
+  it('creates a client secret for an application referenced by client_id', async () => {
+    const application = await json(
+      await req('/connect/applications', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Client ID Secret Test' }),
+      }),
+    );
+
+    const res = await req(`/connect/applications/${application.client_id}/client_secrets`, { method: 'POST' });
+    expect(res.status).toBe(201);
+    const secret = await json(res);
+    expect(secret.object).toBe('client_secret');
+    expect(secret.application_id).toBe(application.id);
   });
 });

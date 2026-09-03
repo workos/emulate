@@ -12,6 +12,12 @@ export function connectRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
   const ws = getWorkOSStore(store);
 
+  // The spec documents the `{id}` param on every `/connect/applications/{id}...` route as
+  // "the application ID or client ID". Resolve the primary key first so an application ID
+  // always wins over another application's colliding client_id.
+  const findApplication = (ref: string) =>
+    ws.connectApplications.get(ref) ?? ws.connectApplications.findOneBy('client_id', ref);
+
   // List applications
   app.get('/connect/applications', (c) => {
     const url = new URL(c.req.url);
@@ -70,16 +76,15 @@ export function connectRoutes(ctx: RouteContext): void {
   });
 
   // Get application
-  app.get('/connect/applications/:ref', (c) => {
-    const ref = c.req.param('ref');
-    const application = ws.connectApplications.get(ref) ?? ws.connectApplications.findOneBy('client_id', ref);
+  app.get('/connect/applications/:id', (c) => {
+    const application = findApplication(c.req.param('id'));
     if (!application) throw notFound('ConnectApplication');
     return c.json(formatConnectApplication(application));
   });
 
   // Create client secret
   app.post('/connect/applications/:id/client_secrets', (c) => {
-    const application = ws.connectApplications.get(c.req.param('id'));
+    const application = findApplication(c.req.param('id'));
     if (!application) throw notFound('ConnectApplication');
 
     const value = `secret_${generateVerificationToken()}`;
