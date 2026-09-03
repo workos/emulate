@@ -8,7 +8,7 @@ import {
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatPermission, formatListResponse } from '../helpers.js';
-import { DEFAULT_RESOURCE_TYPE_SLUG } from '../constants.js';
+import { DEFAULT_RESOURCE_TYPE_SLUG, isValidResourceTypeSlug } from '../constants.js';
 
 export function authorizationPermissionRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -28,7 +28,7 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
     }
     // Resource types are not modeled by the emulator (no registry, no endpoint),
     // so any non-empty slug is accepted. Production requires a defined type.
-    if (resourceTypeSlug !== undefined && (typeof resourceTypeSlug !== 'string' || !resourceTypeSlug)) {
+    if (!isValidResourceTypeSlug(resourceTypeSlug)) {
       throw validationError('resource_type_slug must be a non-empty string', [
         { field: 'resource_type_slug', code: 'invalid' },
       ]);

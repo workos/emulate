@@ -3,6 +3,7 @@
  */
 import type { WorkOSSeedConfig } from './index.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
+import { isValidResourceTypeSlug } from './constants.js';
 import { normalizeEmail, type NormalizedEmail } from './helpers.js';
 
 /**
@@ -563,10 +564,7 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: role.type,
           });
         }
-        if (
-          role.resource_type_slug !== undefined &&
-          (typeof role.resource_type_slug !== 'string' || !role.resource_type_slug)
-        ) {
+        if (!isValidResourceTypeSlug(role.resource_type_slug)) {
           errors.push({
             path: `roles[${index}].resource_type_slug`,
             message: 'resource_type_slug must be a non-empty string if provided',
@@ -601,10 +599,7 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: perm.name,
           });
         }
-        if (
-          perm.resource_type_slug !== undefined &&
-          (typeof perm.resource_type_slug !== 'string' || !perm.resource_type_slug)
-        ) {
+        if (!isValidResourceTypeSlug(perm.resource_type_slug)) {
           errors.push({
             path: `permissions[${index}].resource_type_slug`,
             message: 'resource_type_slug must be a non-empty string if provided',

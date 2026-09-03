@@ -10,7 +10,7 @@ import {
 import type { WorkOSStore } from './store.js';
 import type { WorkOSRole, WorkOSPermission } from './entities.js';
 import { getWorkOSStore } from './store.js';
-import { DEFAULT_RESOURCE_TYPE_SLUG } from './constants.js';
+import { DEFAULT_RESOURCE_TYPE_SLUG, isValidResourceTypeSlug } from './constants.js';
 import { formatRole, formatPermission, formatListResponse } from './helpers.js';
 
 export function findEnvRole(ws: WorkOSStore, slug: string): WorkOSRole | undefined {
@@ -106,7 +106,7 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
     // Resource types are not modeled by the emulator (no registry, no endpoint),
     // so any non-empty slug is accepted, and a role's permissions are not checked
     // against its scope. Production requires a defined type and matching scopes.
-    if (resourceTypeSlug !== undefined && (typeof resourceTypeSlug !== 'string' || !resourceTypeSlug)) {
+    if (!isValidResourceTypeSlug(resourceTypeSlug)) {
       throw validationError('resource_type_slug must be a non-empty string', [
         { field: 'resource_type_slug', code: 'invalid' },
       ]);
