@@ -243,6 +243,20 @@ describe('Widget routes', () => {
       expect(ws.apiKeyRecords.get(key.id)!.expires_at).toBe(expiresAt);
     });
 
+    it('refuses to issue a key for an organization that does not exist', async () => {
+      // A token can be minted for any organization id, and the org may be deleted afterwards;
+      // honoring it would create a live credential no organization route can reach.
+      const orphanToken = await mintToken({ organization_id: 'org_missing' });
+      const res = await app.request('/_widgets/ApiKeys/organization-api-keys', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${orphanToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Orphan', permissions: [] }),
+      });
+      expect(res.status).toBe(404);
+      expect((await json(res)).message).toBe('Organization not found');
+      expect(ws.apiKeyRecords.all()).toHaveLength(0);
+    });
+
     it('validates the create body under the widget field names', async () => {
       let res = await createKey({ permissions: [] });
       expect(res.status).toBe(422);

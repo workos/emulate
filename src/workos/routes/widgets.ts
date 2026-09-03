@@ -216,6 +216,10 @@ export function widgetRoutes(ctx: RouteContext): void {
 
   app.post('/_widgets/ApiKeys/organization-api-keys', async (c) => {
     const { organizationId } = widgetAuth(c);
+    // The token names the organization but nothing checked it exists — a token can be minted
+    // for any id, and the org may have been deleted since. Issuing a key here would create a
+    // live credential no organization route can reach, so refuse as the public route does.
+    if (!ws.organizations.get(organizationId)) throw notFound('Organization');
     const body = await parseJsonBody(c);
 
     const name = typeof body.name === 'string' ? body.name.trim() : '';
