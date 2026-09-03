@@ -103,11 +103,18 @@ export interface WorkOSEmailVerification extends Entity {
   expires_at: string;
 }
 
+/**
+ * Field names follow the spec's `PasswordReset` schema — `password_reset_token`, not a bare
+ * `token` — so the stored record serializes as-is. The SDKs deserialize `password_reset_token`;
+ * the wire shape drifted to `token` once already (issue #98).
+ */
 export interface WorkOSPasswordReset extends Entity {
   object: 'password_reset';
   user_id: string;
   email: string;
-  token: string;
+  password_reset_token: string;
+  /** Baked at creation from the emulator's base URL, like an invitation's `accept_invitation_url`. */
+  password_reset_url: string;
   expires_at: string;
 }
 
@@ -140,6 +147,20 @@ export interface WorkOSAuthorizationCode extends Entity {
   code_challenge_method: string | null;
   /** The OAuth client that initiated the authorization, bound to the code so the token claim can't be spoofed at redemption. */
   client_id: string | null;
+  /**
+   * How the user proved who they were on the way to this code, when the emulator knows. The
+   * interactive password page records 'Password'; the default auto-redirect checks nothing and
+   * leaves this null, so the exchange reports the OAuth grant it always has rather than a method
+   * nobody verified.
+   */
+  auth_method: string | null;
+  /**
+   * The gate the interactive login cleared last on the way to this code — 'EmailVerification' or
+   * 'MFA' — when it had to clear one. The exchange then reports what the API grant for that step
+   * reports: the gate's event, with the session recording `auth_method` as the primary. Null when
+   * the password alone earned the code, and always null from the auto-redirect.
+   */
+  step_up_method: string | null;
 }
 
 export interface WorkOSIdentity extends Entity {
@@ -412,22 +433,40 @@ export interface WorkOSAuditLogExport extends Entity {
   filters: Record<string, unknown>;
 }
 
+export interface WorkOSFeatureFlagOwner {
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+}
+
 export interface WorkOSFeatureFlag extends Entity {
   object: 'feature_flag';
   slug: string;
   name: string;
   description: string | null;
-  type: 'boolean' | 'string' | 'number';
-  default_value: unknown;
+  owner: WorkOSFeatureFlagOwner | null;
+  tags: string[];
   enabled: boolean;
+  /** Value returned for resources matching no target. Production flags are boolean-only. */
+  default_value: boolean;
 }
 
+/**
+ * A resource the flag is switched on for. Production targeting is membership, not assignment:
+ * `POST /feature-flags/{slug}/targets/{resourceId}` takes no body, so a target's mere existence
+ * means "on for this resource" and there is no value to store or to turn a flag back off with.
+ */
 export interface WorkOSFlagTarget extends Entity {
   object: 'flag_target';
   flag_slug: string;
   resource_id: string;
-  resource_type: string;
-  value: unknown;
+  resource_type: 'user' | 'organization';
+  /**
+   * Reported to the SDK runtime client, whose evaluator skips a target unless this is true.
+   * Always true for targets created over the API — the create route carries no body — but
+   * the field is real on the wire, so it is stored rather than hardcoded at serialization.
+   */
+  enabled: boolean;
 }
 
 export interface WorkOSConnectApplication extends Entity {
@@ -511,6 +550,11 @@ export interface WorkOSEvent extends Entity {
   event: string;
   data: Record<string, unknown>;
   environment_id: string | null;
+  /**
+   * The spec's per-event `context` envelope. Only flag events populate it so far — the
+   * emulator has no actor model for the rest — so it is omitted rather than faked elsewhere.
+   */
+  context?: Record<string, unknown>;
 }
 
 export interface WorkOSWebhookEndpoint extends Entity {

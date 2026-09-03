@@ -39,6 +39,7 @@ export interface EmulatorSeedConfig {
   webhookEndpoints?: WorkOSSeedConfig['webhookEndpoints'];
   connectApplications?: WorkOSSeedConfig['connectApplications'];
   jwtTemplate?: WorkOSSeedConfig['jwtTemplate'];
+  featureFlags?: WorkOSSeedConfig['featureFlags'];
   errorHooks?: ErrorHookSeedConfig[];
 }
 
@@ -77,7 +78,12 @@ export interface EmulatorOptions {
    * (`['*.example.test']`). `['*']` allows any host, which turns the check off entirely.
    */
   allowedRedirectHosts?: string[];
-  interactiveAuth?: boolean;
+  /**
+   * Serve login pages from the authorize endpoints instead of redirecting straight back with a
+   * code, for browser-driven tests. `true` serves the email-only page; `{ password: true }` also
+   * asks a user who has a password for it, as hosted AuthKit does. See `InteractiveAuthOptions`.
+   */
+  interactiveAuth?: boolean | InteractiveAuthOptions;
   webhookRetryConfig?: {
     maxRetries?: number;
     initialDelayMs?: number;
@@ -85,6 +91,15 @@ export interface EmulatorOptions {
     backoffMultiplier?: number;
   };
   webhookDebugMode?: boolean;
+}
+
+export interface InteractiveAuthOptions {
+  /**
+   * Ask a user who has a password for it after the email step, on its own page, before any
+   * organization selection. A user without a password is not asked. Off by default, because the
+   * one-step email page is what existing browser suites were written against.
+   */
+  password?: boolean;
 }
 
 export interface Emulator {
@@ -135,7 +150,12 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   // from reset() as well. Kept in one place because the failure is silent otherwise: an option
   // set here and not restored there simply stops taking effect after the first reset.
   const applyOptionData = () => {
-    if (options.interactiveAuth) store.setData(STORE_KEYS.interactiveAuth, true);
+    if (options.interactiveAuth) {
+      store.setData(STORE_KEYS.interactiveAuth, true);
+      if (typeof options.interactiveAuth === 'object' && options.interactiveAuth.password) {
+        store.setData(STORE_KEYS.interactivePassword, true);
+      }
+    }
     if (allowedRedirectHosts.length > 0) store.setData(STORE_KEYS.allowedRedirectHosts, allowedRedirectHosts);
     if (options.webhookRetryConfig) store.setData('webhookRetryConfig', options.webhookRetryConfig);
     if (options.webhookDebugMode) store.setData('webhookDebugMode', true);

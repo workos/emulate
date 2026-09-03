@@ -1,4 +1,4 @@
-import { randomBytes, createHash, createCipheriv } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { isIPv6 } from 'node:net';
 import { domainToASCII } from 'node:url';
 import {
@@ -54,7 +54,6 @@ import type {
   WorkOSAuditLogEvent,
   WorkOSAuditLogExport,
   WorkOSFeatureFlag,
-  WorkOSFlagTarget,
   WorkOSConnectApplication,
   WorkOSClientSecret,
   WorkOSRadarAttempt,
@@ -357,8 +356,12 @@ export function formatEmailVerification(ev: WorkOSEmailVerification): Record<str
   return formatEntity(ev);
 }
 
+// The spec's PasswordReset carries `created_at` but no `updated_at`: a reset is never modified,
+// only spent. Every other stored field is already wire-named.
+const PASSWORD_RESET_EXCLUDE = new Set([...INTERNAL_FIELDS, 'updated_at']);
+
 export function formatPasswordReset(pr: WorkOSPasswordReset): Record<string, unknown> {
-  return formatEntity(pr);
+  return formatEntity(pr, { exclude: PASSWORD_RESET_EXCLUDE });
 }
 
 export function formatMagicAuth(ma: WorkOSMagicAuth): Record<string, unknown> {
@@ -985,12 +988,45 @@ export function formatAuditLogExport(ex: WorkOSAuditLogExport): Record<string, u
   return formatEntity(ex);
 }
 
+/**
+ * The spec's `Flag` object, spelled out rather than derived from the entity: every key it
+ * lists is `required`, so a strict SDK deserializer faults on an omission, and the emulator
+ * must not add keys production does not send either.
+ */
 export function formatFeatureFlag(f: WorkOSFeatureFlag): Record<string, unknown> {
-  return formatEntity(f);
+  return {
+    object: 'feature_flag',
+    id: f.id,
+    slug: f.slug,
+    name: f.name,
+    description: f.description,
+    owner: f.owner,
+    tags: f.tags,
+    enabled: f.enabled,
+    default_value: f.default_value,
+    created_at: f.created_at,
+    updated_at: f.updated_at,
+  };
 }
 
-export function formatFlagTarget(t: WorkOSFlagTarget): Record<string, unknown> {
-  return formatEntity(t);
+/**
+ * Flag webhook payloads are the REST `Flag` plus `environment_id`, which the REST object
+ * itself does not carry.
+ */
+export function formatFeatureFlagEvent(f: WorkOSFeatureFlag, environmentId: string): Record<string, unknown> {
+  const { object, id, ...rest } = formatFeatureFlag(f);
+  return { object, id, environment_id: environmentId, ...rest };
+}
+
+/**
+ * The actor an API-key request acts as — flag event `context.actor`, Vault `updated_by`. The
+ * key's record when the caller's key has one (an array-form `apiKeys` seed entry, or a key
+ * created over the API), otherwise the emulator's standing placeholder: a map-form `apiKeys`
+ * entry authenticates but has no `api_key` resource behind it, so there is nothing to name.
+ */
+export function apiKeyActor(ws: WorkOSStore, apiKey?: string): { id: string; name: string } {
+  const record = apiKey ? ws.apiKeyRecords.findOneBy('key', apiKey) : undefined;
+  return { id: record?.id ?? 'api_key_emulator', name: record?.name ?? 'Emulator API key' };
 }
 
 /** Generate a Connect Application client_id, e.g. `client_01HXYZ...`. */
@@ -1057,6 +1093,91 @@ export function revokeApiKeysForOwner(
   }
 }
 
+/** The organization a key is scoped to: the owner org, or the org a user-owned key was issued in. */
+export function apiKeyOrganizationId(k: WorkOSApiKey): string {
+  return k.owner.type === 'organization' ? k.owner.id : k.owner.organization_id;
+}
+
+export interface IssueApiKeyInput {
+  name: string;
+  owner: WorkOSApiKeyOwner;
+  permissions: string[];
+  /** ISO-8601 expiry, or null for a key that never expires. */
+  expiresAt: string | null;
+  /** Auth environment; decides the `sk_live_`/`sk_test_` prefix and travels into the allow-list. */
+  environment: string;
+}
+
+/**
+ * Mint an API key: create the `api_key` record and register the secret in the auth allow-list
+ * (the same object the middleware holds by reference) so the new key authenticates real
+ * requests. Both the public routes and the widgets surface issue keys through here, so the two
+ * stores cannot drift apart. Returns the plaintext secret alongside the record — it is shown to
+ * the caller exactly once and never serialized again.
+ */
+export function issueApiKey(
+  store: Store,
+  ws: WorkOSStore,
+  input: IssueApiKeyInput,
+): { record: WorkOSApiKey; value: string } {
+  const value = `sk_${input.environment === 'production' ? 'live' : 'test'}_${generateVerificationToken()}`;
+  const record = ws.apiKeyRecords.insert({
+    object: 'api_key',
+    name: input.name,
+    key: value,
+    environment: input.environment,
+    owner: input.owner,
+    permissions: input.permissions,
+    last_used_at: null,
+    expires_at: input.expiresAt,
+  });
+  const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {};
+  apiKeyMap[value] = { environment: input.environment, expiresAt: record.expires_at };
+  store.setData(STORE_KEYS.apiKeyMap, apiKeyMap);
+  return { record, value };
+}
+
+/**
+ * Delete one API key from both the record store and the auth allow-list, so the key stops
+ * authenticating and not merely stops resolving — see `revokeApiKeysForOwner`.
+ */
+export function deleteApiKey(store: Store, ws: WorkOSStore, record: WorkOSApiKey): void {
+  ws.apiKeyRecords.delete(record.id);
+  const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
+  if (apiKeyMap) delete apiKeyMap[record.key];
+}
+
+export function isApiKeyExpired(record: WorkOSApiKey): boolean {
+  return record.expires_at !== null && Date.parse(record.expires_at) <= Date.now();
+}
+
+/**
+ * Set an API key's expiry: `null` clears it so the key never expires, a future timestamp
+ * schedules it, and anything else — a past timestamp or none at all — expires the key now.
+ * The allow-list entry moves in step, so the middleware enforces the new expiry on the next
+ * request. A key that has already expired cannot be re-scheduled, as in production.
+ */
+export function expireApiKey(
+  store: Store,
+  ws: WorkOSStore,
+  record: WorkOSApiKey,
+  expiresAt: string | null | undefined,
+): WorkOSApiKey {
+  if (isApiKeyExpired(record)) {
+    throw new WorkOSApiError(409, 'API key is already expired', 'api_key_already_expired');
+  }
+  const next =
+    expiresAt === null
+      ? null
+      : typeof expiresAt === 'string' && Date.parse(expiresAt) > Date.now()
+        ? expiresAt
+        : new Date().toISOString();
+  const updated = ws.apiKeyRecords.update(record.id, { expires_at: next })!;
+  const apiKeyMap = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap);
+  if (apiKeyMap?.[record.key]) apiKeyMap[record.key].expiresAt = next;
+  return updated;
+}
+
 export function formatApiKeyRecord(k: WorkOSApiKey): Record<string, unknown> {
   return {
     object: 'api_key',
@@ -1093,17 +1214,4 @@ export function formatWebhookEndpoint(
     created_at: ep.created_at,
     updated_at: ep.updated_at,
   };
-}
-
-export function sealSession(
-  data: { access_token: string; refresh_token: string; session_id: string },
-  apiKey: string,
-): string {
-  const key = createHash('sha256').update(apiKey).digest();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const plaintext = JSON.stringify(data);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, encrypted]).toString('base64');
 }

@@ -34,11 +34,17 @@ export function passwordResetRoutes(ctx: RouteContext): void {
     const user = findUserByEmail(ws, email);
     if (!user) throw notFound('User');
 
+    const token = generateVerificationToken();
     const pr = ws.passwordResets.insert({
       object: 'password_reset',
       user_id: user.id,
       email: user.email,
-      token: generateVerificationToken(),
+      password_reset_token: token,
+      // Production builds this link from the password-reset redirect configured in the dashboard.
+      // The emulator has no such setting, so — like an invitation's accept_invitation_url — the
+      // link points at the emulator itself, carrying the token under the `token` query parameter
+      // the confirm endpoint documents.
+      password_reset_url: `${ctx.baseUrl}/user_management/password_reset/confirm?token=${token}`,
       expires_at: expiresIn(60),
     });
 
@@ -58,7 +64,7 @@ export function passwordResetRoutes(ctx: RouteContext): void {
     }
 
     const resets = ws.passwordResets.all();
-    const pr = resets.find((r) => r.token === token);
+    const pr = resets.find((r) => r.password_reset_token === token);
     if (!pr) {
       throw new WorkOSApiError(400, 'Invalid token', 'invalid_token');
     }

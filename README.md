@@ -96,6 +96,7 @@ workos-emulate
 workos-emulate --port 9100 --json
 workos-emulate --seed workos-emulate.config.yaml
 workos-emulate --interactive          # serve login pages for E2E browser testing
+workos-emulate --interactive-password # ...and ask a user who has a password for it
 workos-emulate --signing-key ci-key.pem --issuer https://api.workos.com  # stable JWKS and iss
 workos-emulate --redirect-hosts app.example.test  # allow a non-localhost redirect_uri
 workos-emulate --version
@@ -515,6 +516,168 @@ only registers values for authentication without creating resources. A map-form 
 requests but has no `api_key` resource behind it, so validating one returns `{"api_key": null}` —
 use the array form for keys your code validates.
 
+### Feature Flags
+
+Production has no create-flag endpoint — flags are made in the dashboard — so the `featureFlags`
+seed key is how a flag comes into existence at all. Targets join to `users` by email and to
+`organizations` by name, the same way memberships do; an entry naming neither fails at startup.
+
+```yaml
+users:
+  - email: alice@acme.com
+    password: test123
+    email_verified: true
+  - email: bob@acme.com
+    password: test123
+    email_verified: true
+
+organizations:
+  - name: Acme Corp
+    memberships:
+      - email: alice@acme.com
+      - email: bob@acme.com
+  - name: Other Inc
+
+featureFlags:
+  # On for everyone: nothing matches a target, so default_value decides.
+  - slug: new-billing
+    name: New Billing
+    default_value: true
+
+  # Off by default, on for exactly the listed targets.
+  - slug: beta-dashboard
+    name: Beta Dashboard
+    description: The rebuilt analytics dashboard
+    tags: [ui, beta]
+    owner:
+      email: jane@acme.com
+      first_name: Jane
+      last_name: Doe
+    targets:
+      users: [alice@acme.com]
+      organizations: [Acme Corp]
+
+  # Targeted at an organization Alice is not a member of.
+  - slug: partner-portal
+    targets:
+      organizations: [Other Inc]
+
+  # Built but not switched on in this environment: off for everyone, targets included.
+  - slug: unreleased
+    id: flag_01PINNEDUNRELEASED
+    enabled: false
+    default_value: true
+    targets:
+      users: [alice@acme.com]
+```
+
+Signing Alice in against that config gives `feature_flags: ["new-billing", "beta-dashboard"]`;
+Bob gets `["new-billing", "beta-dashboard"]` too via Acme Corp, but would lose `beta-dashboard`
+if the organization target were removed. `partner-portal` is off for both, and `unreleased` is
+off for everyone until something enables it.
+
+A flag is on for a resource when it is `enabled` **and** either a target names that resource or
+`default_value` is true. Targeting is additive, as it is in production: `POST
+/feature-flags/{slug}/targets/{resourceId}` carries no body, so a target can turn a flag on but
+never off. Flags also accept an optional `id` to pin (`flag_01ABC…`). Slugs must be URL-safe, since
+every route addresses a flag by slug in the path.
+
+Three surfaces read the result, and all three resolve through the same rule:
+
+- **The `feature_flags` access-token claim** — the slugs on for the signed-in user, re-resolved at
+  every mint (refresh grants included), so a toggle lands in the next token. Scoped to the
+  session's organization: a flag targeted at some _other_ org the user belongs to is not in the
+  claim. Omitted rather than minted as `[]` when nothing is on.
+- **The list endpoints an SDK polls** — `GET /user_management/users/{id}/feature-flags` and
+  `GET /organizations/{id}/feature-flags`. Both return a paginated list of whole `feature_flag`
+  objects, and both list only the flags that are on. The user endpoint includes flags from every
+  organization the user is an _active_ member of, as production documents — a `pending` or
+  `inactive` membership grants nothing, matching the status check `authenticate` applies before
+  scoping a session to an organization.
+
+```ts
+const { data } = await workos.featureFlags.listUserFeatureFlags({ userId: user.id });
+const enabled = new Set(data.map((flag) => flag.slug));
+// ...or the organization-scoped equivalent
+await workos.featureFlags.listOrganizationFeatureFlags({ organizationId: org.id });
+```
+
+- **The SDK runtime client** — `workos.featureFlags.createRuntimeClient()` does not use either
+  list endpoint. It polls `GET /sdk/feature-flags`, which is **not in the WorkOS OpenAPI spec**;
+  the emulator implements it anyway, because without it the runtime client never leaves its
+  bootstrap state. The response is a bare slug-keyed map of every flag and its targets, and the
+  client evaluates locally, so `isEnabled` answers without a round trip:
+
+```ts
+const flags = workos.featureFlags.createRuntimeClient({ pollingIntervalMs: 5_000 });
+await flags.waitUntilReady();
+flags.isEnabled('beta-dashboard', { userId: user.id, organizationId: org.id });
+flags.on('change', ({ key, current }) => console.log(key, current));
+```
+
+All three apply the same rule — a disabled flag is off for everyone; otherwise a matching enabled
+target wins; otherwise `default_value` — so for one resource they agree. They are scoped
+differently on purpose, and that is the one case where they legitimately differ: the token claim
+covers the user plus the session's organization, while the user list endpoint covers the user plus
+_every_ organization they are an active member of. A user in two organizations can therefore have a flag in the
+list endpoint that is absent from a token scoped to the other organization. Production scopes them
+the same way.
+
+Toggling at runtime works too. The verbs match the spec: `PUT /feature-flags/{slug}/enable` and
+`/disable`, `POST /feature-flags/{slug}/targets/{resourceId}` and its `DELETE`. The emulator also
+accepts `POST` on enable/disable and `PUT` on target creation, for callers written against its
+earlier shape — those aliases are **emulator-only**, and production rejects them, so do not rely
+on them in code you intend to run against real WorkOS. Changes emit `flag.updated`; adding or
+removing a target emits `flag.rule_updated`, carrying the flag's `access_type`, its configured
+targets, and the previous rule state.
+
+`flag.rule_updated` names the API key that made the request as its `actor` when that key has a
+record behind it (an array-form `apiKeys` entry, or a key created over the API); a map-form key
+authenticates but has no record, so the actor falls back to the emulator's placeholder key. The
+collection-level `flag.created` / `flag.updated` / `flag.deleted` events run without request
+context and always report the placeholder. Flags are not environment-scoped, so every flag event
+reports `environment_test`. Deleting a user or organization removes its flag targets.
+
+## Widgets
+
+`POST /widgets/token` mints the session token the `@workos-inc/widgets` components authenticate
+with, as the SDKs' `widgets.getToken()` calls it. The requested scopes are minted under the
+`permissions` claim and the token expires in an hour — the two claims the widget client reads to
+decide whether it may render and when to refresh.
+
+The components never call the public REST API; they call a private `/_widgets/*` surface. The
+emulator serves the routes the org-scope `<ApiKeys>` widget uses, as a translation layer over the
+same store the public API-key routes use — so a key created in the widget authenticates requests,
+and a key created through `POST /organizations/{id}/api_keys` (or seeded) shows up in the widget:
+
+| Method   | Path                                      |
+| -------- | ----------------------------------------- |
+| `GET`    | `/_widgets/ApiKeys/organization-api-keys` |
+| `POST`   | `/_widgets/ApiKeys/organization-api-keys` |
+| `DELETE` | `/_widgets/ApiKeys/{apiKeyId}`            |
+| `POST`   | `/_widgets/ApiKeys/{apiKeyId}/expire`     |
+| `GET`    | `/_widgets/ApiKeys/permissions`           |
+
+Point the widgets provider at the emulator and hand it a token minted with the
+`widgets:api-keys:manage` scope:
+
+```tsx
+<WorkOsWidgets apiHostname="localhost" port={4100} https={false}>
+  <ApiKeys authToken={token} />
+</WorkOsWidgets>
+```
+
+`/_widgets/*` requests authenticate with the widget token, not an API key, and the organization is
+the token's `org_id`: keys are only ever listed, created, revoked, or expired within it, and another
+organization's key is a `404`. A missing, expired, or otherwise invalid token — or one minted
+without the widget's scope — is a `403`, the status the widget client treats as a token problem: it
+refetches the token once, then renders its expired-session or incorrect-permissions state.
+`GET /_widgets/ApiKeys/permissions` serves the environment's permissions (seeded, or created via
+`POST /authorization/permissions`), which is what fills the create dialog's checklist.
+
+Not implemented yet: the `scope="user"` variant (`/_widgets/UserApiKeys/*`) and the other widgets'
+`/_widgets/*` routes.
+
 ## Testing Your Login Flow End-to-End
 
 The emulator implements the full [workos.com/docs](https://workos.com/docs) login story: every resource creation and authentication outcome fires a signed webhook, with event names and payload shapes generated from the WorkOS OpenAPI spec. You can run your app's entire login flow — hosted authorize, callback, token exchange, webhook handling — against the emulator without touching the real API.
@@ -548,10 +711,10 @@ Point your SDK's base URL at the emulator and follow the AuthKit quickstart exac
 
 1. **Create a user** — `POST /user_management/users` → a `user.created` webhook arrives.
 2. **Redirect to AuthKit** — send the browser to `GET /user_management/authorize?redirect_uri=...&state=...`. By default the emulator immediately redirects back to your callback with a `code`; with `--interactive` it serves a real login page first.
-3. **Exchange the code** — your callback calls `POST /user_management/authenticate` with `grant_type=authorization_code`. You get back the user, `access_token`, and `refresh_token` — and `session.created` plus `authentication.oauth_succeeded` webhooks arrive.
+3. **Exchange the code** — your callback calls `POST /user_management/authenticate` with `grant_type=authorization_code`. You get back the user, `access_token`, and `refresh_token` — and `session.created` plus `authentication.oauth_succeeded` webhooks arrive (`authentication.password_succeeded` instead, when the [interactive password page](#requiring-a-password) checked the login, or the event of the gate that page cleared last).
 4. **Other methods work the same way** — password, Magic Auth, email verification, MFA, and SSO logins all emit their spec-named `authentication.*_succeeded` events; failed attempts emit `authentication.*_failed` with an `error: { code, message }` object.
 
-Codes that WorkOS would deliver by email are delivered to you in the webhook payload instead: `magic_auth.created` carries the Magic Auth `code`, `password_reset.created` carries the reset `token`, and `email_verification.created` carries the verification `code`. Your test can drive the whole flow from webhooks alone — see `src/e2e.spec.ts` for a complete worked example.
+Codes that WorkOS would deliver by email are delivered to you in the webhook payload instead: `magic_auth.created` carries the Magic Auth `code`, `password_reset.created` carries the reset `password_reset_token` (and the `password_reset_url` built around it), and `email_verification.created` carries the verification `code`. Your test can drive the whole flow from webhooks alone — see `src/e2e.spec.ts` for a complete worked example.
 
 ### 3. Verify signatures
 
@@ -1214,8 +1377,10 @@ When interactive mode is on:
 1. Your app redirects to `/sso/authorize?connection=...&redirect_uri=...` (or `/user_management/authorize?...`)
 2. The emulator serves a login page instead of auto-redirecting
 3. The browser (or agent) fills in the email field and submits the form
-4. If the user belongs to more than one organization, the emulator asks which one, as hosted AuthKit does
-5. The emulator creates an auth code and redirects back to your app's callback URL
+4. With the [password option](#requiring-a-password) on, a user who has a password is asked for it next
+5. Under the same option, the gates the `password` grant enforces follow: an unverified mailbox is asked for its emailed code, then an enrolled second factor for its one-time code
+6. If the user belongs to more than one organization, the emulator asks which one, as hosted AuthKit does
+7. The emulator creates an auth code and redirects back to your app's callback URL
 
 The `login_hint` parameter pre-fills the email field, so agent browsers can skip typing if desired.
 
@@ -1237,6 +1402,42 @@ test('multi-organization login', async ({ page }) => {
 
   // Only shown when the user belongs to several organizations
   await page.click('text=Acme');
+
+  await expect(page).toHaveURL(/dashboard/);
+});
+```
+
+### Requiring a password
+
+The login page asks for an email and nothing else, so a suite signs in as anyone with one form fill. Pass `--interactive-password` (CLI) or `interactiveAuth: { password: true }` (programmatic) to add the step hosted AuthKit puts next: a user who has a password is asked for it after the email and before any organization question.
+
+```bash
+workos-emulate --interactive-password --seed workos-emulate.config.yaml
+```
+
+```ts
+const emulator = await createEmulator({
+  interactiveAuth: { password: true },
+  seed: { users: [{ email: 'alice@example.com', password: 'correct-horse', email_verified: true }] },
+});
+```
+
+- The page shows the email read-only above an `input[name="password"]`, with a "Use a different account" link back to the email page. A user without a password skips it, so a sign-up or a passwordless seed behaves exactly as before.
+- A wrong password re-renders the page with an inline error (HTTP 401) and emits `authentication.password_failed` with `invalid_credentials`, the same event the `password` grant emits. Nothing reaches your callback until the password is right.
+- Once it is, the code the callback receives remembers how it was earned: the exchange emits `authentication.password_succeeded` rather than `authentication.oauth_succeeded`, and the response carries `"authentication_method": "Password"`.
+- The gates the `password` grant enforces apply here too, in the order hosted AuthKit shows them. A user whose `email_verified` is `false` gets a "Verify your email" page for the code that arrives on the `email_verification.created` webhook, and a user with an enrolled factor (`totp: true` in a seed) gets a one-time-code page for a fresh authentication challenge, whose code a test reads from the store as it does to finish the `mfa-totp` grant. Both pages take an `input[name="code"]`. A wrong code re-renders with an inline error (HTTP 401) and emits `authentication.email_verification_failed` or `authentication.mfa_failed`, as the matching grant would.
+- When a gate was cleared, the exchange reports what that grant reports: `authentication.email_verification_succeeded` or `authentication.mfa_succeeded` in place of `authentication.password_succeeded`, with the session and `authentication_method` still recording `Password`. Fixtures that should go from the password straight to the callback want `email_verified: true`, as they do for the `password` grant.
+- Every page after the password carries a short-lived token rather than the password. Posting an `organization_id`, or a code, without that token lands back on the password page, and posting past an open gate lands back on the gate.
+- Plain `--interactive` is unchanged.
+
+```ts
+test('password login', async ({ page }) => {
+  await page.goto('http://localhost:3000/login');
+  await page.fill('input[name="email"]', 'alice@example.com');
+  await page.click('button[type="submit"]');
+
+  await page.fill('input[name="password"]', 'correct-horse');
+  await page.click('button[type="submit"]');
 
   await expect(page).toHaveURL(/dashboard/);
 });

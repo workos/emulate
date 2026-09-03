@@ -44,6 +44,7 @@ import { EventBus } from './event-bus.js';
 import { STORE_KEYS, EVENTS, DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG } from './constants.js';
 import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
+import { environmentIdFor, flagEventContext } from './flag-context.js';
 import {
   generateVerificationToken,
   hashPassword,
@@ -66,6 +67,7 @@ import {
   formatPasswordReset,
   formatApiKeyRecord,
   formatFeatureFlag,
+  formatFeatureFlagEvent,
   generateClientId,
   findUserByEmail,
   formatConnectedAccountEvent,
@@ -299,6 +301,46 @@ export interface WorkOSSeedApiKey {
 /** Legacy auth allow-list: maps a raw API key value to its environment. */
 export type WorkOSSeedApiKeyAuthMap = Record<string, { environment: string }>;
 
+export interface WorkOSSeedFeatureFlag {
+  /**
+   * Pinned flag id (e.g. `flag_01ABC…`). Generated if omitted. Pin it to match what your
+   * real WorkOS environment emits, so an application storing flag ids lines up across
+   * emulator restarts.
+   */
+  id?: string;
+  /**
+   * The key application code references. Required, unique within the environment, and URL-safe:
+   * every route addresses a flag by slug in the path.
+   */
+  slug: string;
+  /** Display name. Defaults to the slug. */
+  name?: string;
+  description?: string | null;
+  /** Whether the flag is active in this environment at all. Defaults to true. */
+  enabled?: boolean;
+  /**
+   * Value for users and organizations matching no target — the flag's "on for everyone"
+   * switch. Defaults to false, so a flag with targets is on for exactly those targets.
+   */
+  default_value?: boolean;
+  /** Labels the dashboard filters by. Purely descriptive. */
+  tags?: string[];
+  owner?: { email: string; first_name?: string | null; last_name?: string | null };
+  /**
+   * Resources the flag is switched on for regardless of `default_value`. Targeting is
+   * additive, as it is in production: a target can turn a flag on but never off.
+   */
+  targets?: {
+    /**
+     * Emails of users defined in `users`. Seeded user ids are generated at startup, so
+     * targets are joined by email — an id literal could never resolve.
+     */
+    users?: string[];
+    /** Names of organizations defined in `organizations`, joined the same way. */
+    organizations?: string[];
+  };
+}
+
 export interface WorkOSSeedJwtTemplate {
   /**
    * Template string rendering to a JSON object of claims, e.g.
@@ -331,6 +373,11 @@ export interface WorkOSSeedConfig {
    * emulator mints. Seeding it means a test suite gets custom claims without a setup call.
    */
   jwtTemplate?: WorkOSSeedJwtTemplate;
+  /**
+   * Feature flags and their targets. Production has no create-flag endpoint — flags are
+   * made in the dashboard — so seeding is the only way to get one into the emulator.
+   */
+  featureFlags?: WorkOSSeedFeatureFlag[];
 }
 
 export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSeedConfig): void {
@@ -716,6 +763,67 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
     store.setData(STORE_KEYS.apiKeyMap, authMap);
   }
 
+  // Seeded last: targets join to users by email and organizations by name, so both must
+  // already be in the store.
+  if (config.featureFlags) {
+    for (const flagConfig of config.featureFlags) {
+      const flag = ws.featureFlags.insert({
+        object: 'feature_flag',
+        id: flagConfig.id,
+        slug: flagConfig.slug,
+        name: flagConfig.name ?? flagConfig.slug,
+        description: flagConfig.description ?? null,
+        owner: flagConfig.owner
+          ? {
+              // Trimmed, as seeded user emails are: the validator cross-references the trimmed
+              // form, so storing the padded one would serve an address it never checked.
+              email: flagConfig.owner.email.trim(),
+              first_name: flagConfig.owner.first_name ?? null,
+              last_name: flagConfig.owner.last_name ?? null,
+            }
+          : null,
+        tags: flagConfig.tags ?? [],
+        enabled: flagConfig.enabled !== false,
+        default_value: flagConfig.default_value ?? false,
+      });
+
+      // Deduped the way the create-target route is: two rows for one resource would leave the
+      // flag on for a resource whose target was removed, since DELETE drops only the first match.
+      const targeted = new Set<string>();
+      const addTarget = (resourceId: string, resourceType: 'user' | 'organization') => {
+        if (targeted.has(resourceId)) return;
+        targeted.add(resourceId);
+        ws.flagTargets.insert({
+          object: 'flag_target',
+          flag_slug: flag.slug,
+          resource_id: resourceId,
+          resource_type: resourceType,
+          enabled: true,
+        });
+      };
+
+      for (const email of flagConfig.targets?.users ?? []) {
+        const user = findUserByEmail(ws, email);
+        if (!user) {
+          throw new Error(
+            `workos seed config: featureFlags[${JSON.stringify(flagConfig.slug)}].targets.users not found: ${JSON.stringify(email)}`,
+          );
+        }
+        addTarget(user.id, 'user');
+      }
+
+      for (const name of flagConfig.targets?.organizations ?? []) {
+        const org = ws.organizations.findOneBy('name', name);
+        if (!org) {
+          throw new Error(
+            `workos seed config: featureFlags[${JSON.stringify(flagConfig.slug)}].targets.organizations not found: ${JSON.stringify(name)}`,
+          );
+        }
+        addTarget(org.id, 'organization');
+      }
+    }
+  }
+
   if (config.jwtTemplate) {
     const problems = validateJwtTemplateContent(config.jwtTemplate.content);
     if (problems.length > 0) {
@@ -924,10 +1032,25 @@ export const workosPlugin: ServicePlugin = {
       onUpdate: (k) => eventBus.emit({ event: EVENTS.apiKeyUpdated, data: formatApiKeyRecord(k) }),
       onDelete: (k) => eventBus.emit({ event: EVENTS.apiKeyRevoked, data: formatApiKeyRecord(k) }),
     });
+    // Flag webhook payloads carry environment_id, which the REST Flag object does not. Flags
+    // are not environment-scoped in the store, so every flag event reports the same default
+    // environment — including flag.rule_updated, emitted from the target routes.
+    //
+    // The context here is the base envelope only: access_type and configured_targets are
+    // defined on flag.rule_updated alone, so created/updated/deleted must not carry them.
+    const flagEvent = (event: string) => (f: Parameters<typeof formatFeatureFlag>[0]) => {
+      const environmentId = environmentIdFor();
+      eventBus.emit({
+        event,
+        data: formatFeatureFlagEvent(f, environmentId),
+        environment_id: environmentId,
+        context: flagEventContext(),
+      });
+    };
     ws.featureFlags.setHooks({
-      onInsert: (f) => eventBus.emit({ event: EVENTS.flagCreated, data: formatFeatureFlag(f) }),
-      onUpdate: (f) => eventBus.emit({ event: EVENTS.flagUpdated, data: formatFeatureFlag(f) }),
-      onDelete: (f) => eventBus.emit({ event: EVENTS.flagDeleted, data: formatFeatureFlag(f) }),
+      onInsert: flagEvent(EVENTS.flagCreated),
+      onUpdate: flagEvent(EVENTS.flagUpdated),
+      onDelete: flagEvent(EVENTS.flagDeleted),
     });
     ws.webhookEndpoints.setHooks({
       onInsert: () => eventBus.rebuildIndex(),

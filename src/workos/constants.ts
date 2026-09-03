@@ -5,12 +5,16 @@ export const STORE_KEYS = {
   apiKeyMap: 'apiKeyMap',
   jwtTemplate: 'jwt_template',
   interactiveAuth: 'interactiveAuth',
+  /** Set alongside interactiveAuth when the AuthKit login page should also ask for a password. */
+  interactivePassword: 'interactivePassword',
   allowedRedirectHosts: 'allowedRedirectHosts',
 } as const;
 
 /** Prefix for dynamic store keys */
 export const STORE_KEY_PREFIXES = {
   pendingAuth: 'pending_auth:',
+  /** A password the interactive page has checked, carried across the organization page instead of the password itself. */
+  interactiveLogin: 'interactive_login:',
   ssoToken: 'sso_token:',
   ssoLogout: 'sso_logout:',
   auditSchema: 'audit_schema_',

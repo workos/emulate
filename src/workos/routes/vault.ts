@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { type RouteContext, parseJsonBody, parseListParams } from '../../core/index.js';
 import type { WorkOSVaultObject, WorkOSVaultObjectVersion } from '../entities.js';
 import { getWorkOSStore } from '../store.js';
+import { apiKeyActor } from '../helpers.js';
 
 const error = (message: string) => ({ error: message });
 
@@ -45,10 +46,7 @@ export function vaultRoutes(ctx: RouteContext): void {
   };
   const findByName = (name: string, environment?: string) =>
     ws.vaultObjects.findBy('name', name).find((object) => object.environment_id === environmentIdFor(environment));
-  const actorFor = (apiKey?: string) => {
-    const record = apiKey ? ws.apiKeyRecords.findOneBy('key', apiKey) : undefined;
-    return { id: record?.id ?? 'api_key_emulator', name: record?.name ?? 'Emulator API key' };
-  };
+  const actorFor = (apiKey?: string) => apiKeyActor(ws, apiKey);
 
   app.get('/vault/v1/kv', (c) => {
     const url = new URL(c.req.url);

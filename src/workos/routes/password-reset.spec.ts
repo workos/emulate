@@ -73,6 +73,64 @@ describe('Password reset routes', () => {
     expect((await json(res)).email).toBe('Mixed@Reset.test');
   });
 
+  // Issue #98: the SDKs deserialize `password_reset_token` and `password_reset_url`. A bare
+  // `token` left `passwordResetToken` undefined, and the resetPassword call built on it failed.
+  it('returns the spec-shaped password reset', async () => {
+    const { user, reset } = await createUserAndRequestReset();
+
+    expect(reset.object).toBe('password_reset');
+    expect(reset.id).toMatch(/^password_reset_/);
+    expect(reset.user_id).toBe(user.id);
+    expect(reset.email).toBe('reset@test.com');
+    expect(reset.password_reset_token).toMatch(/^[0-9a-f]{32}$/);
+    // The link points at the emulator (the test server's base URL) and carries the token under
+    // the `token` query parameter the confirm endpoint documents.
+    expect(reset.password_reset_url).toBe(
+      `http://localhost:0/user_management/password_reset/confirm?token=${reset.password_reset_token}`,
+    );
+    expect(Object.keys(reset).sort()).toEqual([
+      'created_at',
+      'email',
+      'expires_at',
+      'id',
+      'object',
+      'password_reset_token',
+      'password_reset_url',
+      'user_id',
+    ]);
+  });
+
+  // The link is `${baseUrl}/path`, so a base URL written with a trailing slash would double it
+  // — the server normalizes the option, and this pins that the link still names the endpoint.
+  it('does not double the slash when the base URL ends in one', async () => {
+    const trailing = createServer(workosPlugin, { port: 0, baseUrl: 'http://localhost:0/', apiKeys });
+    const post = (path: string, body: unknown) =>
+      trailing.app.request(path, { method: 'POST', headers, body: JSON.stringify(body) });
+
+    await post('/user_management/users', { email: 'slash@test.com' });
+    const reset = await json(await post('/user_management/password_reset', { email: 'slash@test.com' }));
+    expect(reset.password_reset_url).toBe(
+      `http://localhost:0/user_management/password_reset/confirm?token=${reset.password_reset_token}`,
+    );
+  });
+
+  it('returns the same shape when fetched by id', async () => {
+    const { reset } = await createUserAndRequestReset();
+
+    const res = await req(`/user_management/password_reset/${reset.id}`);
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual(reset);
+  });
+
+  it('delivers the token under its spec name in password_reset.created', async () => {
+    const { reset } = await createUserAndRequestReset();
+
+    const [event] = eventsNamed('password_reset.created');
+    expect(event.data.password_reset_token).toBe(reset.password_reset_token);
+    expect(event.data.password_reset_url).toBe(reset.password_reset_url);
+    expect(event.data).not.toHaveProperty('token');
+  });
+
   it('emits password_reset.created when a reset is requested', async () => {
     const { user } = await createUserAndRequestReset();
 
@@ -86,7 +144,7 @@ describe('Password reset routes', () => {
 
     const confirmRes = await req('/user_management/password_reset/confirm', {
       method: 'POST',
-      body: JSON.stringify({ token: reset.token, new_password: 'newpassword' }),
+      body: JSON.stringify({ token: reset.password_reset_token, new_password: 'newpassword' }),
     });
     expect(confirmRes.status).toBe(200);
 

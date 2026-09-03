@@ -812,6 +812,200 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
     });
   }
 
+  // Validate feature flags. Seeding is the only way a flag exists at all — production has no
+  // create-flag endpoint — so an unresolvable target here is a flag that silently reaches
+  // nobody, which is exactly the bug a test suite would blame on its own code.
+  if (config.featureFlags) {
+    if (!Array.isArray(config.featureFlags)) {
+      errors.push({
+        path: 'featureFlags',
+        message: 'featureFlags must be an array',
+        value: config.featureFlags,
+      });
+    } else {
+      const orgNames = new Set(
+        Array.isArray(config.organizations)
+          ? config.organizations.map((o) => o.name).filter((n): n is string => typeof n === 'string')
+          : [],
+      );
+      const seenSlugs = new Set<string>();
+      // A pinned flag id is the primary key in the store; two flags sharing one would silently
+      // overwrite each other on insert while both slugs stay in the slug index, so a lookup by
+      // the losing slug would resolve to the surviving flag's values.
+      const seenFlagIds = new Set<string>();
+
+      config.featureFlags.forEach((flag, index) => {
+        const at = (field: string) => `featureFlags[${index}].${field}`;
+
+        // A YAML list item left empty parses as null, which every field check below would
+        // dereference. Reported as a validation error so `--validate-config` stays useful.
+        if (flag === null || typeof flag !== 'object' || Array.isArray(flag)) {
+          errors.push({ path: `featureFlags[${index}]`, message: 'each feature flag must be an object', value: flag });
+          return;
+        }
+
+        if (flag.id !== undefined) {
+          if (typeof flag.id !== 'string' || !PINNED_ID_PATTERN.test(flag.id)) {
+            errors.push({
+              path: at('id'),
+              message: 'id must be a string of letters, numbers, hyphens or underscores if provided',
+              value: flag.id,
+            });
+          } else if (seenFlagIds.has(flag.id)) {
+            errors.push({ path: at('id'), message: 'id must be unique across featureFlags', value: flag.id });
+          } else {
+            seenFlagIds.add(flag.id);
+          }
+        }
+
+        if (!flag.slug || typeof flag.slug !== 'string') {
+          errors.push({ path: at('slug'), message: 'slug is required and must be a string', value: flag.slug });
+        } else if (encodeURIComponent(flag.slug) !== flag.slug) {
+          // Every route addresses a flag by slug in the URL path, so a slug that needs
+          // percent-encoding seeds fine and is then unreachable.
+          errors.push({
+            path: at('slug'),
+            message: 'slug must be URL-safe (no spaces, slashes or characters that need percent-encoding)',
+            value: flag.slug,
+          });
+        } else if (seenSlugs.has(flag.slug)) {
+          // Every lookup is by slug, so a duplicate is a flag no route can ever resolve.
+          errors.push({ path: at('slug'), message: 'slug must be unique across featureFlags', value: flag.slug });
+        } else {
+          seenSlugs.add(flag.slug);
+        }
+
+        for (const field of ['enabled', 'default_value'] as const) {
+          if (flag[field] !== undefined && typeof flag[field] !== 'boolean') {
+            errors.push({ path: at(field), message: `${field} must be a boolean if provided`, value: flag[field] });
+          }
+        }
+
+        if (flag.tags !== undefined && (!Array.isArray(flag.tags) || !flag.tags.every((t) => typeof t === 'string'))) {
+          errors.push({ path: at('tags'), message: 'tags must be an array of strings if provided', value: flag.tags });
+        }
+
+        // `name` and `description` are passed through to the spec's Flag object verbatim, where
+        // both are typed. A YAML scalar that happens to parse as a number would otherwise be
+        // served as a type the real API never sends.
+        if (flag.name !== undefined && typeof flag.name !== 'string') {
+          errors.push({ path: at('name'), message: 'name must be a string if provided', value: flag.name });
+        }
+        if (flag.description !== undefined && flag.description !== null && typeof flag.description !== 'string') {
+          errors.push({
+            path: at('description'),
+            message: 'description must be a string or null if provided',
+            value: flag.description,
+          });
+        }
+
+        if (flag.owner !== undefined && flag.owner !== null) {
+          const ownerEmail = seedEmail(flag.owner.email);
+          if (!ownerEmail.ok) {
+            errors.push({
+              path: at('owner.email'),
+              message:
+                ownerEmail.problem === 'malformed'
+                  ? 'owner.email must be a valid email address'
+                  : 'owner.email is required and must be a string',
+              value: flag.owner.email,
+            });
+          }
+          for (const part of ['first_name', 'last_name'] as const) {
+            const value = flag.owner[part];
+            if (value !== undefined && value !== null && typeof value !== 'string') {
+              errors.push({
+                path: at(`owner.${part}`),
+                message: `owner.${part} must be a string or null if provided`,
+                value,
+              });
+            }
+          }
+        }
+
+        const targets = flag.targets;
+        if (targets !== undefined && (typeof targets !== 'object' || targets === null || Array.isArray(targets))) {
+          errors.push({ path: at('targets'), message: 'targets must be an object if provided', value: targets });
+          return;
+        }
+
+        // Guarded before iterating: a scalar under `targets.users` would otherwise throw a raw
+        // TypeError out of validateSeedConfig instead of reporting a validation error.
+        for (const field of ['users', 'organizations'] as const) {
+          const value = targets?.[field];
+          if (value !== undefined && !Array.isArray(value)) {
+            errors.push({
+              path: at(`targets.${field}`),
+              message: `targets.${field} must be an array if provided`,
+              value,
+            });
+          }
+        }
+
+        const targetUsers = Array.isArray(targets?.users) ? targets.users : [];
+        const targetOrgs = Array.isArray(targets?.organizations) ? targets.organizations : [];
+
+        const seenTargetUsers = new Set<string>();
+        targetUsers.forEach((email, i) => {
+          const parsed = seedEmail(email);
+          if (!parsed.ok) {
+            errors.push({
+              path: at(`targets.users[${i}]`),
+              message: 'targets.users entries must be email addresses of users defined in `users`',
+              value: email,
+            });
+            return;
+          }
+          const normalized = parsed.email.toLowerCase();
+          if (!userEmails.has(normalized)) {
+            errors.push({
+              path: at(`targets.users[${i}]`),
+              message: 'targets.users references an email not defined in `users`',
+              value: email,
+            });
+          } else if (seenTargetUsers.has(normalized)) {
+            // Two rows for one resource: removing the target over the API deletes only the
+            // first match, so the flag would stay on for a user the caller just untargeted.
+            errors.push({
+              path: at(`targets.users[${i}]`),
+              message: 'targets.users lists the same user twice',
+              value: email,
+            });
+          } else {
+            seenTargetUsers.add(normalized);
+          }
+        });
+
+        const seenTargetOrgs = new Set<string>();
+        targetOrgs.forEach((name, i) => {
+          if (typeof name !== 'string') {
+            errors.push({
+              path: at(`targets.organizations[${i}]`),
+              message: 'targets.organizations entries must be names of organizations defined in `organizations`',
+              value: name,
+            });
+            return;
+          }
+          if (!orgNames.has(name)) {
+            errors.push({
+              path: at(`targets.organizations[${i}]`),
+              message: 'targets.organizations references a name not defined in `organizations`',
+              value: name,
+            });
+          } else if (seenTargetOrgs.has(name)) {
+            errors.push({
+              path: at(`targets.organizations[${i}]`),
+              message: 'targets.organizations lists the same organization twice',
+              value: name,
+            });
+          } else {
+            seenTargetOrgs.add(name);
+          }
+        });
+      });
+    }
+  }
+
   // Validating the template here means `--validate-config` catches a broken one, rather
   // than leaving it to fail at the first sign-in.
   if (config.jwtTemplate !== undefined) {

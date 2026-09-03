@@ -196,13 +196,22 @@ export class Store {
     this._data.set(key, value);
   }
 
-  deleteDataByPrefix(prefix: string): number {
+  /** Remove one data entry outright. `setData(key, undefined)` keeps the key allocated. */
+  deleteData(key: string): boolean {
+    return this._data.delete(key);
+  }
+
+  /**
+   * Remove every entry under a prefix, or only those `shouldDelete` selects. Deleting during
+   * iteration is safe on a Map: a removed entry is simply not visited.
+   */
+  deleteDataByPrefix(prefix: string, shouldDelete?: (value: unknown, key: string) => boolean): number {
     let count = 0;
-    for (const key of this._data.keys()) {
-      if (key.startsWith(prefix)) {
-        this._data.delete(key);
-        count++;
-      }
+    for (const [key, value] of this._data) {
+      if (!key.startsWith(prefix)) continue;
+      if (shouldDelete && !shouldDelete(value, key)) continue;
+      this._data.delete(key);
+      count++;
     }
     return count;
   }

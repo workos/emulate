@@ -170,6 +170,9 @@ export function organizationRoutes(ctx: RouteContext): void {
 
     ws.organizationDomains.deleteBy('organization_id', org.id);
     ws.organizationMemberships.deleteBy('organization_id', org.id);
+    // Same as the user cascade: an organization target with no organization behind it is
+    // unreachable through the target routes.
+    ws.flagTargets.deleteBy('resource_id', org.id);
     // Both kinds of key scoped to this org go with it — the org's own, and members' keys
     // issued inside it, which the membership deletion above has just left unbacked. Same
     // ownership test the org listing route applies, so nothing it would list survives.

@@ -20,6 +20,7 @@ interface CliArgs {
   help: boolean;
   version: boolean;
   interactive: boolean;
+  interactivePassword: boolean;
   validateConfig: boolean;
 }
 
@@ -57,6 +58,9 @@ Options:
                       hostnames. Accepts subdomain wildcards ("*.example.test") and "*" to
                       allow any host. Repeatable.
   --interactive, -i   Show login pages for SSO/AuthKit (for E2E browser testing)
+  --interactive-password
+                      Also ask a user who has a password for it on the AuthKit login page, as
+                      hosted AuthKit does (implies --interactive)
   --validate-config   Validate seed config file without starting server
   --json              Print startup details as JSON
   --version, -v       Print the installed version
@@ -79,6 +83,7 @@ function parseArgs(argv: string[]): CliArgs {
     help: false,
     version: false,
     interactive: false,
+    interactivePassword: false,
     validateConfig: false,
   };
 
@@ -104,6 +109,12 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg === '--interactive' || arg === '-i') {
       parsed.interactive = true;
+      continue;
+    }
+
+    if (arg === '--interactive-password') {
+      parsed.interactive = true;
+      parsed.interactivePassword = true;
       continue;
     }
 
@@ -281,7 +292,7 @@ async function main(): Promise<void> {
     issuer,
     signingKey: signingKeyPath || kid ? { privateKey: readSigningKey(signingKeyPath), kid } : undefined,
     allowedRedirectHosts,
-    interactiveAuth: argv.interactive,
+    interactiveAuth: argv.interactivePassword ? { password: true } : argv.interactive,
   });
 
   if (argv.json) {

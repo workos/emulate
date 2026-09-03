@@ -8,6 +8,8 @@ export interface EventPayload {
   event: WorkOSEventName | string;
   data: Record<string, unknown>;
   environment_id?: string;
+  /** Spec `context` envelope, delivered alongside `data` to webhook endpoints. */
+  context?: Record<string, unknown>;
 }
 
 export interface WebhookRetryConfig {
@@ -71,6 +73,7 @@ export class EventBus {
       event: payload.event,
       data: payload.data,
       environment_id: payload.environment_id ?? null,
+      ...(payload.context ? { context: payload.context } : {}),
     });
 
     // Pre-filtered: only endpoints that care about this event
@@ -92,6 +95,7 @@ export class EventBus {
       event: event.event,
       data: event.data,
       created_at: event.created_at,
+      ...(event.context ? { context: event.context } : {}),
     });
 
     const signature = signWebhookPayload(body, endpoint.secret);

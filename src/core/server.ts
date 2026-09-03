@@ -3,12 +3,20 @@ import { cors } from 'hono/cors';
 import { Store } from './store.js';
 import { JWTManager, type SigningKeyOptions } from './jwt.js';
 import { createApiErrorHandler, requestIdMiddleware } from './middleware/error-handler.js';
-import { authMiddleware, type ApiKeyMap, type WorkOSAppEnv } from './middleware/auth.js';
+import { authMiddleware, widgetAuthMiddleware, type ApiKeyMap, type WorkOSAppEnv } from './middleware/auth.js';
 import { errorHooksMiddleware } from './error-hooks.js';
 import type { ServicePlugin, RouteContext } from './plugin.js';
 
 export interface ServerOptions {
   port?: number;
+  /**
+   * The externally reachable root at which the emulator's routes are served. Every link the
+   * emulator mints — invitation, password reset, device verification, SSO logout — and the default
+   * `iss` is `${baseUrl}/<route>`, while the routes themselves are mounted at `/`. A trailing slash
+   * is therefore dropped (it would double in every link), and a path prefix is kept as the caller's
+   * statement that the emulator is served under it: a proxy fronting it there must strip the prefix
+   * before forwarding, or the minted links will not resolve. Defaults to `http://localhost:{port}`.
+   */
   baseUrl?: string;
   apiKeys?: ApiKeyMap;
   /**
@@ -26,7 +34,10 @@ export interface ServerOptions {
 
 export function createServer(plugin: ServicePlugin, options: ServerOptions = {}) {
   const port = options.port ?? 4100;
-  const baseUrl = options.baseUrl ?? `http://localhost:${port}`;
+  // Every link the emulator mints is `${baseUrl}/<route>`, so a trailing slash on the option would
+  // double up in all of them (and in the default `iss`, built the same way). A path prefix is kept:
+  // see ServerOptions.baseUrl for the contract it states.
+  const baseUrl = (options.baseUrl ?? `http://localhost:${port}`).replace(/\/+$/, '');
 
   const app = new Hono<WorkOSAppEnv>();
   const store = new Store();
@@ -52,6 +63,12 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
 
   // Auth middleware — single catch-all instance
   const auth = authMiddleware(apiKeys);
+
+  // The private surface the `@workos-inc/widgets` components call. A browser widget never holds
+  // an API key; it authenticates with the JWT `POST /widgets/token` minted, so this prefix gets
+  // its own authenticator rather than a place on the public list.
+  const WIDGETS_PREFIX = '/_widgets/';
+  const widgetAuth = widgetAuthMiddleware(jwt);
 
   const PUBLIC_PATHS = new Set([
     '/health',
@@ -85,6 +102,7 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
     // Skip auth for public paths
     if (PUBLIC_PATHS.has(path)) return next();
     if (OPENID_CONFIGURATION.test(path)) return next();
+    if (path.startsWith(WIDGETS_PREFIX)) return widgetAuth(c, next);
     for (const prefix of PUBLIC_PATH_PREFIXES) {
       if (path.startsWith(prefix)) {
         // data-integrations: only /authorize subpath is public
