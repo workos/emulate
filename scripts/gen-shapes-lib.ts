@@ -56,6 +56,7 @@ export const OBJECT_SCHEMA_MAP: readonly ShapeMapEntry[] = [
   { objectType: 'permission', schemaName: 'AuthorizationPermission' },
   { objectType: 'api_key', schemaName: 'ApiKey' },
   { objectType: 'password_reset', schemaName: 'PasswordReset' },
+  { objectType: 'feature_flag', schemaName: 'Flag' },
 ];
 
 export interface EnvelopeMapEntry {
@@ -122,6 +123,22 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
     path: '/organizations/{organizationId}/api_keys',
     status: '200',
     schemaName: 'OrganizationApiKeyList',
+  },
+  // Three routes wrap a FlagList, and the two evaluation routes assemble theirs from a
+  // filtered, re-paginated array rather than Collection.list() — a different code path
+  // from the plain listing, so each is checked on its own.
+  { method: 'GET', path: '/feature-flags', status: '200', schemaName: 'FlagList' },
+  {
+    method: 'GET',
+    path: '/organizations/{organizationId}/feature-flags',
+    status: '200',
+    schemaName: 'FlagList',
+  },
+  {
+    method: 'GET',
+    path: '/user_management/users/{userId}/feature-flags',
+    status: '200',
+    schemaName: 'FlagList',
   },
 ];
 

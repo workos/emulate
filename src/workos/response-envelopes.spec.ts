@@ -117,6 +117,15 @@ const CASES: readonly EnvelopeCase[] = [
     operation: 'GET /organizations/{organizationId}/api_keys',
     request: (app, f) => get(`/organizations/${f.organizationId}/api_keys`)(app),
   },
+  { operation: 'GET /feature-flags', request: get('/feature-flags') },
+  {
+    operation: 'GET /organizations/{organizationId}/feature-flags',
+    request: (app, f) => get(`/organizations/${f.organizationId}/feature-flags`)(app),
+  },
+  {
+    operation: 'GET /user_management/users/{userId}/feature-flags',
+    request: (app, f) => get(`/user_management/users/${f.userId}/feature-flags`)(app),
+  },
 ];
 
 /**
@@ -165,6 +174,8 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       webhookEndpoints: [{ endpoint_url: 'http://localhost:5005/webhooks', events: ['dsync.activated'] }],
       connectApplications: [{ name: 'Billing', type: 'm2m', organization: 'Acme Corp', client_id: 'client_billing' }],
       apiKeys: [{ name: 'Envelope Key', organization: 'Acme Corp', value: API_KEY, permissions: ['posts:read'] }],
+      // On for everyone, so both evaluation routes return a non-empty page for the fixtures.
+      featureFlags: [{ slug: 'envelope-flag', name: 'Envelope Flag', default_value: true }],
     });
 
     const ws = getWorkOSStore(server.store);

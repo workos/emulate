@@ -29,6 +29,7 @@ import {
   formatPermission,
   formatApiKeyRecord,
   formatPasswordReset,
+  formatFeatureFlag,
 } from './helpers.js';
 import { RESPONSE_SHAPE_REQUIREMENTS } from './generated/response-shapes.js';
 import type {
@@ -42,6 +43,7 @@ import type {
   WorkOSPermission,
   WorkOSApiKey,
   WorkOSPasswordReset,
+  WorkOSFeatureFlag,
 } from './entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -188,6 +190,20 @@ const passwordReset: WorkOSPasswordReset = {
   updated_at: TS,
 };
 
+const featureFlag: WorkOSFeatureFlag = {
+  id: 'flag_01',
+  object: 'feature_flag',
+  slug: 'advanced-analytics',
+  name: 'Advanced Analytics',
+  description: null,
+  owner: { email: 'jane@example.com', first_name: 'Jane', last_name: 'Doe' },
+  tags: ['reports'],
+  enabled: true,
+  default_value: false,
+  created_at: TS,
+  updated_at: TS,
+};
+
 const store = new Store();
 const ws = getWorkOSStore(store);
 
@@ -202,6 +218,7 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'permission', output: formatPermission(permission) },
   { objectType: 'api_key', output: formatApiKeyRecord(apiKey) },
   { objectType: 'password_reset', output: formatPasswordReset(passwordReset) },
+  { objectType: 'feature_flag', output: formatFeatureFlag(featureFlag) },
 ];
 
 /**

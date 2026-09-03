@@ -141,6 +141,10 @@ export function userRoutes(ctx: RouteContext): void {
     for (const f of ws.authFactors.findBy('user_id', user.id)) {
       ws.authFactors.delete(f.id);
     }
+    // Flag targets name the user by id. Left behind, they would keep the user in every
+    // flag.rule_updated `configured_targets` and could never be removed over the API, since
+    // the target routes 404 on the missing user before they look at the target.
+    ws.flagTargets.deleteBy('resource_id', user.id);
     for (const i of ws.identities.findBy('user_id', user.id)) {
       ws.identities.delete(i.id);
     }

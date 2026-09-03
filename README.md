@@ -513,6 +513,128 @@ only registers values for authentication without creating resources. A map-form 
 requests but has no `api_key` resource behind it, so validating one returns `{"api_key": null}` —
 use the array form for keys your code validates.
 
+### Feature Flags
+
+Production has no create-flag endpoint — flags are made in the dashboard — so the `featureFlags`
+seed key is how a flag comes into existence at all. Targets join to `users` by email and to
+`organizations` by name, the same way memberships do; an entry naming neither fails at startup.
+
+```yaml
+users:
+  - email: alice@acme.com
+    password: test123
+    email_verified: true
+  - email: bob@acme.com
+    password: test123
+    email_verified: true
+
+organizations:
+  - name: Acme Corp
+    memberships:
+      - email: alice@acme.com
+      - email: bob@acme.com
+  - name: Other Inc
+
+featureFlags:
+  # On for everyone: nothing matches a target, so default_value decides.
+  - slug: new-billing
+    name: New Billing
+    default_value: true
+
+  # Off by default, on for exactly the listed targets.
+  - slug: beta-dashboard
+    name: Beta Dashboard
+    description: The rebuilt analytics dashboard
+    tags: [ui, beta]
+    owner:
+      email: jane@acme.com
+      first_name: Jane
+      last_name: Doe
+    targets:
+      users: [alice@acme.com]
+      organizations: [Acme Corp]
+
+  # Targeted at an organization Alice is not a member of.
+  - slug: partner-portal
+    targets:
+      organizations: [Other Inc]
+
+  # Built but not switched on in this environment: off for everyone, targets included.
+  - slug: unreleased
+    id: flag_01PINNEDUNRELEASED
+    enabled: false
+    default_value: true
+    targets:
+      users: [alice@acme.com]
+```
+
+Signing Alice in against that config gives `feature_flags: ["new-billing", "beta-dashboard"]`;
+Bob gets `["new-billing", "beta-dashboard"]` too via Acme Corp, but would lose `beta-dashboard`
+if the organization target were removed. `partner-portal` is off for both, and `unreleased` is
+off for everyone until something enables it.
+
+A flag is on for a resource when it is `enabled` **and** either a target names that resource or
+`default_value` is true. Targeting is additive, as it is in production: `POST
+/feature-flags/{slug}/targets/{resourceId}` carries no body, so a target can turn a flag on but
+never off. Flags also accept an optional `id` to pin (`flag_01ABC…`). Slugs must be URL-safe, since
+every route addresses a flag by slug in the path.
+
+Three surfaces read the result, and all three resolve through the same rule:
+
+- **The `feature_flags` access-token claim** — the slugs on for the signed-in user, re-resolved at
+  every mint (refresh grants included), so a toggle lands in the next token. Scoped to the
+  session's organization: a flag targeted at some _other_ org the user belongs to is not in the
+  claim. Omitted rather than minted as `[]` when nothing is on.
+- **The list endpoints an SDK polls** — `GET /user_management/users/{id}/feature-flags` and
+  `GET /organizations/{id}/feature-flags`. Both return a paginated list of whole `feature_flag`
+  objects, and both list only the flags that are on. The user endpoint includes flags from every
+  organization the user is an _active_ member of, as production documents — a `pending` or
+  `inactive` membership grants nothing, matching the status check `authenticate` applies before
+  scoping a session to an organization.
+
+```ts
+const { data } = await workos.featureFlags.listUserFeatureFlags({ userId: user.id });
+const enabled = new Set(data.map((flag) => flag.slug));
+// ...or the organization-scoped equivalent
+await workos.featureFlags.listOrganizationFeatureFlags({ organizationId: org.id });
+```
+
+- **The SDK runtime client** — `workos.featureFlags.createRuntimeClient()` does not use either
+  list endpoint. It polls `GET /sdk/feature-flags`, which is **not in the WorkOS OpenAPI spec**;
+  the emulator implements it anyway, because without it the runtime client never leaves its
+  bootstrap state. The response is a bare slug-keyed map of every flag and its targets, and the
+  client evaluates locally, so `isEnabled` answers without a round trip:
+
+```ts
+const flags = workos.featureFlags.createRuntimeClient({ pollingIntervalMs: 5_000 });
+await flags.waitUntilReady();
+flags.isEnabled('beta-dashboard', { userId: user.id, organizationId: org.id });
+flags.on('change', ({ key, current }) => console.log(key, current));
+```
+
+All three apply the same rule — a disabled flag is off for everyone; otherwise a matching enabled
+target wins; otherwise `default_value` — so for one resource they agree. They are scoped
+differently on purpose, and that is the one case where they legitimately differ: the token claim
+covers the user plus the session's organization, while the user list endpoint covers the user plus
+_every_ organization they are an active member of. A user in two organizations can therefore have a flag in the
+list endpoint that is absent from a token scoped to the other organization. Production scopes them
+the same way.
+
+Toggling at runtime works too. The verbs match the spec: `PUT /feature-flags/{slug}/enable` and
+`/disable`, `POST /feature-flags/{slug}/targets/{resourceId}` and its `DELETE`. The emulator also
+accepts `POST` on enable/disable and `PUT` on target creation, for callers written against its
+earlier shape — those aliases are **emulator-only**, and production rejects them, so do not rely
+on them in code you intend to run against real WorkOS. Changes emit `flag.updated`; adding or
+removing a target emits `flag.rule_updated`, carrying the flag's `access_type`, its configured
+targets, and the previous rule state.
+
+`flag.rule_updated` names the API key that made the request as its `actor` when that key has a
+record behind it (an array-form `apiKeys` entry, or a key created over the API); a map-form key
+authenticates but has no record, so the actor falls back to the emulator's placeholder key. The
+collection-level `flag.created` / `flag.updated` / `flag.deleted` events run without request
+context and always report the placeholder. Flags are not environment-scoped, so every flag event
+reports `environment_test`. Deleting a user or organization removes its flag targets.
+
 ## Widgets
 
 `POST /widgets/token` mints the session token the `@workos-inc/widgets` components authenticate

@@ -432,22 +432,40 @@ export interface WorkOSAuditLogExport extends Entity {
   filters: Record<string, unknown>;
 }
 
+export interface WorkOSFeatureFlagOwner {
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+}
+
 export interface WorkOSFeatureFlag extends Entity {
   object: 'feature_flag';
   slug: string;
   name: string;
   description: string | null;
-  type: 'boolean' | 'string' | 'number';
-  default_value: unknown;
+  owner: WorkOSFeatureFlagOwner | null;
+  tags: string[];
   enabled: boolean;
+  /** Value returned for resources matching no target. Production flags are boolean-only. */
+  default_value: boolean;
 }
 
+/**
+ * A resource the flag is switched on for. Production targeting is membership, not assignment:
+ * `POST /feature-flags/{slug}/targets/{resourceId}` takes no body, so a target's mere existence
+ * means "on for this resource" and there is no value to store or to turn a flag back off with.
+ */
 export interface WorkOSFlagTarget extends Entity {
   object: 'flag_target';
   flag_slug: string;
   resource_id: string;
-  resource_type: string;
-  value: unknown;
+  resource_type: 'user' | 'organization';
+  /**
+   * Reported to the SDK runtime client, whose evaluator skips a target unless this is true.
+   * Always true for targets created over the API — the create route carries no body — but
+   * the field is real on the wire, so it is stored rather than hardcoded at serialization.
+   */
+  enabled: boolean;
 }
 
 export interface WorkOSConnectApplication extends Entity {
@@ -531,6 +549,11 @@ export interface WorkOSEvent extends Entity {
   event: string;
   data: Record<string, unknown>;
   environment_id: string | null;
+  /**
+   * The spec's per-event `context` envelope. Only flag events populate it so far — the
+   * emulator has no actor model for the rest — so it is omitted rather than faked elsewhere.
+   */
+  context?: Record<string, unknown>;
 }
 
 export interface WorkOSWebhookEndpoint extends Entity {

@@ -175,8 +175,9 @@ export const FEATURES: FeatureDef[] = [
       'organizations.feature-flags',
       'user-management.users.feature-flags',
     ],
+    seedKeys: ['featureFlags'],
     notes:
-      'Enable/disable and targeting exist, but under different verbs than the spec (`POST /feature-flags/:slug/enable` where the spec says `PUT`), so they do not count toward coverage.',
+      "Every spec endpoint is implemented at its documented verb; the emulator additionally accepts `POST` on enable/disable and `PUT` on target creation as aliases, which production rejects. Flags resolve into the `feature_flags` access-token claim, the per-user and per-organization list endpoints, and `GET /sdk/feature-flags` — the Node SDK runtime client's polling endpoint, which the spec does not define. Production has no create-flag endpoint, so flags come from the `featureFlags` seed key.",
   },
   {
     name: 'API Keys',

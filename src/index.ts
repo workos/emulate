@@ -39,6 +39,7 @@ export interface EmulatorSeedConfig {
   webhookEndpoints?: WorkOSSeedConfig['webhookEndpoints'];
   connectApplications?: WorkOSSeedConfig['connectApplications'];
   jwtTemplate?: WorkOSSeedConfig['jwtTemplate'];
+  featureFlags?: WorkOSSeedConfig['featureFlags'];
   errorHooks?: ErrorHookSeedConfig[];
 }
 

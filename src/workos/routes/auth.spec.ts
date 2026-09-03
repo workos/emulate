@@ -97,28 +97,26 @@ describe('Auth routes', () => {
     return org;
   }
 
-  function createFlag(
-    slug: string,
-    opts?: { enabled?: boolean; type?: 'boolean' | 'string' | 'number'; default_value?: unknown },
-  ) {
+  function createFlag(slug: string, opts?: { enabled?: boolean; default_value?: boolean }) {
     return getWorkOSStore(store).featureFlags.insert({
       object: 'feature_flag',
       slug,
       name: slug,
       description: null,
-      type: opts?.type ?? 'boolean',
+      owner: null,
+      tags: [],
       default_value: opts?.default_value ?? true,
       enabled: opts?.enabled ?? true,
     });
   }
 
-  function targetFlag(slug: string, resourceId: string, value: unknown, resourceType = 'user') {
+  function targetFlag(slug: string, resourceId: string, resourceType: 'user' | 'organization' = 'user') {
     return getWorkOSStore(store).flagTargets.insert({
       object: 'flag_target',
       flag_slug: slug,
       resource_id: resourceId,
       resource_type: resourceType,
-      value,
+      enabled: true,
     });
   }
 
@@ -1594,13 +1592,14 @@ describe('Auth routes', () => {
     expect(decodeJwt((await json(refreshRes)).access_token).entitlements).toEqual(['audit-logs']);
   });
 
-  it('mints feature_flags from flags resolving strictly true for the user', async () => {
+  it('mints feature_flags from flags resolving on for the user', async () => {
     const user = await createUser('flags@test.com');
     createFlag('on-by-default');
     createFlag('switched-off', { enabled: false });
-    createFlag('targeted-on', { enabled: false });
-    targetFlag('targeted-on', user.id, true);
-    createFlag('typed', { type: 'string', default_value: 'variant-a' });
+    // Enabled but off by default: only the user target switches it on.
+    createFlag('targeted-on', { default_value: false });
+    targetFlag('targeted-on', user.id);
+    createFlag('untargeted', { default_value: false });
 
     const authRes = await app.request(
       '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=flags@test.com&client_id=test_client',
@@ -1613,17 +1612,19 @@ describe('Auth routes', () => {
     });
     expect(tokenRes.status).toBe(200);
     const body = await json(tokenRes);
-    // Enabled default and true user target are in; disabled and non-boolean flags are not.
+    // Enabled default and the user target are in; a disabled flag and an untargeted
+    // default-false flag are not.
     expect(decodeJwt(body.access_token).feature_flags!.sort()).toEqual(['on-by-default', 'targeted-on']);
   });
 
-  it('resolves org-targeted flags for org-scoped sessions, with user targets winning', async () => {
+  it('resolves org-targeted flags for org-scoped sessions', async () => {
     const user = await createUser('org-flags@test.com');
     const org = joinOrg(user.id, 'Flag Corp');
-    createFlag('org-flag', { enabled: false });
-    targetFlag('org-flag', org.id, true, 'organization');
-    createFlag('user-off');
-    targetFlag('user-off', user.id, false);
+    createFlag('org-flag', { default_value: false });
+    targetFlag('org-flag', org.id, 'organization');
+    // Targeted at some other organization, so this session never sees it.
+    createFlag('other-org-flag', { default_value: false });
+    targetFlag('other-org-flag', 'org_elsewhere', 'organization');
 
     const authRes = await app.request(
       '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code&login_hint=org-flags@test.com&client_id=test_client',
@@ -1638,7 +1639,7 @@ describe('Auth routes', () => {
     const body = await json(tokenRes);
     const flags = decodeJwt(body.access_token).feature_flags!;
     expect(flags).toContain('org-flag');
-    expect(flags).not.toContain('user-off');
+    expect(flags).not.toContain('other-org-flag');
   });
 
   it('re-resolves feature_flags on refresh and omits the claim when nothing is on', async () => {

@@ -137,6 +137,35 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
       'updated_at',
     ],
   },
+  feature_flag: {
+    schema: 'Flag',
+    properties: [
+      'created_at',
+      'default_value',
+      'description',
+      'enabled',
+      'id',
+      'name',
+      'object',
+      'owner',
+      'slug',
+      'tags',
+      'updated_at',
+    ],
+    required: [
+      'created_at',
+      'default_value',
+      'description',
+      'enabled',
+      'id',
+      'name',
+      'object',
+      'owner',
+      'slug',
+      'tags',
+      'updated_at',
+    ],
+  },
   organization: {
     schema: 'Organization',
     properties: [
@@ -278,6 +307,11 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
     properties: ['data', 'list_metadata', 'object'],
     required: ['data', 'list_metadata', 'object'],
   },
+  'GET /feature-flags': {
+    schema: 'FlagList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
   'GET /organizations': {
     schema: 'OrganizationList',
     properties: ['data', 'list_metadata', 'object'],
@@ -285,6 +319,11 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
   },
   'GET /organizations/{organizationId}/api_keys': {
     schema: 'OrganizationApiKeyList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'GET /organizations/{organizationId}/feature-flags': {
+    schema: 'FlagList',
     properties: ['data', 'list_metadata', 'object'],
     required: ['data', 'list_metadata', 'object'],
   },
@@ -318,6 +357,11 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
   },
   'GET /user_management/users': {
     schema: 'UserlandUserList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'GET /user_management/users/{userId}/feature-flags': {
+    schema: 'FlagList',
     properties: ['data', 'list_metadata', 'object'],
     required: ['data', 'list_metadata', 'object'],
   },
