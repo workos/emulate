@@ -122,9 +122,10 @@ jobs:
         run: |
           docker run --rm -d -p 4100:4100 --name emulate-ci emulate:ci
           trap 'docker stop emulate-ci 2>/dev/null || true' EXIT
-          # RSA key generation happens before the Node app binds :4100 and can vary
-          # under shared runner load. Retry TCP resets/refusals until it is ready.
-          curl --retry 60 --retry-delay 1 --retry-all-errors --fail http://localhost:4100/health
+          # `--retry-all-errors` retries on TCP reset (curl 56) too, not just
+          # connection-refused (curl 7). The container is created before the
+          # Node app finishes binding :4100, so the first probe can hit a RST.
+          curl --retry 10 --retry-delay 1 --retry-all-errors --fail http://localhost:4100/health
 
   docker-arm64:
     name: Docker build (arm64)
@@ -147,6 +148,7 @@ jobs:
         run: |
           docker run --rm -d -p 4100:4100 --name emulate-ci emulate:ci
           trap 'docker stop emulate-ci 2>/dev/null || true' EXIT
-          # RSA key generation happens before the Node app binds :4100 and can vary
-          # under shared runner load. Retry TCP resets/refusals until it is ready.
-          curl --retry 60 --retry-delay 1 --retry-all-errors --fail http://localhost:4100/health
+          # `--retry-all-errors` retries on TCP reset (curl 56) too, not just
+          # connection-refused (curl 7). The container is created before the
+          # Node app finishes binding :4100, so the first probe can hit a RST.
+          curl --retry 10 --retry-delay 1 --retry-all-errors --fail http://localhost:4100/health
