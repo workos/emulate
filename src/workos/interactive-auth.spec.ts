@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { createEmulator, type Emulator } from '../index.js';
 import { getWorkOSStore } from './store.js';
+import { STORE_KEY_PREFIXES } from './constants.js';
 
 describe('Interactive Auth Mode', () => {
   let emulator: Emulator;
@@ -338,6 +339,11 @@ describe('Interactive Auth Mode with the password step', () => {
     const body = await exchange(third.headers.get('location') ?? '');
     expect(body.organization_id).toBe(orgId);
     expect(body.authentication_method).toBe('Password');
+
+    // Spent means gone: the entry is removed, not left behind holding `undefined`, so a
+    // long-lived emulator does not grow by one key per login. The prefix sweep reports how
+    // many entries it found; zero is the point.
+    expect(emulator.store.deleteDataByPrefix(STORE_KEY_PREFIXES.interactiveLogin)).toBe(0);
 
     // Spent: presenting the same token again lands back on the password page.
     const replay = await submit({

@@ -196,6 +196,11 @@ export class Store {
     this._data.set(key, value);
   }
 
+  /** Remove one data entry outright. `setData(key, undefined)` keeps the key allocated. */
+  deleteData(key: string): boolean {
+    return this._data.delete(key);
+  }
+
   deleteDataByPrefix(prefix: string): number {
     let count = 0;
     for (const key of this._data.keys()) {

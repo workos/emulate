@@ -183,8 +183,13 @@ export function authRoutes(ctx: RouteContext): void {
     let verifiedLoginKey: string | null = null;
     if (interactive && store.getData<boolean>(STORE_KEYS.interactivePassword) && user.password_hash) {
       const key = pendingToken ? `${STORE_KEY_PREFIXES.interactiveLogin}${pendingToken}` : null;
-      const verified = key ? store.getData<InteractiveLogin>(key) : undefined;
-      if (verified && verified.user_id === user.id && !isExpired(verified.expires_at)) {
+      let verified = key ? store.getData<InteractiveLogin>(key) : undefined;
+      if (key && verified && isExpired(verified.expires_at)) {
+        // Nothing will ever redeem an expired token, so drop it rather than leave it behind.
+        store.deleteData(key);
+        verified = undefined;
+      }
+      if (verified && verified.user_id === user.id) {
         codeAuthMethod = verified.auth_method;
         verifiedLoginKey = key;
       } else {
@@ -271,8 +276,9 @@ export function authRoutes(ctx: RouteContext): void {
       client_id: clientId,
       auth_method: codeAuthMethod,
     });
-    // One code per verified login: the token is spent once it has minted something.
-    if (verifiedLoginKey) store.setData(verifiedLoginKey, undefined);
+    // One code per verified login: the token is spent once it has minted something. Deleted
+    // rather than overwritten, so a long-lived emulator does not keep one entry per login.
+    if (verifiedLoginKey) store.deleteData(verifiedLoginKey);
 
     const redirect = new URL(redirectUri);
     redirect.searchParams.set('code', authCode.code);
