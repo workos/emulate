@@ -563,6 +563,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: role.type,
           });
         }
+        if (
+          role.resource_type_slug !== undefined &&
+          (typeof role.resource_type_slug !== 'string' || !role.resource_type_slug)
+        ) {
+          errors.push({
+            path: `roles[${index}].resource_type_slug`,
+            message: 'resource_type_slug must be a non-empty string if provided',
+            value: role.resource_type_slug,
+          });
+        }
       });
     }
   }

@@ -12,7 +12,7 @@ import {
   type Store,
 } from '../core/index.js';
 import {
-  DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG,
+  DEFAULT_RESOURCE_TYPE_SLUG,
   EVENTS,
   STORE_KEYS,
   type AuthenticationEventData,
@@ -915,7 +915,12 @@ export function formatRole(role: WorkOSRole, ws: WorkOSStore): Record<string, un
     .findBy('role_id', role.id)
     .map((rp) => ws.permissions.get(rp.permission_id)?.slug)
     .filter((slug): slug is string => typeof slug === 'string');
-  return { ...formatEntity(role), permissions };
+  return {
+    ...formatEntity(role),
+    permissions,
+    // Rows persisted before roles carried a scope still format with the default.
+    resource_type_slug: role.resource_type_slug ?? DEFAULT_RESOURCE_TYPE_SLUG,
+  };
 }
 
 export function formatPermission(p: WorkOSPermission): Record<string, unknown> {
@@ -925,7 +930,7 @@ export function formatPermission(p: WorkOSPermission): Record<string, unknown> {
     system: false,
     // Rows inserted without a scope (direct store inserts, pre-scope releases)
     // still format with the default so the spec-required key is always present.
-    resource_type_slug: p.resource_type_slug ?? DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG,
+    resource_type_slug: p.resource_type_slug ?? DEFAULT_RESOURCE_TYPE_SLUG,
   };
 }
 

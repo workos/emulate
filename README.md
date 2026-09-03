@@ -264,6 +264,10 @@ roles:
   - slug: admin
     name: Admin
     permissions: [posts:read, posts:write]
+  - slug: document-editor
+    name: Document Editor
+    permissions: [documents:read]
+    resource_type_slug: document # optional; defaults to organization
 
 permissions:
   - slug: posts:read

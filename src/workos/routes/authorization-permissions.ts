@@ -8,7 +8,7 @@ import {
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatPermission, formatListResponse } from '../helpers.js';
-import { DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG } from '../constants.js';
+import { DEFAULT_RESOURCE_TYPE_SLUG } from '../constants.js';
 
 export function authorizationPermissionRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -45,7 +45,7 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
       slug,
       name,
       description: (body.description as string) ?? null,
-      resource_type_slug: resourceTypeSlug ?? DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG,
+      resource_type_slug: resourceTypeSlug ?? DEFAULT_RESOURCE_TYPE_SLUG,
     });
 
     return c.json(formatPermission(permission), 201);

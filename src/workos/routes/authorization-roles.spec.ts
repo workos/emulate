@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
-import { workosPlugin } from '../index.js';
+import { workosPlugin, seedFromConfig } from '../index.js';
+import { validateSeedConfig } from '../config-validator.js';
 
 const apiKeys: ApiKeyMap = { sk_test_role: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_role', 'Content-Type': 'application/json' };
@@ -30,7 +31,51 @@ describe('Authorization environment role routes', () => {
     expect(role.slug).toBe('admin');
     expect(role.type).toBe('EnvironmentRole');
     expect(role.organization_id).toBeNull();
+    expect(role.resource_type_slug).toBe('organization');
     expect(role.id).toMatch(/^role_/);
+  });
+
+  it('preserves a role resource type', async () => {
+    const res = await req('/authorization/roles', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'doc-editor', name: 'Doc Editor', resource_type_slug: 'document' }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json(res)).resource_type_slug).toBe('document');
+
+    // The update DTO has no scope field, so PATCH must leave it untouched
+    const patched = await req('/authorization/roles/doc-editor', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Document Editor', resource_type_slug: 'folder' }),
+    });
+    expect(await json(patched)).toMatchObject({ name: 'Document Editor', resource_type_slug: 'document' });
+  });
+
+  it.each([[42], ['']])('rejects an invalid resource type %p', async (resource_type_slug) => {
+    const res = await req('/authorization/roles', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'bad-scope', name: 'Bad Scope', resource_type_slug }),
+    });
+    expect(res.status).toBe(422);
+    expect((await json(res)).errors).toEqual([{ field: 'resource_type_slug', code: 'invalid' }]);
+  });
+
+  it('preserves a seeded role resource type', async () => {
+    const server = createTestApp();
+    seedFromConfig(server.store, 'http://localhost:0', {
+      roles: [{ slug: 'seeded-editor', name: 'Seeded Editor', resource_type_slug: 'document' }],
+    });
+    const res = await server.app.request('/authorization/roles/seeded-editor', { headers });
+    expect(res.status).toBe(200);
+    expect((await json(res)).resource_type_slug).toBe('document');
+  });
+
+  it.each([[42 as unknown as string], ['']])('rejects an invalid seeded resource type %p', (resource_type_slug) => {
+    const result = validateSeedConfig({
+      roles: [{ slug: 'bad-seed', name: 'Bad Seed', resource_type_slug }],
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.path === 'roles[0].resource_type_slug')).toBe(true);
   });
 
   it('rejects duplicate slug', async () => {

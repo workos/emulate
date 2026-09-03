@@ -335,6 +335,7 @@ export interface WorkOSRole extends Entity {
   organization_id: string | null;
   is_default_role: boolean;
   priority: number;
+  resource_type_slug?: string;
 }
 
 export interface WorkOSPermission extends Entity {

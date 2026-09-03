@@ -229,9 +229,6 @@ const KNOWN_MISSING_REQUIRED: Record<string, readonly string[]> = {
   // Spec models a connection `status` distinct from `state`; the emulator's
   // WorkOSConnection carries only `state`.
   connection: ['status'],
-  // The emulator's Role predates the spec's authorization Role: it has no
-  // `resource_type_slug`.
-  role: ['resource_type_slug'],
 };
 
 /**

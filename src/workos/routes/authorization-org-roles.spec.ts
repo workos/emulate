@@ -38,6 +38,17 @@ describe('Authorization org role routes', () => {
     expect(role.type).toBe('OrganizationRole');
     expect(role.organization_id).toBe(org.id);
     expect(role.slug).toBe('org-admin');
+    expect(role.resource_type_slug).toBe('organization');
+  });
+
+  it('preserves an org role resource type', async () => {
+    const org = await createOrg('Scoped Org');
+    const res = await req(`/authorization/organizations/${org.id}/roles`, {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'doc-editor', name: 'Doc Editor', resource_type_slug: 'document' }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json(res)).resource_type_slug).toBe('document');
   });
 
   it('rejects duplicate slug within same org', async () => {

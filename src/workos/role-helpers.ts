@@ -10,6 +10,7 @@ import {
 import type { WorkOSStore } from './store.js';
 import type { WorkOSRole, WorkOSPermission } from './entities.js';
 import { getWorkOSStore } from './store.js';
+import { DEFAULT_RESOURCE_TYPE_SLUG } from './constants.js';
 import { formatRole, formatPermission, formatListResponse } from './helpers.js';
 
 export function findEnvRole(ws: WorkOSStore, slug: string): WorkOSRole | undefined {
@@ -94,12 +95,21 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
     const body = await parseJsonBody(c);
     const slug = body.slug as string;
     const name = body.name as string;
+    const resourceTypeSlug = body.resource_type_slug;
 
     if (!slug || typeof slug !== 'string') {
       throw validationError('slug is required', [{ field: 'slug', code: 'required' }]);
     }
     if (!name || typeof name !== 'string') {
       throw validationError('name is required', [{ field: 'name', code: 'required' }]);
+    }
+    // Resource types are not modeled by the emulator (no registry, no endpoint),
+    // so any non-empty slug is accepted, and a role's permissions are not checked
+    // against its scope. Production requires a defined type and matching scopes.
+    if (resourceTypeSlug !== undefined && (typeof resourceTypeSlug !== 'string' || !resourceTypeSlug)) {
+      throw validationError('resource_type_slug must be a non-empty string', [
+        { field: 'resource_type_slug', code: 'invalid' },
+      ]);
     }
 
     const existing = config.findRole(ws, c, slug);
@@ -118,6 +128,7 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
       organization_id: defaults.organization_id ?? null,
       is_default_role: Boolean(body.is_default_role),
       priority: typeof body.priority === 'number' ? body.priority : 0,
+      resource_type_slug: resourceTypeSlug ?? DEFAULT_RESOURCE_TYPE_SLUG,
     });
 
     return c.json(formatRole(role, ws), 201);
