@@ -1,4 +1,11 @@
-import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
+import {
+  type RouteContext,
+  WorkOSApiError,
+  notFound,
+  validationError,
+  parseJsonBody,
+  parseListParams,
+} from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatPermission, formatListResponse } from '../helpers.js';
 import { DEFAULT_PERMISSION_RESOURCE_TYPE_SLUG } from '../constants.js';
@@ -29,7 +36,8 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
 
     const existing = ws.permissions.findOneBy('slug', slug);
     if (existing) {
-      throw validationError('Permission with this slug already exists', [{ field: 'slug', code: 'duplicate' }]);
+      // Production answers a taken slug with 409 permission_slug_conflict, not a 422 field error.
+      throw new WorkOSApiError(409, 'Permission with this slug already exists', 'permission_slug_conflict');
     }
 
     const permission = ws.permissions.insert({
@@ -58,7 +66,8 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
     return c.json(formatPermission(permission));
   });
 
-  app.put('/authorization/permissions/:slug', async (c) => {
+  // The spec (and every SDK) updates a permission with PATCH; there is no PUT.
+  app.patch('/authorization/permissions/:slug', async (c) => {
     const slug = c.req.param('slug');
     const permission = ws.permissions.findOneBy('slug', slug);
     if (!permission) throw notFound('Permission');

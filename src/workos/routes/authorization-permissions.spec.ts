@@ -69,7 +69,7 @@ describe('Authorization permission routes', () => {
       body: JSON.stringify({ slug: 'documents:write', name: 'Write Documents', resource_type_slug: 'document' }),
     });
     const res = await req('/authorization/permissions/documents:write', {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify({ name: 'Edit Documents' }),
     });
     expect(res.status).toBe(200);
@@ -85,7 +85,8 @@ describe('Authorization permission routes', () => {
       method: 'POST',
       body: JSON.stringify({ slug: 'dup', name: 'Dup 2' }),
     });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
+    expect((await json(res)).code).toBe('permission_slug_conflict');
   });
 
   it('rejects missing slug', async () => {
@@ -145,7 +146,7 @@ describe('Authorization permission routes', () => {
       body: JSON.stringify({ slug: 'upd', name: 'Original' }),
     });
     const res = await req('/authorization/permissions/upd', {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify({ name: 'Updated', description: 'desc' }),
     });
     expect(res.status).toBe(200);
