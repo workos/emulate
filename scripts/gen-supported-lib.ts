@@ -156,7 +156,7 @@ export const FEATURES: FeatureDef[] = [
     tags: ['authorization', 'permissions'],
     seedKeys: ['roles', 'permissions'],
     notes:
-      'Checks and effective-permission listings honor resource-scoped role assignments and ancestor inheritance (`parent_resource_id`); group role assignments are not implemented.',
+      'Checks and effective-permission listings honor resource-scoped role assignments and ancestor inheritance (`parent_resource_id`); group role assignments are not implemented. Resource types are not modeled: any `resource_type_slug` is accepted on roles and permissions, and permission scopes are not checked against the role scope.',
   },
   {
     name: 'Audit Logs',
