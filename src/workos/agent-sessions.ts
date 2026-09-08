@@ -69,8 +69,9 @@ export interface ChainRoot {
 }
 
 /**
- * Walk `parent_session_id` provenance to the chain root. Every hop is on the same instance,
- * so a missing parent means the chain was torn down and the walk stops where it is.
+ * Walk `parent_session_id` provenance to the chain root. Every hop is on the same instance and
+ * an instance's sessions are only ever deleted together, so a missing parent is corrupt
+ * provenance; it is reported as revoked rather than letting the orphan pose as a root.
  */
 export function findChainRoot(ws: WorkOSStore, session: WorkOSAgentInstanceSession): ChainRoot {
   let current = session;
@@ -78,7 +79,10 @@ export function findChainRoot(ws: WorkOSStore, session: WorkOSAgentInstanceSessi
   let ancestorRevoked = false;
   while (current.parent_session_id !== null && depth < MAX_AGENT_CHAIN_DEPTH) {
     const parent = ws.agentInstanceSessions.get(current.parent_session_id);
-    if (!parent) break;
+    if (!parent) {
+      ancestorRevoked = true;
+      break;
+    }
     if (parent.revoked_at !== null) ancestorRevoked = true;
     current = parent;
     depth += 1;
@@ -134,6 +138,45 @@ export function deleteAgentBlueprint(ws: WorkOSStore, blueprint: WorkOSAgentBlue
     deleteAgentInstance(ws, instance);
   }
   ws.agentBlueprints.delete(blueprint.id);
+}
+
+/** Every instance in the organization, autonomous or delegated, goes when the organization does. */
+export function deleteAgentInstancesForOrganization(ws: WorkOSStore, organizationId: string): void {
+  for (const instance of ws.agentInstances.findBy('organization_id', organizationId)) {
+    deleteAgentInstance(ws, instance);
+  }
+}
+
+/** Delegated instances hang off their membership; deleting the membership deletes them. */
+export function deleteAgentInstancesForMembership(ws: WorkOSStore, membershipId: string): void {
+  for (const instance of ws.agentInstances.findBy('organization_membership_id', membershipId)) {
+    deleteAgentInstance(ws, instance);
+  }
+}
+
+/**
+ * Deactivating a membership ends the member's ability to act, so every session on an
+ * instance delegated from it is revoked; the instance itself survives for a reactivation.
+ */
+export function revokeAgentSessionsForMembership(ws: WorkOSStore, membershipId: string): void {
+  for (const instance of ws.agentInstances.findBy('organization_membership_id', membershipId)) {
+    for (const session of ws.agentInstanceSessions.findBy('agent_instance_id', instance.id)) {
+      if (session.revoked_at === null) revokeAgentSessionTree(ws, session.id);
+    }
+  }
+}
+
+/**
+ * A deleted permission leaves every blueprint ceiling that named it, so no later mint can
+ * grant a slug that no longer exists. Sessions already minted keep their recorded grant.
+ */
+export function removePermissionFromAgentBlueprints(ws: WorkOSStore, slug: string): void {
+  for (const blueprint of ws.agentBlueprints.all()) {
+    if (!blueprint.permissions.includes(slug)) continue;
+    ws.agentBlueprints.update(blueprint.id, {
+      permissions: blueprint.permissions.filter((p) => p !== slug),
+    });
+  }
 }
 
 /**

@@ -873,4 +873,113 @@ describe('Agent Auth routes', () => {
       expect((await post('/agents/sessions/agent_session_missing/revoke', {})).status).toBe(404);
     });
   });
+
+  describe('cascades from the resources agents depend on', () => {
+    const validate = (blueprintId: string, token: string) =>
+      post(`/agents/blueprints/${blueprintId}/tokens/validate`, { agent_access_token: token });
+
+    it('deleting an organization tears down its autonomous and delegated agents', async () => {
+      const { org, blueprint } = await seedWorld();
+      const other = seedOrg('Other Inc');
+      const login = await loginAs();
+      const autonomous = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
+      const delegated = await mintOk(blueprint.id, {
+        type: 'user_delegated',
+        user_access_token: login.access_token,
+      });
+      const survivor = await mintOk(blueprint.id, { type: 'autonomous', organization_id: other.id });
+
+      expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(204);
+
+      for (const minted of [autonomous, delegated]) {
+        expect((await req(`/agents/instances/${minted.agent_instance_id}`)).status).toBe(404);
+        expect((await req(`/agents/sessions/${minted.agent_instance_session_id}`)).status).toBe(404);
+        await expectError(await validate(blueprint.id, minted.access_token), 400, 'invalid_agent_access_token');
+        await expectError(
+          await mint(blueprint.id, { type: 'refresh', refresh_token: minted.refresh_token }),
+          400,
+          'invalid_refresh_token',
+        );
+      }
+      expect((await json(await req('/agents/instances'))).data.map((i: { id: string }) => i.id)).toEqual([
+        survivor.agent_instance_id,
+      ]);
+      expect((await json(await validate(blueprint.id, survivor.access_token))).valid).toBe(true);
+      expect(events('agent.instance.deleted')).toHaveLength(2);
+      expect(events('agent.instance.session.revoked')).toHaveLength(2);
+    });
+
+    it('deleting a membership deletes the instances delegated from it', async () => {
+      const { org, membership, blueprint } = await seedWorld();
+      const login = await loginAs();
+      const delegated = await mintOk(blueprint.id, {
+        type: 'user_delegated',
+        user_access_token: login.access_token,
+      });
+      const autonomous = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
+
+      const res = await req(`/user_management/organization_memberships/${membership.id}`, { method: 'DELETE' });
+      expect(res.status).toBe(204);
+
+      expect((await req(`/agents/instances/${delegated.agent_instance_id}`)).status).toBe(404);
+      await expectError(await validate(blueprint.id, delegated.access_token), 400, 'invalid_agent_access_token');
+      expect((await json(await validate(blueprint.id, autonomous.access_token))).valid).toBe(true);
+      expect(events('agent.instance.deleted')).toHaveLength(1);
+      expect(events('agent.instance.session.revoked')).toHaveLength(1);
+    });
+
+    it('deactivating a membership revokes its delegated sessions but keeps the instance', async () => {
+      const { membership, blueprint } = await seedWorld();
+      const login = await loginAs();
+      const root = await mintOk(blueprint.id, { type: 'user_delegated', user_access_token: login.access_token });
+      const child = await mintOk(blueprint.id, { type: 'agent_delegated', agent_access_token: root.access_token });
+
+      const res = await req(`/user_management/organization_memberships/${membership.id}/deactivate`, {
+        method: 'PUT',
+      });
+      expect(res.status).toBe(200);
+
+      for (const minted of [root, child]) {
+        await expectError(await validate(blueprint.id, minted.access_token), 400, 'session_revoked');
+        expect((await json(await req(`/agents/sessions/${minted.agent_instance_session_id}`))).status).toBe('revoked');
+      }
+      expect((await req(`/agents/instances/${root.agent_instance_id}`)).status).toBe(200);
+      expect(events('agent.instance.session.revoked')).toHaveLength(2);
+    });
+
+    it('deleting a permission removes it from every blueprint ceiling', async () => {
+      const { org, blueprint } = await seedWorld();
+      const untouched = await json(await post('/agents/blueprints', { name: 'Reader', permissions: ['crm:read'] }));
+
+      expect((await req('/authorization/permissions/email:send', { method: 'DELETE' })).status).toBe(204);
+
+      expect((await json(await req(`/agents/blueprints/${blueprint.id}`))).permissions).toEqual(['crm:read']);
+      const minted = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
+      expect(minted.permissions).toEqual(['crm:read']);
+      expect(decodeJwt(minted.access_token).payload.permissions).toEqual(['crm:read']);
+      const updated = events('agent.blueprint.updated');
+      expect(updated.map((e) => e.data.id)).toEqual([blueprint.id]);
+      expect(updated[0]!.data.permissions).toEqual(['crm:read']);
+      expect((await json(await req(`/agents/blueprints/${untouched.id}`))).permissions).toEqual(['crm:read']);
+    });
+
+    it('treats a chained session whose parent is gone as revoked provenance', async () => {
+      const { org, blueprint } = await seedWorld();
+      const root = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
+      const child = await mintOk(blueprint.id, { type: 'agent_delegated', agent_access_token: root.access_token });
+      ws().agentInstanceSessions.delete(root.agent_instance_session_id);
+
+      await expectError(
+        await mint(blueprint.id, { type: 'agent_delegated', agent_access_token: child.access_token }),
+        400,
+        'invalid_agent_access_token',
+      );
+      await expectError(
+        await mint(blueprint.id, { type: 'refresh', refresh_token: child.refresh_token }),
+        400,
+        'session_revoked',
+      );
+      await expectError(await validate(blueprint.id, child.access_token), 400, 'session_revoked');
+    });
+  });
 });

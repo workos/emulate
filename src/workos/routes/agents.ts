@@ -677,7 +677,10 @@ export function agentRoutes(ctx: RouteContext): void {
       throw tokenError(400, 'invalid_agent_access_token', 'The provided agent access token is invalid.');
     }
     assertSessionLive(session);
-    const { root } = findChainRoot(ws, session);
+    const { root, ancestorRevoked } = findChainRoot(ws, session);
+    if (ancestorRevoked) {
+      throw tokenError(400, 'session_revoked', 'The session backing this token has been revoked.');
+    }
     if (root.user_session_id !== null && !isUserSessionLive(ws.sessions.get(root.user_session_id))) {
       throw tokenError(400, 'user_session_ended', 'The delegating user session has ended.');
     }
