@@ -21,6 +21,9 @@ import {
 import type { WorkOSStore } from './store.js';
 import type { EventBus } from './event-bus.js';
 import type {
+  WorkOSAgentBlueprint,
+  WorkOSAgentInstance,
+  WorkOSAgentInstanceSession,
   WorkOSOrganization,
   WorkOSOrganizationDomain,
   WorkOSOrganizationMembership,
@@ -1224,5 +1227,82 @@ export function formatWebhookEndpoint(
     description: ep.description,
     created_at: ep.created_at,
     updated_at: ep.updated_at,
+  };
+}
+
+export function formatAgentBlueprint(b: WorkOSAgentBlueprint): Record<string, unknown> {
+  return {
+    object: 'agent_blueprint',
+    id: b.id,
+    name: b.name,
+    description: b.description,
+    permissions: b.permissions,
+    invocable_by: {
+      role_slugs: b.invocable_by.role_slugs,
+      organization_ids: b.invocable_by.organization_ids,
+    },
+    session_settings: {
+      max_age_seconds: b.session_settings.max_age_seconds,
+      access_token_ttl_seconds: b.session_settings.access_token_ttl_seconds,
+      refresh_token_ttl_seconds: b.session_settings.refresh_token_ttl_seconds,
+    },
+    created_at: b.created_at,
+    updated_at: b.updated_at,
+  };
+}
+
+export function formatAgentInstance(i: WorkOSAgentInstance): Record<string, unknown> {
+  return {
+    object: 'agent_instance',
+    id: i.id,
+    agent_blueprint_id: i.agent_blueprint_id,
+    organization_id: i.organization_id,
+    organization_membership_id: i.organization_membership_id,
+    type: i.type,
+    created_at: i.created_at,
+    updated_at: i.updated_at,
+  };
+}
+
+/** Status is derived at read time, as in production: no clock ever flips a stored row to `expired`. */
+export function agentSessionStatus(s: WorkOSAgentInstanceSession, now = Date.now()): 'active' | 'revoked' | 'expired' {
+  if (s.revoked_at !== null) return 'revoked';
+  if (new Date(s.expires_at).getTime() <= now) return 'expired';
+  return 'active';
+}
+
+export function formatAgentInstanceSession(s: WorkOSAgentInstanceSession): Record<string, unknown> {
+  return {
+    object: 'agent_instance_session',
+    id: s.id,
+    agent_instance_id: s.agent_instance_id,
+    status: agentSessionStatus(s),
+    expires_at: s.expires_at,
+    revoked_at: s.revoked_at,
+    created_at: s.created_at,
+    updated_at: s.updated_at,
+  };
+}
+
+/**
+ * Session webhook payloads differ from the REST object: they carry the owning instance's
+ * `organization_id` and no `status`, and the created event adds the granted
+ * `permission_slugs`. The refresh token never leaves the store either way.
+ */
+export function formatAgentInstanceSessionEvent(
+  s: WorkOSAgentInstanceSession,
+  organizationId: string,
+  opts?: { permissionSlugs: string[] },
+): Record<string, unknown> {
+  return {
+    object: 'agent_instance_session',
+    id: s.id,
+    agent_instance_id: s.agent_instance_id,
+    organization_id: organizationId,
+    expires_at: s.expires_at,
+    revoked_at: s.revoked_at,
+    created_at: s.created_at,
+    updated_at: s.updated_at,
+    ...(opts ? { permission_slugs: opts.permissionSlugs } : {}),
   };
 }

@@ -47,6 +47,9 @@ import type {
   WorkOSVaultObject,
   WorkOSEvent,
   WorkOSWebhookEndpoint,
+  WorkOSAgentBlueprint,
+  WorkOSAgentInstance,
+  WorkOSAgentInstanceSession,
 } from './entities.js';
 
 export interface WorkOSStore {
@@ -96,6 +99,9 @@ export interface WorkOSStore {
   vaultObjects: Collection<WorkOSVaultObject>;
   events: Collection<WorkOSEvent>;
   webhookEndpoints: Collection<WorkOSWebhookEndpoint>;
+  agentBlueprints: Collection<WorkOSAgentBlueprint>;
+  agentInstances: Collection<WorkOSAgentInstance>;
+  agentInstanceSessions: Collection<WorkOSAgentInstanceSession>;
 }
 
 export function getWorkOSStore(store: Store): WorkOSStore {
@@ -251,6 +257,19 @@ export function getWorkOSStore(store: Store): WorkOSStore {
       'workos.webhook_endpoints',
       ID_PREFIXES.webhook_endpoint,
       ['endpoint_url'],
+    ),
+    agentBlueprints: store.collection<WorkOSAgentBlueprint>('workos.agent_blueprints', ID_PREFIXES.agent_blueprint, [
+      'name',
+    ]),
+    agentInstances: store.collection<WorkOSAgentInstance>('workos.agent_instances', ID_PREFIXES.agent_instance, [
+      'agent_blueprint_id',
+      'organization_id',
+      'organization_membership_id',
+    ]),
+    agentInstanceSessions: store.collection<WorkOSAgentInstanceSession>(
+      'workos.agent_instance_sessions',
+      ID_PREFIXES.agent_instance_session,
+      ['agent_instance_id', 'refresh_token', 'parent_session_id', 'user_session_id'],
     ),
   };
 

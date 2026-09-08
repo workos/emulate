@@ -89,4 +89,7 @@ export const ID_PREFIXES = {
   data_integration_auth: 'di_auth',
   radar_attempt: 'radar_attempt',
   webhook_endpoint: 'we',
+  agent_blueprint: 'agent_blueprint',
+  agent_instance: 'agent',
+  agent_instance_session: 'agent_session',
 } as const;

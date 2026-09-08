@@ -248,14 +248,15 @@ export const FEATURES: FeatureDef[] = [
     notes: 'Attempt listing only; no risk signals are computed.',
   },
   {
-    name: 'Agents',
-    tags: [
-      'agents.blueprints',
-      'agents.blueprints.tokens',
-      'agents.instances',
-      'agents.registrations',
-      'agents.sessions',
-    ],
+    name: 'Agent Auth',
+    tags: ['agents.blueprints', 'agents.blueprints.tokens', 'agents.instances', 'agents.sessions'],
+    seedKeys: ['agentBlueprints'],
+    notes:
+      'Blueprint CRUD, all four token grants (`user_delegated`, `autonomous`, `agent_delegated`, `refresh`), token validation, and instance and session listing, lookup, deletion and revocation. Agent access tokens are signed with the emulator key (`typ: at+jwt`, `sub_profile: ai_agent`) so JWKS validation works; delegated permissions are recomputed from the member’s current role at every mint and refresh. Agent tokens carry the `workos-emulate` placeholder audience, since nothing at the API-key-authenticated token endpoint names a client.',
+  },
+  {
+    name: 'Agent Registration',
+    tags: ['agents.registrations'],
     notes: 'Not implemented.',
   },
   {
