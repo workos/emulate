@@ -1085,20 +1085,22 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
         if (
           blueprint.description !== undefined &&
           blueprint.description !== null &&
-          (typeof blueprint.description !== 'string' || blueprint.description.length > 1000)
+          (typeof blueprint.description !== 'string' ||
+            blueprint.description.length === 0 ||
+            blueprint.description.length > 1000)
         ) {
           errors.push({
             path: at('description'),
-            message: 'description must be a string of at most 1000 characters, or null, if provided',
+            message: 'description must be a string of 1 to 1000 characters, or null, if provided',
             value: blueprint.description,
           });
         }
 
         if (blueprint.permissions !== undefined) {
-          if (!Array.isArray(blueprint.permissions)) {
+          if (!Array.isArray(blueprint.permissions) || blueprint.permissions.length > 1000) {
             errors.push({
               path: at('permissions'),
-              message: 'permissions must be an array of permission slugs if provided',
+              message: 'permissions must be an array of at most 1000 permission slugs if provided',
               value: blueprint.permissions,
             });
           } else {
@@ -1124,10 +1126,10 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             });
           } else {
             if (invocableBy.role_slugs !== undefined) {
-              if (!Array.isArray(invocableBy.role_slugs)) {
+              if (!Array.isArray(invocableBy.role_slugs) || invocableBy.role_slugs.length > 100) {
                 errors.push({
                   path: at('invocable_by.role_slugs'),
-                  message: 'invocable_by.role_slugs must be an array of role slugs if provided',
+                  message: 'invocable_by.role_slugs must be an array of at most 100 role slugs if provided',
                   value: invocableBy.role_slugs,
                 });
               } else {
@@ -1143,10 +1145,10 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
               }
             }
             if (invocableBy.organizations !== undefined) {
-              if (!Array.isArray(invocableBy.organizations)) {
+              if (!Array.isArray(invocableBy.organizations) || invocableBy.organizations.length > 1000) {
                 errors.push({
                   path: at('invocable_by.organizations'),
-                  message: 'invocable_by.organizations must be an array of organization names if provided',
+                  message: 'invocable_by.organizations must be an array of at most 1000 organization names if provided',
                   value: invocableBy.organizations,
                 });
               } else {

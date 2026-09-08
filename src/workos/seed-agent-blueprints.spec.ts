@@ -141,6 +141,30 @@ describe('Seeding agent blueprints', () => {
     ]);
   });
 
+  it('applies the create route limits: non-empty description and list maxima', () => {
+    const { valid, errors } = validateSeedConfig({
+      ...seed,
+      agentBlueprints: [
+        {
+          name: 'Oversized',
+          description: '',
+          permissions: Array.from({ length: 1001 }, () => 'crm:read'),
+          invocable_by: {
+            role_slugs: Array.from({ length: 101 }, () => 'manager'),
+            organizations: Array.from({ length: 1001 }, () => 'Acme Corp'),
+          },
+        },
+      ],
+    });
+    expect(valid).toBe(false);
+    expect(errors.map((e) => e.path).sort()).toEqual([
+      'agentBlueprints[0].description',
+      'agentBlueprints[0].invocable_by.organizations',
+      'agentBlueprints[0].invocable_by.role_slugs',
+      'agentBlueprints[0].permissions',
+    ]);
+  });
+
   it('reports a non-array sub-field rather than throwing', () => {
     const run = () =>
       validateSeedConfig({
