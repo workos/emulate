@@ -66,7 +66,7 @@ describe('Authorization resource routes', () => {
       body: JSON.stringify({ resource_type_slug: 'doc', external_id: '2', organization_id: org.id, name: '2' }),
     });
 
-    const res = await req('/authorization/resources');
+    const res = await req('/authorization/resources?resource_type_slug=doc');
     const body = await json(res);
     expect(body.object).toBe('list');
     expect(body.data.length).toBe(2);
@@ -84,7 +84,7 @@ describe('Authorization resource routes', () => {
       body: JSON.stringify({ resource_type_slug: 'doc', external_id: '2', organization_id: org2.id, name: '2' }),
     });
 
-    const res = await req(`/authorization/resources?organization_id=${org1.id}`);
+    const res = await req(`/authorization/resources?organization_id=${org1.id}&resource_type_slug=doc`);
     const body = await json(res);
     expect(body.data.length).toBe(1);
     expect(body.data[0].organization_id).toBe(org1.id);
@@ -169,7 +169,9 @@ describe('Authorization resource routes', () => {
     const resource = await json(res);
     expect(resource.name).toBe('shape-1');
     expect(resource.description).toBeNull();
-    expect(resource.parent_resource_id).toBeNull();
+    const parent = await json(await req(`/authorization/resources/${resource.parent_resource_id}`));
+    expect(parent.resource_type_slug).toBe('organization');
+    expect(parent.external_id).toBe(org.id);
   });
 
   it('requires name when creating a resource', async () => {
@@ -218,7 +220,7 @@ describe('Authorization resource routes', () => {
     const error = await json(second);
     expect(error.code).toBe('authorization_resource_external_id_conflict');
 
-    const list = await req(`/authorization/resources?organization_id=${org.id}`);
+    const list = await req(`/authorization/resources?organization_id=${org.id}&resource_type_slug=doc`);
     expect((await json(list)).data.length).toBe(1);
   });
 
@@ -376,14 +378,15 @@ describe('Authorization resource routes', () => {
     expect(updated.description).toBe('Now nested');
     expect(updated.parent_resource_id).toBe(parent.id);
 
-    // Detach again
-    const detached = await json(
+    // parent_resource_id: null is not a detach. Production's update has no such path, so the
+    // resource stays under its explicit parent (or the organization root).
+    const unchanged = await json(
       await req(`/authorization/resources/${resource.id}`, {
         method: 'PUT',
         body: JSON.stringify({ parent_resource_id: null }),
       }),
     );
-    expect(detached.parent_resource_id).toBeNull();
+    expect(unchanged.parent_resource_id).toBe(parent.id);
   });
 
   it('rejects parent updates that would create a cycle', async () => {
@@ -420,7 +423,7 @@ describe('Authorization resource routes', () => {
 
     // The hierarchy is left untouched by the rejected updates.
     const unchanged = await json(await req(`/authorization/resources/${root.id}`));
-    expect(unchanged.parent_resource_id).toBeNull();
+    expect(unchanged.parent_resource_id).toBe(root.parent_resource_id);
   });
 
   it('refuses to delete a resource with dependents unless cascade_delete is set', async () => {

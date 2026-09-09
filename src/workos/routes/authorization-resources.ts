@@ -8,6 +8,7 @@ import {
   parseListParams,
 } from '../../core/index.js';
 import type { WorkOSAuthorizationResource } from '../entities.js';
+import { findOrCreateOrganizationResource } from '../organization-resource.js';
 import { getWorkOSStore, type WorkOSStore } from '../store.js';
 import { formatAuthorizationResource, formatMembership, formatListResponse } from '../helpers.js';
 import { getPermissionsForMembership } from './authorization-checks.js';
@@ -104,6 +105,9 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
       throw validationError('name is required', [{ field: 'name', code: 'required' }]);
     }
 
+    if (resourceTypeSlug === 'organization') {
+      throw new WorkOSApiError(400, 'Cannot add resource to organization resource type', 'bad_request');
+    }
     if (findResourceByExternalId(ws, organizationId, resourceTypeSlug, externalId)) {
       throw new WorkOSApiError(
         409,
@@ -112,7 +116,12 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
       );
     }
 
-    const parent = resolveParentResource(ws, body, organizationId);
+    const organization = ws.organizations.get(organizationId);
+    if (!organization) throw notFound('Organization');
+    // Absent (or null) parent fields put the resource under the organization's implicit
+    // root, which production also resolves with find-or-create at this point.
+    const parent =
+      resolveParentResource(ws, body, organizationId) ?? findOrCreateOrganizationResource(ws, organization);
 
     const resource = ws.authorizationResources.insert({
       object: 'authorization_resource',
@@ -121,7 +130,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
       organization_id: organizationId,
       name,
       description: (body.description as string | null | undefined) ?? null,
-      parent_resource_id: parent?.id ?? null,
+      parent_resource_id: parent.id,
       metadata: (body.metadata as Record<string, string>) ?? {},
     });
 
@@ -171,32 +180,38 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const resourceId = c.req.param('resource_id');
     const resource = ws.authorizationResources.get(resourceId);
     if (!resource) throw notFound('AuthorizationResource');
+    if (resource.resource_type_slug === 'organization') {
+      throw new WorkOSApiError(
+        400,
+        'Cannot update organization resource directly. Use syncOrganizationResource() instead.',
+        'bad_request',
+      );
+    }
 
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
     if ('metadata' in body) updates.metadata = body.metadata;
     if ('name' in body) updates.name = body.name ?? null;
     if ('description' in body) updates.description = body.description ?? null;
-    if ('parent_resource_id' in body || 'parent_resource_external_id' in body || 'parent_resource_type_slug' in body) {
-      // Explicit parent_resource_id: null detaches the resource from its parent.
-      const nextParentId =
-        body.parent_resource_id === null && !body.parent_resource_external_id && !body.parent_resource_type_slug
-          ? null
-          : (resolveParentResource(ws, body, resource.organization_id)?.id ?? null);
 
+    // A parent named by id or by external_id + type re-parents the resource. Absent or null
+    // parent fields leave the current parent alone: production's update has no detach path,
+    // so a resource always sits under an explicit parent or the organization root.
+    const nextParent = resolveParentResource(ws, body, resource.organization_id);
+    if (nextParent) {
       // Re-parenting under the resource itself or one of its descendants would
       // make the two resources each other's ancestor, so a role assignment
       // scoped to either would grant permissions on both.
-      if (nextParentId && collectSubtree(ws, resourceId).has(nextParentId)) {
+      if (collectSubtree(ws, resourceId).has(nextParent.id)) {
         throw validationError(
-          nextParentId === resourceId
+          nextParent.id === resourceId
             ? 'A resource cannot be its own parent'
             : 'A resource cannot be parented to one of its own descendants',
           [{ field: 'parent_resource_id', code: 'invalid' }],
         );
       }
 
-      updates.parent_resource_id = nextParentId;
+      updates.parent_resource_id = nextParent.id;
     }
 
     const updated = ws.authorizationResources.update(resourceId, updates);
@@ -210,6 +225,10 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const resourceId = c.req.param('resource_id');
     const resource = ws.authorizationResources.get(resourceId);
     if (!resource) throw notFound('AuthorizationResource');
+
+    if (resource.resource_type_slug === 'organization') {
+      throw new WorkOSApiError(400, 'Cannot mark organization resource as deleting.', 'bad_request');
+    }
 
     const subtree = collectSubtree(ws, resourceId);
     const assignments = [...subtree].flatMap((id) => ws.roleAssignments.findBy('resource_id', id));

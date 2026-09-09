@@ -107,6 +107,8 @@ export function membershipRoutes(ctx: RouteContext): void {
     const m = ws.organizationMemberships.get(c.req.param('id'));
     if (!m) throw notFound('Organization Membership');
     deleteAgentInstancesForMembership(ws, m.id);
+    // Role assignments hang off the membership and go with it, as in production.
+    ws.roleAssignments.deleteBy('organization_membership_id', m.id);
     ws.organizationMemberships.delete(m.id);
     return c.body(null, 204);
   });
