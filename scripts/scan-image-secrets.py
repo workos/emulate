@@ -464,7 +464,12 @@ def make_layer(files: dict[str, bytes]) -> bytes:
     return gzip.compress(raw.getvalue())
 
 
-def make_oci_fixture(path: Path, *, leak: bool, needle: bytes) -> None:
+def make_oci_fixture(
+    path: Path,
+    *,
+    first_files: dict[str, bytes] | None = None,
+    second_files: dict[str, bytes] | None = None,
+) -> None:
     blobs: dict[str, bytes] = {}
 
     config = json.dumps(
@@ -485,34 +490,26 @@ def make_oci_fixture(path: Path, *, leak: bool, needle: bytes) -> None:
         "size": len(config),
     }
 
-    first_files = {"app/ok.txt": b"clean"}
-    if leak:
-        first_files["app/.bunfig.toml"] = b"registry=https://example.invalid/\n" + needle + b"\n"
-    layer1 = make_layer(first_files)
-    layer1_digest = hashlib.sha256(layer1).hexdigest()
-    blobs[f"blobs/sha256/{layer1_digest}"] = layer1
+    def add_layer(files: dict[str, bytes]) -> dict[str, Any]:
+        layer = make_layer(files)
+        layer_digest = hashlib.sha256(layer).hexdigest()
+        blobs[f"blobs/sha256/{layer_digest}"] = layer
+        return {
+            "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+            "digest": f"sha256:{layer_digest}",
+            "size": len(layer),
+        }
 
-    layer2 = make_layer({"app/.wh..bunfig.toml": b""} if leak else {"app/other.txt": b"clean"})
-    layer2_digest = hashlib.sha256(layer2).hexdigest()
-    blobs[f"blobs/sha256/{layer2_digest}"] = layer2
+    layer_descs = [add_layer(first_files or {"app/ok.txt": b"clean"})]
+    if second_files is not None:
+        layer_descs.append(add_layer(second_files))
 
     manifest = json.dumps(
         {
             "schemaVersion": 2,
             "mediaType": "application/vnd.oci.image.manifest.v1+json",
             "config": config_desc,
-            "layers": [
-                {
-                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
-                    "digest": f"sha256:{layer1_digest}",
-                    "size": len(layer1),
-                },
-                {
-                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
-                    "digest": f"sha256:{layer2_digest}",
-                    "size": len(layer2),
-                },
-            ],
+            "layers": layer_descs,
         },
         separators=(",", ":"),
     ).encode()
@@ -560,33 +557,133 @@ def make_oci_fixture(path: Path, *, leak: bool, needle: bytes) -> None:
             tar.addfile(info, io.BytesIO(payload))
 
 
+def run_generator_for_self_test(config: Path, output: Path) -> None:
+    generator = Path(__file__).with_name("create-sfw-image-scan-needles.py")
+    env = {
+        **os.environ,
+        "SFW_BUN_CONFIG_FILE": str(config),
+        "SFW_IMAGE_SCAN_NEEDLES": str(output),
+    }
+    result = subprocess.run(
+        [sys.executable, str(generator)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    if result.returncode != 0:
+        raise ScanError("self-test needle generator failed")
+
+
+def expect_generator_failure(config: Path, output: Path, protected_values: Iterable[str]) -> None:
+    generator = Path(__file__).with_name("create-sfw-image-scan-needles.py")
+    env = {
+        **os.environ,
+        "SFW_BUN_CONFIG_FILE": str(config),
+        "SFW_IMAGE_SCAN_NEEDLES": str(output),
+    }
+    result = subprocess.run(
+        [sys.executable, str(generator)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    if result.returncode == 0:
+        raise ScanError("self-test unsupported generator config did not fail closed")
+    if output.exists():
+        raise ScanError("self-test generator failure left a needle file behind")
+    diagnostics = result.stdout + result.stderr
+    if any(value and value in diagnostics for value in protected_values):
+        raise ScanError("self-test generator diagnostics disclosed a protected value")
+
+
+def expect_cli_scan_failure(
+    archive: Path,
+    needle_file: Path,
+    protected_values: Iterable[str],
+) -> None:
+    result = subprocess.run(
+        [sys.executable, __file__, "--oci-archive", str(archive), "--needles-file", str(needle_file)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 1:
+        raise ScanError("self-test leaky fixture did not fail with forbidden material")
+    diagnostics = result.stdout + result.stderr
+    if any(value and value in diagnostics for value in protected_values):
+        raise ScanError("self-test scanner diagnostics disclosed a protected value")
+
+
 def run_self_test() -> None:
-    needle = b"SCANNER_DELETED_LAYER_CANARY_20260909"
+    token = "SYNTHETIC_SOCKET_TOKEN_SCANNER_20260909"
+    endpoint = "https://socket-firewall.workos.dev/"
+    host = "socket-firewall.workos.dev"
+    begin = "# >>> workos-sfw >>>"
+    end = "# <<< workos-sfw <<<"
     with tempfile.TemporaryDirectory(prefix="image-secret-scan-self-test.") as tmp:
         tmp_path = Path(tmp)
-        needle_file = tmp_path / "needles.json"
-        needle_file.write_text(
-            json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "needles": [base64.b64encode(needle).decode("ascii")],
-                }
-            ),
+        config = tmp_path / ".bunfig.toml"
+        config.write_text(
+            f"\n{begin}\n[install]\nregistry = {{ url = \"{endpoint}\", token = \"{token}\" }}\n{end}\n",
             encoding="utf-8",
         )
+        needle_file = tmp_path / "needles.json"
+        run_generator_for_self_test(config, needle_file)
         needles = load_needles(needle_file)
+        if b"registry" in needles or b"url" in needles or b"token" in needles:
+            raise ScanError("self-test generator produced a bare TOML key needle")
+        for required in (token.encode(), endpoint.encode(), host.encode()):
+            if required not in needles:
+                raise ScanError("self-test generator did not preserve required scan values")
 
         clean = tmp_path / "clean.oci.tar"
-        make_oci_fixture(clean, leak=False, needle=needle)
+        make_oci_fixture(
+            clean,
+            first_files={
+                "app/registry-map.js": b"const registry = new Map();\n",
+                "app/node_modules/npm-registry-fetch/index.js": b"module.exports = 'registry';\n",
+            },
+            second_files={"app/other.txt": b"clean"},
+        )
         clean_stats = scan_oci_archive(clean, needles)
         if clean_stats.hit_count:
-            raise ScanError("self-test clean fixture produced a match")
+            raise ScanError("self-test clean registry-word fixture produced a match")
 
-        leaky = tmp_path / "leaky.oci.tar"
-        make_oci_fixture(leaky, leak=True, needle=needle)
-        leaky_stats = scan_oci_archive(leaky, needles)
-        if leaky_stats.hit_count == 0:
+        credential = tmp_path / "credential.oci.tar"
+        make_oci_fixture(credential, first_files={"app/token.txt": token.encode()})
+        credential_stats = scan_oci_archive(credential, needles)
+        if credential_stats.hit_count == 0:
+            raise ScanError("self-test did not catch a credential leak")
+
+        endpoint_leak = tmp_path / "endpoint.oci.tar"
+        make_oci_fixture(endpoint_leak, first_files={"app/endpoint.txt": endpoint.encode()})
+        endpoint_stats = scan_oci_archive(endpoint_leak, needles)
+        if endpoint_stats.hit_count == 0:
+            raise ScanError("self-test did not catch a Socket endpoint leak")
+
+        deleted_lower_layer = tmp_path / "deleted-lower-layer.oci.tar"
+        make_oci_fixture(
+            deleted_lower_layer,
+            first_files={
+                "app/.bunfig.toml": (
+                    f'registry = {{ url = "{endpoint}", token = "{token}" }}\n'
+                ).encode(),
+            },
+            second_files={"app/.wh..bunfig.toml": b""},
+        )
+        deleted_stats = scan_oci_archive(deleted_lower_layer, needles)
+        if deleted_stats.hit_count == 0:
             raise ScanError("self-test did not catch a deleted lower-layer leak")
+        expect_cli_scan_failure(
+            deleted_lower_layer,
+            needle_file,
+            [token, endpoint, host, "app/.bunfig.toml", str(needle_file), str(config)],
+        )
 
         malformed = tmp_path / "malformed.oci.tar"
         with tarfile.open(malformed, mode="w") as tar:
@@ -602,7 +699,16 @@ def run_self_test() -> None:
         else:
             raise ScanError("self-test malformed OCI layout did not fail closed")
 
+        bad_config = tmp_path / "bad.bunfig.toml"
+        bad_output = tmp_path / "bad-needles.json"
+        bad_config.write_text(
+            f"{begin}\n[install]\nregistry = {{ url = \"{endpoint}\", token = \"{token}\" }}\nextra = true\n{end}\n",
+            encoding="utf-8",
+        )
+        expect_generator_failure(bad_config, bad_output, [token, endpoint, host, str(bad_config)])
+
     print("image secret scanner self-test passed")
+
 
 
 def print_success(stats: Stats) -> None:

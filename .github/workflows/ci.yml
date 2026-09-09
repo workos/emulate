@@ -143,8 +143,10 @@ jobs:
           allow-external-fork-fallback: true
           configure-bun: true
 
-      - name: Test image secret scanner
-        run: python3 scripts/scan-image-secrets.py --self-test
+      - name: Test image scan tools
+        run: |
+          python3 scripts/create-sfw-image-scan-needles.py --self-test
+          python3 scripts/scan-image-secrets.py --self-test
 
       - name: Create private image scan needles
         if: steps.sfw.outputs.active == 'true'
@@ -247,8 +249,10 @@ jobs:
           allow-external-fork-fallback: true
           configure-bun: true
 
-      - name: Test image secret scanner
-        run: python3 scripts/scan-image-secrets.py --self-test
+      - name: Test image scan tools
+        run: |
+          python3 scripts/create-sfw-image-scan-needles.py --self-test
+          python3 scripts/scan-image-secrets.py --self-test
 
       - name: Create private image scan needles
         if: steps.sfw.outputs.active == 'true'
