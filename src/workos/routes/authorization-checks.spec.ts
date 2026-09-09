@@ -335,8 +335,37 @@ describe('Authorization check + role assignment routes', () => {
     const res = await req(`/authorization/organization_memberships/${membership.id}/resources`);
     expect(res.status).toBe(200);
     const body = await json(res);
-    expect(body.data.length).toBe(1);
-    expect(body.data[0].external_id).toBe('res1');
+    expect(body.data.map((r: any) => r.external_id).sort()).toEqual([org.id, 'res1'].sort());
+  });
+
+  it('checks the implicit organization root and discovers its default children', async () => {
+    const { membership, org } = await setup();
+    const check = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+      method: 'POST',
+      body: JSON.stringify({
+        resource_type_slug: 'organization',
+        resource_external_id: org.id,
+        permission_slug: 'posts:read',
+      }),
+    });
+    expect(check.status).toBe(200);
+    expect((await json(check)).authorized).toBe(true);
+    const child = await json(
+      await req('/authorization/resources', {
+        method: 'POST',
+        body: JSON.stringify({
+          resource_type_slug: 'doc',
+          external_id: 'default-child',
+          organization_id: org.id,
+          name: 'Child',
+        }),
+      }),
+    );
+    const list = await req(
+      `/authorization/organization_memberships/${membership.id}/resources?permission_slug=posts:read&parent_resource_type_slug=organization&parent_resource_external_id=${org.id}`,
+    );
+    expect(list.status).toBe(200);
+    expect((await json(list)).data.map((r: any) => r.id)).toEqual([child.id]);
   });
 
   async function setupWithResource() {

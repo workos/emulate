@@ -1,4 +1,5 @@
 import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
+import { syncOrganizationResource } from '../organization-resource.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatOrganization,
@@ -30,6 +31,8 @@ export function organizationRoutes(ctx: RouteContext): void {
       // Not in the spec's create shape; entitlements are seeded, not set over the API.
       entitlements: [],
     });
+
+    syncOrganizationResource(ws, org);
 
     const domainData = body.domain_data as Array<{ domain: string; state?: string }> | undefined;
     if (domainData && Array.isArray(domainData)) {
@@ -161,6 +164,7 @@ export function organizationRoutes(ctx: RouteContext): void {
     }
 
     const updated = ws.organizations.update(org.id, updates);
+    syncOrganizationResource(ws, updated!);
     return c.json(formatOrganization(updated!, ws));
   });
 
@@ -178,6 +182,10 @@ export function organizationRoutes(ctx: RouteContext): void {
     // ownership test the org listing route applies, so nothing it would list survives.
     revokeApiKeysForOwner(store, ws, (o) => (o.type === 'organization' ? o.id : o.organization_id) === org.id);
 
+    for (const resource of ws.authorizationResources.findBy('organization_id', org.id)) {
+      ws.roleAssignments.deleteBy('resource_id', resource.id);
+      ws.authorizationResources.delete(resource.id);
+    }
     ws.organizations.delete(org.id);
     return c.body(null, 204);
   });

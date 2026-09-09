@@ -104,6 +104,9 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
       throw validationError('name is required', [{ field: 'name', code: 'required' }]);
     }
 
+    if (resourceTypeSlug === 'organization') {
+      throw new WorkOSApiError(400, 'Cannot add resource to organization resource type', 'bad_request');
+    }
     if (findResourceByExternalId(ws, organizationId, resourceTypeSlug, externalId)) {
       throw new WorkOSApiError(
         409,
@@ -112,7 +115,11 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
       );
     }
 
-    const parent = resolveParentResource(ws, body, organizationId);
+    const organization = ws.organizations.get(organizationId);
+    if (!organization) throw notFound('Organization');
+    const parent =
+      resolveParentResource(ws, body, organizationId) ??
+      findResourceByExternalId(ws, organizationId, 'organization', organization.external_id ?? organization.id);
 
     const resource = ws.authorizationResources.insert({
       object: 'authorization_resource',
@@ -171,6 +178,9 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const resourceId = c.req.param('resource_id');
     const resource = ws.authorizationResources.get(resourceId);
     if (!resource) throw notFound('AuthorizationResource');
+    if (resource.resource_type_slug === 'organization') {
+      throw new WorkOSApiError(400, 'Cannot update organization resource', 'bad_request');
+    }
 
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
@@ -210,6 +220,10 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const resourceId = c.req.param('resource_id');
     const resource = ws.authorizationResources.get(resourceId);
     if (!resource) throw notFound('AuthorizationResource');
+
+    if (resource.resource_type_slug === 'organization') {
+      throw new WorkOSApiError(400, 'Cannot delete organization resource', 'bad_request');
+    }
 
     const subtree = collectSubtree(ws, resourceId);
     const assignments = [...subtree].flatMap((id) => ws.roleAssignments.findBy('resource_id', id));
