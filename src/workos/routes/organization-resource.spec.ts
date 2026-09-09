@@ -75,6 +75,53 @@ describe('Implicit organization resources', () => {
     expect((await json(await req(rootPath(org, org.id)))).id).toBe(root.id);
   });
 
+  it('keeps root grants addressable after changing or clearing the organization external ID', async () => {
+    seedFromConfig(server.store, 'http://localhost', {
+      users: [{ id: 'user_rename', email: 'rename@example.com' }],
+      permissions: [{ slug: 'workspace:read', name: 'Read workspace' }],
+      roles: [{ slug: 'reader', name: 'Reader', permissions: ['workspace:read'] }],
+    });
+    const org = await createOrg('before');
+    const membership = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: 'user_rename' }),
+      }),
+    );
+    const path = `/authorization/organization_memberships/${membership.id}/role_assignments`;
+    const assigned = await req(path, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'reader', resource_type_slug: 'organization', resource_external_id: 'before' }),
+    });
+    expect(assigned.status).toBe(201);
+    const grant = await json(assigned);
+    for (const externalId of ['after', null]) {
+      expect(
+        (
+          await req(`/organizations/${org.id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ external_id: externalId }),
+          })
+        ).status,
+      ).toBe(200);
+      const listed = await json(await req(path));
+      expect(listed.data).toHaveLength(1);
+      expect(listed.data[0].id).toBe(grant.id);
+      expect(listed.data[0].resource.id).toBe(grant.resource.id);
+      expect(listed.data[0].resource.external_id).toBe(externalId ?? org.id);
+      const check = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+        method: 'POST',
+        body: JSON.stringify({
+          resource_type_slug: listed.data[0].resource.resource_type_slug,
+          resource_external_id: listed.data[0].resource.external_id,
+          permission_slug: 'workspace:read',
+        }),
+      });
+      expect(check.status).toBe(200);
+      expect((await json(check)).authorized).toBe(true);
+    }
+  });
+
   it('creates roots for seeded organizations, including after resetting', async () => {
     const seed = { organizations: [{ id: 'org_seed', name: 'Seeded', external_id: 'seed-external' }] };
     seedFromConfig(server.store, 'http://localhost', seed);
@@ -150,7 +197,7 @@ describe('Implicit organization resources', () => {
     expect(secondRoot).not.toBe(firstRoot);
   });
 
-  it('removes root and child grants on organization deletion but preserves other grants', async () => {
+  it('removes membership-wide, root, and child grants on organization deletion but preserves other grants', async () => {
     seedFromConfig(server.store, 'http://localhost', {
       users: [{ id: 'user_cleanup', email: 'cleanup@example.com' }],
       roles: [{ slug: 'reader', name: 'Reader' }],
@@ -187,9 +234,18 @@ describe('Implicit organization resources', () => {
         method: 'POST',
         body: JSON.stringify({ role_slug: 'reader', resource_id: child.id }),
       });
+      const membershipGrant = await req(assignmentPath, {
+        method: 'POST',
+        body: JSON.stringify({ role_slug: 'reader' }),
+      });
+      expect(membershipGrant.status).toBe(201);
       expect(rootGrant.status).toBe(201);
       expect(childGrant.status).toBe(201);
-      return { org, assignmentPath, grants: [(await json(rootGrant)).id, (await json(childGrant)).id] };
+      return {
+        org,
+        assignmentPath,
+        grants: [(await json(rootGrant)).id, (await json(childGrant)).id, (await json(membershipGrant)).id],
+      };
     }
     const removed = await assignInOrganization('removed');
     const retained = await assignInOrganization('retained');
@@ -198,6 +254,7 @@ describe('Implicit organization resources', () => {
     const assignments = getWorkOSStore(server.store).roleAssignments;
     expect(assignments.get(removed.grants[0])).toBeUndefined();
     expect(assignments.get(removed.grants[1])).toBeUndefined();
+    expect(assignments.get(removed.grants[2])).toBeUndefined();
     const remaining = await req(retained.assignmentPath);
     expect(remaining.status).toBe(200);
     expect((await json(remaining)).data.map((grant: any) => grant.id).sort()).toEqual(retained.grants.sort());

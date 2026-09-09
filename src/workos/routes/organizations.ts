@@ -173,6 +173,9 @@ export function organizationRoutes(ctx: RouteContext): void {
     if (!org) throw notFound('Organization');
 
     ws.organizationDomains.deleteBy('organization_id', org.id);
+    for (const membership of ws.organizationMemberships.findBy('organization_id', org.id)) {
+      ws.roleAssignments.deleteBy('organization_membership_id', membership.id);
+    }
     ws.organizationMemberships.deleteBy('organization_id', org.id);
     // Same as the user cascade: an organization target with no organization behind it is
     // unreachable through the target routes.
