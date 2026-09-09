@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, setSystemTime } from 'bun:test';
 import { createServer } from '../../core/index.js';
 import { seedFromConfig, workosPlugin } from '../index.js';
 import { getWorkOSStore } from '../store.js';
@@ -10,6 +10,7 @@ describe('Implicit organization resources', () => {
   beforeEach(() => {
     server = createServer(workosPlugin);
   });
+  afterEach(() => setSystemTime());
   const req = (path: string, init?: RequestInit) => server.app.request(path, { headers, ...init });
   const json = (res: Response) => res.json() as Promise<any>;
   const createOrg = async (externalId?: string) =>
@@ -120,6 +121,55 @@ describe('Implicit organization resources', () => {
       expect(check.status).toBe(200);
       expect((await json(check)).authorized).toBe(true);
     }
+  });
+
+  it('updates root and grant timestamps only when their fields change', async () => {
+    setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    seedFromConfig(server.store, 'http://localhost', {
+      users: [{ id: 'user_timestamps', email: 'timestamps@example.com' }],
+      roles: [{ slug: 'reader', name: 'Reader' }],
+    });
+    const org = await createOrg('before');
+    const root = await json(await req(rootPath(org)));
+    const membership = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: 'user_timestamps' }),
+      }),
+    );
+    const path = `/authorization/organization_memberships/${membership.id}/role_assignments`;
+    const assigned = await req(path, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'reader', resource_id: root.id }),
+    });
+    expect(assigned.status).toBe(201);
+    const grant = await json(assigned);
+    setSystemTime(new Date('2026-01-02T00:00:00Z'));
+    for (const body of [
+      {},
+      { metadata: { test: 'value' } },
+      { allow_profiles_outside_organization: true },
+      { name: org.name, external_id: org.external_id },
+    ]) {
+      expect((await req(`/organizations/${org.id}`, { method: 'PUT', body: JSON.stringify(body) })).status).toBe(200);
+      expect((await json(await req(rootPath(org)))).updated_at).toBe(root.updated_at);
+      expect((await json(await req(path))).data[0].updated_at).toBe(grant.updated_at);
+    }
+    expect(
+      (await req(`/organizations/${org.id}`, { method: 'PUT', body: JSON.stringify({ name: 'Renamed' }) })).status,
+    ).toBe(200);
+    const renamed = await json(await req(rootPath(org)));
+    expect(renamed.name).toBe('Renamed');
+    expect(renamed.updated_at).toBe('2026-01-02T00:00:00.000Z');
+    expect((await json(await req(path))).data[0].updated_at).toBe(grant.updated_at);
+    setSystemTime(new Date('2026-01-03T00:00:00Z'));
+    expect(
+      (await req(`/organizations/${org.id}`, { method: 'PUT', body: JSON.stringify({ external_id: 'after' }) })).status,
+    ).toBe(200);
+    expect((await json(await req(rootPath(org, 'after')))).updated_at).toBe('2026-01-03T00:00:00.000Z');
+    const updatedGrant = (await json(await req(path))).data[0];
+    expect(updatedGrant.resource.external_id).toBe('after');
+    expect(updatedGrant.updated_at).toBe('2026-01-03T00:00:00.000Z');
   });
 
   it('creates roots for seeded organizations, including after resetting', async () => {

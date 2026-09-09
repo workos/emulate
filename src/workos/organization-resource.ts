@@ -11,9 +11,13 @@ export function syncOrganizationResource(ws: WorkOSStore, organization: WorkOSOr
     external_id: organization.external_id ?? organization.id,
   };
   if (root) {
-    ws.authorizationResources.update(root.id, values);
+    if (root.name !== values.name || root.external_id !== values.external_id) {
+      ws.authorizationResources.update(root.id, values);
+    }
     for (const assignment of ws.roleAssignments.findBy('resource_id', root.id)) {
-      ws.roleAssignments.update(assignment.id, { resource_external_id: values.external_id });
+      if (assignment.resource_external_id !== values.external_id) {
+        ws.roleAssignments.update(assignment.id, { resource_external_id: values.external_id });
+      }
     }
   } else {
     ws.authorizationResources.insert({
