@@ -310,7 +310,62 @@ jobs:
           token: ${{ secrets.PUBLIC_SOCKET_FIREWALL_TOKEN }}
           configure-bun: true
 
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - name: Require Socket Firewall for container publication
+        if: steps.sfw.outputs.active != 'true'
+        run: |
+          echo "::error::Socket Firewall must be active before container publication."
+          exit 1
+
+      - name: Test image secret scanner
+        run: python3 scripts/scan-image-secrets.py --self-test
+
+      - name: Create private image scan needles
+        env:
+          SFW_BUN_CONFIG_FILE: ${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
+          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
+        run: python3 scripts/create-sfw-image-scan-needles.py
+
+      - name: Build authenticated image archive for scan
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/emulate-ghcr-prepublish.oci.tar
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            SFW_REQUIRED=true
+          add-hosts: |
+            registry.npmjs.org:127.0.0.1
+            registry.yarnpkg.com:127.0.0.1
+          secret-files: |
+            sfw_bunfig=${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
+
+      - name: Scan authenticated image archive
+        env:
+          EMULATE_IMAGE_ARCHIVE: ${{ runner.temp }}/emulate-ghcr-prepublish.oci.tar
+          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
+        run: python3 scripts/scan-image-secrets.py --oci-archive "$EMULATE_IMAGE_ARCHIVE" --needles-file "$SFW_IMAGE_SCAN_NEEDLES"
+
+      - name: Teardown Socket Firewall
+        if: ${{ always() && steps.sfw.outputs.active == 'true' }}
+        uses: workos/setup-socket-firewall/teardown@ca93dd8aa351f54f4729fe3377a9be23c631c25d
+
+      - name: Remove private Docker scan materials
+        if: ${{ always() }}
+        env:
+          EMULATE_IMAGE_ARCHIVE: ${{ runner.temp }}/emulate-ghcr-prepublish.oci.tar
+          SFW_BUN_CONFIG_FILE: ${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
+          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
+        run: |
+          rm -f "$EMULATE_IMAGE_ARCHIVE" "$SFW_IMAGE_SCAN_NEEDLES" "$SFW_BUN_CONFIG_FILE"
+          if [ -e "$EMULATE_IMAGE_ARCHIVE" ] || [ -e "$SFW_IMAGE_SCAN_NEEDLES" ] || [ -e "$SFW_BUN_CONFIG_FILE" ]; then
+            echo "::error::Private Docker scan material was not removed."
+            exit 1
+          fi
+
+      - name: Publish scanned image from clean cache
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -321,12 +376,6 @@ jobs:
           add-hosts: |
             registry.npmjs.org:127.0.0.1
             registry.yarnpkg.com:127.0.0.1
-          secret-files: |
-            sfw_bunfig=${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
-
-      - name: Teardown Socket Firewall
-        if: ${{ always() && steps.sfw.outputs.active == 'true' }}
-        uses: workos/setup-socket-firewall/teardown@ca93dd8aa351f54f4729fe3377a9be23c631c25d
 
   homebrew:
     name: Update Homebrew formula
