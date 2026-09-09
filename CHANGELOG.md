@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/workos/emulate/compare/v0.12.0...v0.13.0) (2026-09-09)
+
+
+### Features
+
+* **agents:** add Agent Auth blueprints, tokens, instances and sessions ([#104](https://github.com/workos/emulate/issues/104)) ([9a2f973](https://github.com/workos/emulate/commit/9a2f97322c57b097f1b60fefcae2b0c1bab8cd74))
+
+
+### Bug Fixes
+
+* **authorization:** create implicit organization roots ([#106](https://github.com/workos/emulate/issues/106)) ([b16cd04](https://github.com/workos/emulate/commit/b16cd0455dc01ee197c06cfa440fc7fc84e76693))
+
 ## [0.12.0](https://github.com/workos/emulate/compare/v0.11.0...v0.12.0) (2026-09-03)
 
 
