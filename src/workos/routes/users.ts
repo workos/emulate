@@ -138,6 +138,8 @@ export function userRoutes(ctx: RouteContext): void {
     }
     for (const m of ws.organizationMemberships.findBy('user_id', user.id)) {
       deleteAgentInstancesForMembership(ws, m.id);
+      // Same cascade as deleting the membership directly: its role assignments go with it.
+      ws.roleAssignments.deleteBy('organization_membership_id', m.id);
       ws.organizationMemberships.delete(m.id);
     }
     for (const f of ws.authFactors.findBy('user_id', user.id)) {

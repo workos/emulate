@@ -172,7 +172,7 @@ describe('Implicit organization resources', () => {
     expect(updatedGrant.updated_at).toBe('2026-01-03T00:00:00.000Z');
   });
 
-  it('preserves root permissions when clearing a resource parent', async () => {
+  it('keeps the parent and inherited access when a null parent is sent', async () => {
     seedFromConfig(server.store, 'http://localhost', {
       users: [{ id: 'user_parent', email: 'parent@example.com' }],
       permissions: [{ slug: 'workspace:read', name: 'Read workspace' }],
@@ -220,7 +220,7 @@ describe('Implicit organization resources', () => {
     for (const body of [{ name: 'Renamed' }, { parent_resource_id: null }]) {
       const response = await req(`/authorization/resources/${child.id}`, { method: 'PUT', body: JSON.stringify(body) });
       expect(response.status).toBe(200);
-      expect((await json(response)).parent_resource_id).toBe('parent_resource_id' in body ? root.id : parent.id);
+      expect((await json(response)).parent_resource_id).toBe(parent.id);
       const check = await req(`/authorization/organization_memberships/${membership.id}/check`, {
         method: 'POST',
         body: JSON.stringify({
@@ -413,5 +413,77 @@ describe('Implicit organization resources', () => {
     expect((await req(rootPath(org))).status).toBe(404);
     expect((await req(`/authorization/resources/${child.id}`)).status).toBe(404);
     expect((await req(rootPath(other))).status).toBe(200);
+  });
+
+  it('creates the root on first use for an organization that bypassed the routes', async () => {
+    // Inserted straight into the store, the way library consumers and other specs build fixtures.
+    const org = getWorkOSStore(server.store).organizations.insert({
+      object: 'organization',
+      name: 'Side door',
+      external_id: 'side-door',
+      metadata: {},
+      stripe_customer_id: null,
+      allow_profiles_outside_organization: false,
+      entitlements: [],
+    });
+    expect((await req(rootPath(org))).status).toBe(404);
+    const child = await json(
+      await req('/authorization/resources', {
+        method: 'POST',
+        body: JSON.stringify({
+          organization_id: org.id,
+          resource_type_slug: 'workspace',
+          external_id: 'workspace-1',
+          name: 'Workspace',
+        }),
+      }),
+    );
+    const root = await json(await req(rootPath(org)));
+    expect(root.external_id).toBe('side-door');
+    expect(root.name).toBe('Side door');
+    expect(child.parent_resource_id).toBe(root.id);
+  });
+
+  it('removes grants with their membership when the membership or its user is deleted', async () => {
+    seedFromConfig(server.store, 'http://localhost', {
+      users: [
+        { id: 'user_membership_delete', email: 'membership-delete@example.com' },
+        { id: 'user_user_delete', email: 'user-delete@example.com' },
+      ],
+      roles: [{ slug: 'reader', name: 'Reader' }],
+    });
+    const org = await createOrg('cascade');
+    const root = await json(await req(rootPath(org)));
+    const assignments = getWorkOSStore(server.store).roleAssignments;
+    async function grant(userId: string) {
+      const membership = await json(
+        await req('/user_management/organization_memberships', {
+          method: 'POST',
+          body: JSON.stringify({ organization_id: org.id, user_id: userId }),
+        }),
+      );
+      const path = `/authorization/organization_memberships/${membership.id}/role_assignments`;
+      const ids: string[] = [];
+      for (const body of [{ role_slug: 'reader' }, { role_slug: 'reader', resource_id: root.id }]) {
+        const res = await req(path, { method: 'POST', body: JSON.stringify(body) });
+        expect(res.status).toBe(201);
+        ids.push((await json(res)).id);
+      }
+      return { membership, ids };
+    }
+    const byMembership = await grant('user_membership_delete');
+    const byUser = await grant('user_user_delete');
+
+    const deleteMembership = await req(`/user_management/organization_memberships/${byMembership.membership.id}`, {
+      method: 'DELETE',
+    });
+    expect(deleteMembership.status).toBe(204);
+    for (const id of byMembership.ids) expect(assignments.get(id)).toBeUndefined();
+    for (const id of byUser.ids) expect(assignments.get(id)).toBeDefined();
+
+    expect((await req('/user_management/users/user_user_delete', { method: 'DELETE' })).status).toBe(204);
+    for (const id of byUser.ids) expect(assignments.get(id)).toBeUndefined();
+    // Membership-level cleanup leaves the organization and its root alone.
+    expect((await req(rootPath(org))).status).toBe(200);
   });
 });
