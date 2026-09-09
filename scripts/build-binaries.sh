@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:?usage: build-binaries.sh <version>}"
-OUT="dist/binaries"
-rm -rf "$OUT" && mkdir -p "$OUT"
+usage() {
+  echo "usage: build-binaries.sh <version> [target asset]" >&2
+  exit 2
+}
+
+VERSION="${1:-}"
+[[ -n "$VERSION" ]] || usage
+REQUESTED_TARGET="${2:-}"
+REQUESTED_ASSET="${3:-}"
+if [[ -n "$REQUESTED_TARGET" && -z "$REQUESTED_ASSET" ]] || [[ -z "$REQUESTED_TARGET" && -n "$REQUESTED_ASSET" ]]; then
+  usage
+fi
+
+if [[ -n "$REQUESTED_TARGET" ]]; then
+  OUT="${BUN_BINARY_OUT_DIR:-dist}"
+  mkdir -p "$OUT"
+  rm -f "$OUT/$REQUESTED_ASSET"
+else
+  OUT="${BUN_BINARY_OUT_DIR:-dist/binaries}"
+  rm -rf "$OUT" && mkdir -p "$OUT"
+fi
 
 # target:artifact pairs (plain array — macOS /bin/bash 3.2 has no associative arrays)
 TARGETS=(
@@ -58,9 +76,11 @@ unpack_compile_target() {
   tar -xzf "$tarball" -C "$destination"
 }
 
-for entry in "${TARGETS[@]}"; do
-  target="${entry%%:*}"
-  artifact="${entry#*:}"
+build_target() {
+  local target="$1"
+  local artifact="$2"
+  local compile_package compile_binary compile_path
+
   compile_package="$(compile_package_for_target "$target")"
   compile_binary="$(compile_binary_for_target "$target")"
   compile_path="$COMPILE_TARGETS_DIR/$target/package/bin/$compile_binary"
@@ -75,6 +95,18 @@ for entry in "${TARGETS[@]}"; do
     --target="$target" \
     ./src/cli.ts \
     --outfile "$OUT/$artifact"
+}
+
+if [[ -n "$REQUESTED_TARGET" ]]; then
+  build_target "$REQUESTED_TARGET" "$REQUESTED_ASSET"
+  echo "Built $REQUESTED_ASSET for $VERSION"
+  exit 0
+fi
+
+for entry in "${TARGETS[@]}"; do
+  target="${entry%%:*}"
+  artifact="${entry#*:}"
+  build_target "$target" "$artifact"
 done
 
 (cd "$OUT" && shasum -a 256 workos-emulate-* > checksums.txt)

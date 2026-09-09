@@ -130,13 +130,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - name: Setup Socket Firewall
+        id: sfw
+        uses: workos/setup-socket-firewall@ca93dd8aa351f54f4729fe3377a9be23c631c25d
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/sfw-docker-bun
+        with:
+          token: ${{ secrets.PUBLIC_SOCKET_FIREWALL_TOKEN }}
+          allow-external-fork-fallback: true
+          configure-bun: true
+
+      - name: Build image
+        if: steps.sfw.outputs.active == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: false
           load: true
           tags: emulate:ci
+          build-args: |
+            SFW_REQUIRED=true
+          add-hosts: |
+            registry.npmjs.org:127.0.0.1
+            registry.yarnpkg.com:127.0.0.1
+          secret-files: |
+            sfw_bunfig=${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
+
+      - name: Build image (external fork fallback)
+        if: steps.sfw.outputs.active == 'false'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: false
+          load: true
+          tags: emulate:ci
+
+      - name: Teardown Socket Firewall
+        if: ${{ always() && steps.sfw.outputs.active == 'true' }}
+        uses: workos/setup-socket-firewall/teardown@ca93dd8aa351f54f4729fe3377a9be23c631c25d
 
       - name: Container smoke test
         shell: bash
@@ -156,13 +190,47 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - name: Setup Socket Firewall
+        id: sfw
+        uses: workos/setup-socket-firewall@ca93dd8aa351f54f4729fe3377a9be23c631c25d
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/sfw-docker-bun
+        with:
+          token: ${{ secrets.PUBLIC_SOCKET_FIREWALL_TOKEN }}
+          allow-external-fork-fallback: true
+          configure-bun: true
+
+      - name: Build image
+        if: steps.sfw.outputs.active == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: false
           load: true
           tags: emulate:ci
+          build-args: |
+            SFW_REQUIRED=true
+          add-hosts: |
+            registry.npmjs.org:127.0.0.1
+            registry.yarnpkg.com:127.0.0.1
+          secret-files: |
+            sfw_bunfig=${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
+
+      - name: Build image (external fork fallback)
+        if: steps.sfw.outputs.active == 'false'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: false
+          load: true
+          tags: emulate:ci
+
+      - name: Teardown Socket Firewall
+        if: ${{ always() && steps.sfw.outputs.active == 'true' }}
+        uses: workos/setup-socket-firewall/teardown@ca93dd8aa351f54f4729fe3377a9be23c631c25d
 
       - name: Container smoke test
         shell: bash
