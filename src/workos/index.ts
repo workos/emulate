@@ -37,6 +37,7 @@ import { oauthRoutes } from './routes/oauth.js';
 import { directoryRoutes } from './routes/directories.js';
 import { auditLogRoutes } from './routes/audit-logs.js';
 import { featureFlagRoutes } from './routes/feature-flags.js';
+import { agentRoutes } from './routes/agents.js';
 import { dataIntegrationRoutes } from './routes/data-integrations.js';
 import { webhookEndpointRoutes } from './routes/webhook-endpoints.js';
 import { eventRoutes } from './routes/events.js';
@@ -45,6 +46,7 @@ import { STORE_KEYS, EVENTS, DEFAULT_RESOURCE_TYPE_SLUG } from './constants.js';
 import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
 import { environmentIdFor, flagEventContext } from './flag-context.js';
+import { DEFAULT_AGENT_SESSION_SETTINGS, revokeAgentSessionsForUserSession } from './agent-sessions.js';
 import {
   generateVerificationToken,
   hashPassword,
@@ -68,6 +70,9 @@ import {
   formatApiKeyRecord,
   formatFeatureFlag,
   formatFeatureFlagEvent,
+  formatAgentBlueprint,
+  formatAgentInstance,
+  formatAgentInstanceSessionEvent,
   generateClientId,
   findUserByEmail,
   formatConnectedAccountEvent,
@@ -342,6 +347,35 @@ export interface WorkOSSeedFeatureFlag {
   };
 }
 
+export interface WorkOSSeedAgentBlueprint {
+  /** Pinned blueprint id (e.g. `agent_blueprint_01ABC…`). Generated if omitted. */
+  id?: string;
+  /** Required and unique within the environment, as production enforces on create. */
+  name: string;
+  /** 1 to 1000 characters. Omit for no description, as production's create endpoint requires. */
+  description?: string;
+  /** Slugs of permissions defined in `permissions`; the ceiling on what a minted session may hold. */
+  permissions?: string[];
+  invocable_by?: {
+    /** Slugs of roles defined in `roles`. Empty or omitted lets any member mint a delegated session. */
+    role_slugs?: string[];
+    /**
+     * Names of organizations defined in `organizations`, joined by name for the same reason
+     * feature-flag targets are. Empty or omitted lets every organization invoke the blueprint.
+     */
+    organizations?: string[];
+  };
+  /**
+   * All three are required when the object is given, as on production's create endpoint.
+   * Omitting the object uses production's defaults: 3600 / 300 / 3600 seconds.
+   */
+  session_settings?: {
+    max_age_seconds: number;
+    access_token_ttl_seconds: number;
+    refresh_token_ttl_seconds: number;
+  };
+}
+
 export interface WorkOSSeedJwtTemplate {
   /**
    * Template string rendering to a JSON object of claims, e.g.
@@ -379,6 +413,11 @@ export interface WorkOSSeedConfig {
    * made in the dashboard — so seeding is the only way to get one into the emulator.
    */
   featureFlags?: WorkOSSeedFeatureFlag[];
+  /**
+   * Agent blueprints, so a test suite can mint agent tokens without a create call. Instances
+   * and sessions are never seeded: they only come into being by minting.
+   */
+  agentBlueprints?: WorkOSSeedAgentBlueprint[];
 }
 
 export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSeedConfig): void {
@@ -826,6 +865,33 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
     }
   }
 
+  // After permissions, roles and organizations, which every reference here resolves against.
+  if (config.agentBlueprints) {
+    for (const blueprintConfig of config.agentBlueprints) {
+      const organizationIds = (blueprintConfig.invocable_by?.organizations ?? []).map((name) => {
+        const org = ws.organizations.findOneBy('name', name);
+        if (!org) {
+          throw new Error(
+            `workos seed config: agentBlueprints[${JSON.stringify(blueprintConfig.name)}].invocable_by.organizations not found: ${JSON.stringify(name)}`,
+          );
+        }
+        return org.id;
+      });
+      ws.agentBlueprints.insert({
+        object: 'agent_blueprint',
+        id: blueprintConfig.id,
+        name: blueprintConfig.name,
+        description: blueprintConfig.description ?? null,
+        permissions: [...new Set(blueprintConfig.permissions ?? [])],
+        invocable_by: {
+          role_slugs: [...new Set(blueprintConfig.invocable_by?.role_slugs ?? [])],
+          organization_ids: [...new Set(organizationIds)],
+        },
+        session_settings: blueprintConfig.session_settings ?? { ...DEFAULT_AGENT_SESSION_SETTINGS },
+      });
+    }
+  }
+
   if (config.jwtTemplate) {
     const problems = validateJwtTemplateContent(config.jwtTemplate.content);
     if (problems.length > 0) {
@@ -879,6 +945,7 @@ export const workosPlugin: ServicePlugin = {
     directoryRoutes(ctx);
     auditLogRoutes(ctx);
     featureFlagRoutes(ctx);
+    agentRoutes(ctx);
     dataIntegrationRoutes(ctx);
     webhookEndpointRoutes(ctx);
     eventRoutes(ctx);
@@ -975,7 +1042,10 @@ export const workosPlugin: ServicePlugin = {
     });
     ws.sessions.setHooks({
       onInsert: (s) => eventBus.emit({ event: EVENTS.sessionCreated, data: formatSession(s) }),
-      onDelete: (s) => eventBus.emit({ event: EVENTS.sessionRevoked, data: formatSession(s) }),
+      onDelete: (s) => {
+        eventBus.emit({ event: EVENTS.sessionRevoked, data: formatSession(s) });
+        revokeAgentSessionsForUserSession(ws, s.id);
+      },
     });
     ws.invitations.setHooks({
       onInsert: (i) => eventBus.emit({ event: EVENTS.invitationCreated, data: formatInvitation(i) }),
@@ -1060,6 +1130,37 @@ export const workosPlugin: ServicePlugin = {
       onInsert: flagEvent(EVENTS.flagCreated),
       onUpdate: flagEvent(EVENTS.flagUpdated),
       onDelete: flagEvent(EVENTS.flagDeleted),
+    });
+    ws.agentBlueprints.setHooks({
+      onInsert: (b) => eventBus.emit({ event: EVENTS.agentBlueprintCreated, data: formatAgentBlueprint(b) }),
+      onUpdate: (b) => eventBus.emit({ event: EVENTS.agentBlueprintUpdated, data: formatAgentBlueprint(b) }),
+      onDelete: (b) => eventBus.emit({ event: EVENTS.agentBlueprintDeleted, data: formatAgentBlueprint(b) }),
+    });
+    ws.agentInstances.setHooks({
+      onInsert: (i) => eventBus.emit({ event: EVENTS.agentInstanceCreated, data: formatAgentInstance(i) }),
+      onDelete: (i) => eventBus.emit({ event: EVENTS.agentInstanceDeleted, data: formatAgentInstance(i) }),
+    });
+    // Session payloads need the owning instance's organization_id. Refresh rotation goes
+    // through updateSilent, so the only update that reaches this hook is a revocation; the
+    // spec has no session.deleted event, and teardown revokes live sessions before deleting.
+    ws.agentInstanceSessions.setHooks({
+      onInsert: (s) => {
+        const instance = ws.agentInstances.get(s.agent_instance_id);
+        if (!instance) return;
+        eventBus.emit({
+          event: EVENTS.agentInstanceSessionCreated,
+          data: formatAgentInstanceSessionEvent(s, instance.organization_id, { permissionSlugs: s.permissions }),
+        });
+      },
+      onUpdate: (s, prev) => {
+        if (s.revoked_at === null || prev.revoked_at !== null) return;
+        const instance = ws.agentInstances.get(s.agent_instance_id);
+        if (!instance) return;
+        eventBus.emit({
+          event: EVENTS.agentInstanceSessionRevoked,
+          data: formatAgentInstanceSessionEvent(s, instance.organization_id),
+        });
+      },
     });
     ws.webhookEndpoints.setHooks({
       onInsert: () => eventBus.rebuildIndex(),

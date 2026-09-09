@@ -8,6 +8,7 @@ import {
   revokeApiKeysForOwner,
 } from '../helpers.js';
 import type { WorkOSOrganizationDomain } from '../entities.js';
+import { deleteAgentInstancesForOrganization } from '../agent-sessions.js';
 
 export function organizationRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -169,6 +170,9 @@ export function organizationRoutes(ctx: RouteContext): void {
     if (!org) throw notFound('Organization');
 
     ws.organizationDomains.deleteBy('organization_id', org.id);
+    // Before the memberships: delegated instances reference them, and tearing the instances
+    // down first is what fires their deleted and session-revoked events.
+    deleteAgentInstancesForOrganization(ws, org.id);
     ws.organizationMemberships.deleteBy('organization_id', org.id);
     // Same as the user cascade: an organization target with no organization behind it is
     // unreachable through the target routes.

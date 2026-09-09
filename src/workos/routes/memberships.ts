@@ -8,6 +8,7 @@ import {
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatMembership, formatListResponse } from '../helpers.js';
+import { deleteAgentInstancesForMembership, revokeAgentSessionsForMembership } from '../agent-sessions.js';
 
 export function membershipRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -105,6 +106,7 @@ export function membershipRoutes(ctx: RouteContext): void {
   app.delete('/user_management/organization_memberships/:id', (c) => {
     const m = ws.organizationMemberships.get(c.req.param('id'));
     if (!m) throw notFound('Organization Membership');
+    deleteAgentInstancesForMembership(ws, m.id);
     ws.organizationMemberships.delete(m.id);
     return c.body(null, 204);
   });
@@ -118,6 +120,7 @@ export function membershipRoutes(ctx: RouteContext): void {
     const updated = ws.organizationMemberships.update(m.id, {
       status: 'inactive',
     });
+    revokeAgentSessionsForMembership(ws, m.id);
     return c.json(formatMembership(updated!, ws));
   });
 

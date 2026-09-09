@@ -39,7 +39,14 @@ export interface JWTClaims {
    * The nested `sub` carries the impersonator's email, the identifier the session-tokens
    * reference documents (and the only one production surfaces for impersonators).
    */
-  act?: { sub: string };
+  act?: { sub: string; sub_profile?: string };
+  /**
+   * Marks the kind of subject `sub` names. Agent access tokens carry `ai_agent` so a
+   * consumer can tell an agent instance from a user without inspecting the id prefix.
+   */
+  sub_profile?: string;
+  /** Free-text purpose an agent access token was minted for. */
+  intent?: { text: string };
   /** Entitlement slugs of the organization the session is scoped to; omitted when empty. */
   entitlements?: string[];
   /** Slugs of feature flags resolving true for the session's user/org context; omitted when empty. */
@@ -71,6 +78,11 @@ interface SignOptions {
    * AuthKit discovery document describes.
    */
   issuerClientId?: string;
+  /**
+   * JOSE header `typ`. Defaults to `JWT`; agent access tokens use RFC 9068's `at+jwt`, as
+   * production does.
+   */
+  typ?: string;
 }
 
 export interface SigningKeyOptions {
@@ -206,7 +218,7 @@ export class JWTManager {
       exp: now + expiresIn,
     };
 
-    const header = { alg: 'RS256', typ: 'JWT', kid: this.kid };
+    const header = { alg: 'RS256', typ: options?.typ ?? 'JWT', kid: this.kid };
     const headerB64 = base64url(JSON.stringify(header));
     const payloadB64 = base64url(JSON.stringify(fullPayload));
     const signingInput = `${headerB64}.${payloadB64}`;

@@ -4,6 +4,7 @@
 import type { WorkOSSeedConfig } from './index.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
 import { isValidResourceTypeSlug } from './constants.js';
+import { AGENT_SESSION_SETTING_LIMITS } from './agent-sessions.js';
 import { normalizeEmail, type NormalizedEmail } from './helpers.js';
 
 /**
@@ -1007,6 +1008,193 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             seenTargetOrgs.add(name);
           }
         });
+      });
+    }
+  }
+
+  // Validate agent blueprints with the same checks the create route applies, so a seeded
+  // blueprint production would have rejected fails the boot instead of minting oddly.
+  if (config.agentBlueprints) {
+    if (!Array.isArray(config.agentBlueprints)) {
+      errors.push({
+        path: 'agentBlueprints',
+        message: 'agentBlueprints must be an array',
+        value: config.agentBlueprints,
+      });
+    } else {
+      const orgNames = new Set(
+        Array.isArray(config.organizations)
+          ? config.organizations.map((o) => o.name).filter((n): n is string => typeof n === 'string')
+          : [],
+      );
+      const permissionSlugs = new Set(
+        Array.isArray(config.permissions)
+          ? config.permissions.map((p) => p.slug).filter((s): s is string => typeof s === 'string')
+          : [],
+      );
+      const roleSlugs = new Set(
+        Array.isArray(config.roles)
+          ? config.roles.map((r) => r.slug).filter((s): s is string => typeof s === 'string')
+          : [],
+      );
+      const seenNames = new Set<string>();
+      const seenIds = new Set<string>();
+
+      config.agentBlueprints.forEach((blueprint, index) => {
+        const at = (field: string) => `agentBlueprints[${index}].${field}`;
+
+        if (blueprint === null || typeof blueprint !== 'object' || Array.isArray(blueprint)) {
+          errors.push({
+            path: `agentBlueprints[${index}]`,
+            message: 'each agent blueprint must be an object',
+            value: blueprint,
+          });
+          return;
+        }
+
+        if (blueprint.id !== undefined) {
+          if (typeof blueprint.id !== 'string' || !PINNED_ID_PATTERN.test(blueprint.id)) {
+            errors.push({
+              path: at('id'),
+              message: 'id must be a string of letters, numbers, hyphens or underscores if provided',
+              value: blueprint.id,
+            });
+          } else if (seenIds.has(blueprint.id)) {
+            errors.push({ path: at('id'), message: 'id must be unique across agentBlueprints', value: blueprint.id });
+          } else {
+            seenIds.add(blueprint.id);
+          }
+        }
+
+        if (typeof blueprint.name !== 'string' || blueprint.name.length === 0 || blueprint.name.length > 255) {
+          errors.push({
+            path: at('name'),
+            message: 'name is required and must be a string of 1 to 255 characters',
+            value: blueprint.name,
+          });
+        } else if (seenNames.has(blueprint.name)) {
+          errors.push({
+            path: at('name'),
+            message: 'name must be unique across agentBlueprints',
+            value: blueprint.name,
+          });
+        } else {
+          seenNames.add(blueprint.name);
+        }
+
+        if (
+          blueprint.description !== undefined &&
+          (typeof blueprint.description !== 'string' ||
+            blueprint.description.length === 0 ||
+            blueprint.description.length > 1000)
+        ) {
+          errors.push({
+            path: at('description'),
+            message: 'description must be a string of 1 to 1000 characters if provided',
+            value: blueprint.description,
+          });
+        }
+
+        if (blueprint.permissions !== undefined) {
+          if (!Array.isArray(blueprint.permissions) || blueprint.permissions.length > 1000) {
+            errors.push({
+              path: at('permissions'),
+              message: 'permissions must be an array of at most 1000 permission slugs if provided',
+              value: blueprint.permissions,
+            });
+          } else {
+            blueprint.permissions.forEach((slug, i) => {
+              if (typeof slug !== 'string' || !permissionSlugs.has(slug)) {
+                errors.push({
+                  path: at(`permissions[${i}]`),
+                  message: 'permissions references a slug not defined in `permissions`',
+                  value: slug,
+                });
+              }
+            });
+          }
+        }
+
+        const invocableBy = blueprint.invocable_by;
+        if (invocableBy !== undefined) {
+          if (typeof invocableBy !== 'object' || invocableBy === null || Array.isArray(invocableBy)) {
+            errors.push({
+              path: at('invocable_by'),
+              message: 'invocable_by must be an object if provided',
+              value: invocableBy,
+            });
+          } else {
+            if (invocableBy.role_slugs !== undefined) {
+              if (!Array.isArray(invocableBy.role_slugs) || invocableBy.role_slugs.length > 100) {
+                errors.push({
+                  path: at('invocable_by.role_slugs'),
+                  message: 'invocable_by.role_slugs must be an array of at most 100 role slugs if provided',
+                  value: invocableBy.role_slugs,
+                });
+              } else {
+                invocableBy.role_slugs.forEach((slug, i) => {
+                  if (typeof slug !== 'string' || !roleSlugs.has(slug)) {
+                    errors.push({
+                      path: at(`invocable_by.role_slugs[${i}]`),
+                      message: 'invocable_by.role_slugs references a slug not defined in `roles`',
+                      value: slug,
+                    });
+                  }
+                });
+              }
+            }
+            if (invocableBy.organizations !== undefined) {
+              if (!Array.isArray(invocableBy.organizations) || invocableBy.organizations.length > 1000) {
+                errors.push({
+                  path: at('invocable_by.organizations'),
+                  message: 'invocable_by.organizations must be an array of at most 1000 organization names if provided',
+                  value: invocableBy.organizations,
+                });
+              } else {
+                invocableBy.organizations.forEach((name, i) => {
+                  if (typeof name !== 'string' || !orgNames.has(name)) {
+                    errors.push({
+                      path: at(`invocable_by.organizations[${i}]`),
+                      message: 'invocable_by.organizations references a name not defined in `organizations`',
+                      value: name,
+                    });
+                  }
+                });
+              }
+            }
+          }
+        }
+
+        const settings = blueprint.session_settings;
+        if (settings !== undefined) {
+          if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
+            errors.push({
+              path: at('session_settings'),
+              message: 'session_settings must be an object if provided',
+              value: settings,
+            });
+          } else {
+            for (const key of Object.keys(
+              AGENT_SESSION_SETTING_LIMITS,
+            ) as (keyof typeof AGENT_SESSION_SETTING_LIMITS)[]) {
+              const value = settings[key];
+              const max = AGENT_SESSION_SETTING_LIMITS[key];
+              if (value === undefined) {
+                errors.push({
+                  path: at(`session_settings.${key}`),
+                  message: `session_settings.${key} is required when session_settings is provided`,
+                  value,
+                });
+              } else if (!Number.isInteger(value) || value <= 0 || value > max) {
+                errors.push({
+                  path: at(`session_settings.${key}`),
+                  message: `session_settings.${key} must be a positive integer of at most ${max}`,
+                  value,
+                });
+              }
+            }
+          }
+        }
       });
     }
   }
