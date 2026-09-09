@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { createServer } from '../../core/index.js';
 import { seedFromConfig, workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 
 const headers = { Authorization: 'Bearer sk_test_default', 'Content-Type': 'application/json' };
 
@@ -82,6 +83,124 @@ describe('Implicit organization resources', () => {
     server.store.reset();
     seedFromConfig(server.store, 'http://localhost', seed);
     expect((await req(path)).status).toBe(200);
+  });
+
+  it('runs grant, check, discovery, and cleanup twice with the same external IDs', async () => {
+    seedFromConfig(server.store, 'http://localhost', {
+      users: [{ id: 'user_repeat', email: 'repeat@example.com' }],
+      permissions: [{ slug: 'workspace:read', name: 'Read workspace', resource_type_slug: 'workspace' }],
+      roles: [{ slug: 'reader', name: 'Reader', permissions: ['workspace:read'], resource_type_slug: 'workspace' }],
+    });
+
+    async function runCycle() {
+      const org = await createOrg('repeat-customer');
+      const root = await json(await req(rootPath(org)));
+      const child = await json(
+        await req('/authorization/resources', {
+          method: 'POST',
+          body: JSON.stringify({
+            organization_id: org.id,
+            resource_type_slug: 'workspace',
+            external_id: 'repeat-workspace',
+            name: 'Workspace',
+          }),
+        }),
+      );
+      expect(child.parent_resource_id).toBe(root.id);
+      const membership = await json(
+        await req('/user_management/organization_memberships', {
+          method: 'POST',
+          body: JSON.stringify({ organization_id: org.id, user_id: 'user_repeat' }),
+        }),
+      );
+      const checkPath = `/authorization/organization_memberships/${membership.id}/check`;
+      const checkInput = {
+        method: 'POST',
+        body: JSON.stringify({
+          resource_type_slug: 'workspace',
+          resource_external_id: 'repeat-workspace',
+          permission_slug: 'workspace:read',
+        }),
+      };
+      const discoveryPath = `/authorization/organization_memberships/${membership.id}/resources?permission_slug=workspace:read&parent_resource_type_slug=organization&parent_resource_external_id=repeat-customer`;
+      const before = await req(checkPath, checkInput);
+      expect(before.status).toBe(200);
+      expect((await json(before)).authorized).toBe(false);
+      expect((await json(await req(discoveryPath))).data).toEqual([]);
+      const assigned = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+        method: 'POST',
+        body: JSON.stringify({
+          role_slug: 'reader',
+          resource_type_slug: 'workspace',
+          resource_external_id: 'repeat-workspace',
+        }),
+      });
+      expect(assigned.status).toBe(201);
+      expect((await json(await req(checkPath, checkInput))).authorized).toBe(true);
+      const discovered = await req(discoveryPath);
+      expect(discovered.status).toBe(200);
+      expect((await json(discovered)).data.map((resource: any) => resource.id)).toEqual([child.id]);
+      expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(rootPath(org))).status).toBe(404);
+      return root.id;
+    }
+
+    const firstRoot = await runCycle();
+    const secondRoot = await runCycle();
+    expect(secondRoot).not.toBe(firstRoot);
+  });
+
+  it('removes root and child grants on organization deletion but preserves other grants', async () => {
+    seedFromConfig(server.store, 'http://localhost', {
+      users: [{ id: 'user_cleanup', email: 'cleanup@example.com' }],
+      roles: [{ slug: 'reader', name: 'Reader' }],
+    });
+    async function assignInOrganization(externalId: string) {
+      const org = await createOrg(externalId);
+      const child = await json(
+        await req('/authorization/resources', {
+          method: 'POST',
+          body: JSON.stringify({
+            organization_id: org.id,
+            resource_type_slug: 'workspace',
+            external_id: 'workspace',
+            name: 'Workspace',
+          }),
+        }),
+      );
+      const membership = await json(
+        await req('/user_management/organization_memberships', {
+          method: 'POST',
+          body: JSON.stringify({ organization_id: org.id, user_id: 'user_cleanup' }),
+        }),
+      );
+      const assignmentPath = `/authorization/organization_memberships/${membership.id}/role_assignments`;
+      const rootGrant = await req(assignmentPath, {
+        method: 'POST',
+        body: JSON.stringify({
+          role_slug: 'reader',
+          resource_type_slug: 'organization',
+          resource_external_id: externalId,
+        }),
+      });
+      const childGrant = await req(assignmentPath, {
+        method: 'POST',
+        body: JSON.stringify({ role_slug: 'reader', resource_id: child.id }),
+      });
+      expect(rootGrant.status).toBe(201);
+      expect(childGrant.status).toBe(201);
+      return { org, assignmentPath, grants: [(await json(rootGrant)).id, (await json(childGrant)).id] };
+    }
+    const removed = await assignInOrganization('removed');
+    const retained = await assignInOrganization('retained');
+    expect((await req(`/organizations/${removed.org.id}`, { method: 'DELETE' })).status).toBe(204);
+    // Deleted memberships cannot be queried through the API; inspect storage to detect orphan grants.
+    const assignments = getWorkOSStore(server.store).roleAssignments;
+    expect(assignments.get(removed.grants[0])).toBeUndefined();
+    expect(assignments.get(removed.grants[1])).toBeUndefined();
+    const remaining = await req(retained.assignmentPath);
+    expect(remaining.status).toBe(200);
+    expect((await json(remaining)).data.map((grant: any) => grant.id).sort()).toEqual(retained.grants.sort());
   });
 
   it('rejects direct root creation, updates, and deletion', async () => {
