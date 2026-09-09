@@ -566,3 +566,55 @@ export interface WorkOSWebhookEndpoint extends Entity {
   events: string[];
   description: string | null;
 }
+
+export interface WorkOSAgentBlueprintInvocableBy {
+  /** Membership role slugs allowed to start delegated sessions; empty means any member. */
+  role_slugs: string[];
+  /** Organizations allowed to invoke the blueprint; empty means every organization. */
+  organization_ids: string[];
+}
+
+export interface WorkOSAgentBlueprintSessionSettings {
+  /** Hard ceiling on how long any session chain rooted in a blueprint may live, in seconds. */
+  max_age_seconds: number;
+  access_token_ttl_seconds: number;
+  refresh_token_ttl_seconds: number;
+}
+
+export interface WorkOSAgentBlueprint extends Entity {
+  object: 'agent_blueprint';
+  name: string;
+  description: string | null;
+  /** Permission slugs that cap what any instance of this blueprint may be granted. */
+  permissions: string[];
+  invocable_by: WorkOSAgentBlueprintInvocableBy;
+  session_settings: WorkOSAgentBlueprintSessionSettings;
+}
+
+/**
+ * One instance exists per (blueprint, organization) for autonomous sessions and per
+ * (blueprint, organization, membership) for user-delegated ones; minting reuses it.
+ */
+export interface WorkOSAgentInstance extends Entity {
+  object: 'agent_instance';
+  agent_blueprint_id: string;
+  organization_id: string;
+  organization_membership_id: string | null;
+  type: 'autonomous' | 'delegated';
+}
+
+export interface WorkOSAgentInstanceSession extends Entity {
+  object: 'agent_instance_session';
+  agent_instance_id: string;
+  expires_at: string;
+  revoked_at: string | null;
+  /** Current refresh token; replaced on every refresh so a presented token is single-use. */
+  refresh_token: string;
+  /** Session this one was chained from via an `agent_delegated` grant; null for chain roots. */
+  parent_session_id: string | null;
+  /** Backing user session of a delegated chain root; only the root records it. */
+  user_session_id: string | null;
+  /** Permission slugs granted at the last mint, reported on the session-created event. */
+  permissions: string[];
+  intent: string | null;
+}

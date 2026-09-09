@@ -40,6 +40,7 @@ export interface EmulatorSeedConfig {
   connectApplications?: WorkOSSeedConfig['connectApplications'];
   jwtTemplate?: WorkOSSeedConfig['jwtTemplate'];
   featureFlags?: WorkOSSeedConfig['featureFlags'];
+  agentBlueprints?: WorkOSSeedConfig['agentBlueprints'];
   errorHooks?: ErrorHookSeedConfig[];
 }
 

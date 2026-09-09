@@ -378,14 +378,14 @@ describe('Authorization resource routes', () => {
     expect(updated.description).toBe('Now nested');
     expect(updated.parent_resource_id).toBe(parent.id);
 
-    // Detach again
+    // Clearing the explicit parent returns the resource to the organization root.
     const detached = await json(
       await req(`/authorization/resources/${resource.id}`, {
         method: 'PUT',
         body: JSON.stringify({ parent_resource_id: null }),
       }),
     );
-    expect(detached.parent_resource_id).toBeNull();
+    expect(detached.parent_resource_id).toBe(resource.parent_resource_id);
   });
 
   it('rejects parent updates that would create a cycle', async () => {

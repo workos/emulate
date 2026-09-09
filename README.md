@@ -642,6 +642,99 @@ collection-level `flag.created` / `flag.updated` / `flag.deleted` events run wit
 context and always report the placeholder. Flags are not environment-scoped, so every flag event
 reports `environment_test`. Deleting a user or organization removes its flag targets.
 
+### Agent Auth
+
+Agent blueprints, the tokens minted from them, and the resulting instances and sessions are all
+implemented (`/agents/blueprints`, `/agents/instances`, `/agents/sessions`). Blueprints can be
+created over the API or seeded; instances and sessions only ever come into being by minting.
+`permissions` and `invocable_by.role_slugs` name seeded `permissions` and `roles` by slug, and
+`invocable_by.organizations` names `organizations` by name, the same join feature-flag targets use.
+A seeded blueprint is validated the way `POST /agents/blueprints` validates a body: `description`
+is a non-empty string or omitted, and `session_settings` is either omitted (production's 3600 /
+300 / 3600 second defaults) or given with all three values.
+
+```yaml
+permissions:
+  - slug: crm:read
+    name: Read CRM
+  - slug: email:send
+    name: Send email
+
+roles:
+  - slug: manager
+    name: Manager
+    permissions: [crm:read, email:send]
+  - slug: member
+    name: Member
+    permissions: [crm:read]
+
+organizations:
+  - name: Acme Corp
+    memberships:
+      - email: alice@acme.com
+        role: manager
+
+agentBlueprints:
+  - name: Prospecting Agent
+    description: Finds and qualifies sales prospects.
+    permissions: [crm:read, email:send]
+    invocable_by:
+      role_slugs: [manager]
+      organizations: [Acme Corp]
+    session_settings:
+      max_age_seconds: 3600
+      access_token_ttl_seconds: 300
+      refresh_token_ttl_seconds: 3600
+```
+
+`POST /agents/blueprints/{id}/tokens` accepts the four grant types production does:
+
+- **`user_delegated`** takes a user access token minted by the emulator (any `authenticate` or
+  `/oauth2/token` grant). The token only identifies the user and organization: the session behind
+  its `sid` must still be live, the user must be an active member of the organization, the
+  organization and the member's role must be allowed by `invocable_by`, and the login must be
+  younger than `max_age_seconds`. The granted permissions are the blueprint's `permissions`
+  intersected with what the member's role currently grants — recomputed at every mint and refresh,
+  so a role change lands in the next token.
+- **`autonomous`** takes an `organization_id` and grants the whole blueprint ceiling.
+- **`agent_delegated`** exchanges an agent access token for a new session on the same instance.
+  Chains are self-only (a token from another blueprint is `invalid_agent_access_token`), at most 32
+  deep, and anchored at the root: no hop may outlive the root session's `created_at +
+max_age_seconds`.
+- **`refresh`** rotates the refresh token. Each is single-use, and a refresh never extends the
+  session past its chain root's max-age window.
+
+Access tokens are RS256 JWTs signed with the emulator key and `typ: at+jwt`, so the same JWKS a
+backend already uses for user tokens validates them. Claims follow production: `sub` is the agent
+instance id, `sub_profile: ai_agent`, `sid` is the session id, plus `org_id`, `permissions`,
+`intent: { text }` when supplied, `act: { sub: <user id>, sub_profile: user }` for delegated
+sessions, and `auth_time` from the delegating login. `aud` is the `workos-emulate` placeholder,
+since nothing at the API-key-authenticated token endpoint names a client.
+`POST .../tokens/validate` checks the signature, the session (revoked, expired, or torn down), and
+for delegated chains that the backing user session is still live.
+
+Revoking a session (`POST /agents/sessions/{id}/revoke`, or revoking or logging out of the user
+session it was delegated from) cascades to every session chained from it. Deleting an instance
+revokes its live sessions first, and deleting a blueprint tears down its instances. The resources
+agents hang off cascade the same way: deleting an organization tears down every instance in it,
+deleting a membership or its user tears down the instances delegated from it, deactivating a
+membership revokes their sessions (the instance survives for a reactivation), and deleting a
+permission removes it from every blueprint ceiling that named it. Session `status` is derived at
+read time from `revoked_at` and `expires_at`; revoking touches only live sessions, so an
+already-expired one stays `expired` with a null `revoked_at` while its live descendants are
+still revoked. The seven `agent.*` events fire through the same webhook and `/events` plumbing
+as everything else.
+
+Errors use production's stable codes: `invalid_request` (400) for a malformed body;
+`permission_not_found`, `role_not_found`, `organization_not_found` (422) and `name_already_in_use`
+(409) on blueprint create and update; and at mint time `invalid_user_access_token`,
+`invalid_agent_access_token`, `invalid_refresh_token`, `session_revoked`, `session_expired`,
+`user_session_ended`, `max_age_exceeded`, `chain_depth_exceeded` (400) and
+`user_not_member_of_organization`, `organization_not_invocable`, `role_not_invocable` (403).
+
+Agent Registration (`/agents/registrations`, claim attempts, credential validation) is not
+implemented.
+
 ## Widgets
 
 `POST /widgets/token` mints the session token the `@workos-inc/widgets` components authenticate

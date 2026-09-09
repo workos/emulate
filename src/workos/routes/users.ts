@@ -17,6 +17,7 @@ import {
   requireEmailField,
   revokeApiKeysForOwner,
 } from '../helpers.js';
+import { deleteAgentInstancesForMembership } from '../agent-sessions.js';
 
 export function userRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -136,6 +137,7 @@ export function userRoutes(ctx: RouteContext): void {
       ws.sessions.delete(s.id);
     }
     for (const m of ws.organizationMemberships.findBy('user_id', user.id)) {
+      deleteAgentInstancesForMembership(ws, m.id);
       ws.organizationMemberships.delete(m.id);
     }
     for (const f of ws.authFactors.findBy('user_id', user.id)) {

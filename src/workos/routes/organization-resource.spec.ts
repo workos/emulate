@@ -172,6 +172,68 @@ describe('Implicit organization resources', () => {
     expect(updatedGrant.updated_at).toBe('2026-01-03T00:00:00.000Z');
   });
 
+  it('preserves root permissions when clearing a resource parent', async () => {
+    seedFromConfig(server.store, 'http://localhost', {
+      users: [{ id: 'user_parent', email: 'parent@example.com' }],
+      permissions: [{ slug: 'workspace:read', name: 'Read workspace' }],
+      roles: [{ slug: 'reader', name: 'Reader', permissions: ['workspace:read'] }],
+    });
+    const org = await createOrg('parent-root');
+    const root = await json(await req(rootPath(org)));
+    const membership = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: 'user_parent' }),
+      }),
+    );
+    expect(
+      (
+        await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+          method: 'POST',
+          body: JSON.stringify({ role_slug: 'reader', resource_id: root.id }),
+        })
+      ).status,
+    ).toBe(201);
+    const parent = await json(
+      await req('/authorization/resources', {
+        method: 'POST',
+        body: JSON.stringify({
+          organization_id: org.id,
+          resource_type_slug: 'workspace',
+          external_id: 'parent',
+          name: 'Parent',
+        }),
+      }),
+    );
+    const child = await json(
+      await req('/authorization/resources', {
+        method: 'POST',
+        body: JSON.stringify({
+          organization_id: org.id,
+          resource_type_slug: 'workspace',
+          external_id: 'child',
+          name: 'Child',
+          parent_resource_id: parent.id,
+        }),
+      }),
+    );
+    for (const body of [{ name: 'Renamed' }, { parent_resource_id: null }]) {
+      const response = await req(`/authorization/resources/${child.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      expect(response.status).toBe(200);
+      expect((await json(response)).parent_resource_id).toBe('parent_resource_id' in body ? root.id : parent.id);
+      const check = await req(`/authorization/organization_memberships/${membership.id}/check`, {
+        method: 'POST',
+        body: JSON.stringify({
+          resource_type_slug: 'workspace',
+          resource_external_id: 'child',
+          permission_slug: 'workspace:read',
+        }),
+      });
+      expect(check.status).toBe(200);
+      expect((await json(check)).authorized).toBe(true);
+    }
+  });
+
   it('creates roots for seeded organizations, including after resetting', async () => {
     const seed = { organizations: [{ id: 'org_seed', name: 'Seeded', external_id: 'seed-external' }] };
     seedFromConfig(server.store, 'http://localhost', seed);

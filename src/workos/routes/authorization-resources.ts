@@ -188,11 +188,17 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     if ('name' in body) updates.name = body.name ?? null;
     if ('description' in body) updates.description = body.description ?? null;
     if ('parent_resource_id' in body || 'parent_resource_external_id' in body || 'parent_resource_type_slug' in body) {
-      // Explicit parent_resource_id: null detaches the resource from its parent.
-      const nextParentId =
-        body.parent_resource_id === null && !body.parent_resource_external_id && !body.parent_resource_type_slug
-          ? null
-          : (resolveParentResource(ws, body, resource.organization_id)?.id ?? null);
+      const organization = ws.organizations.get(resource.organization_id);
+      if (!organization) throw notFound('Organization');
+      const parent =
+        resolveParentResource(ws, body, resource.organization_id) ??
+        findResourceByExternalId(
+          ws,
+          resource.organization_id,
+          'organization',
+          organization.external_id ?? organization.id,
+        );
+      const nextParentId = parent?.id ?? null;
 
       // Re-parenting under the resource itself or one of its descendants would
       // make the two resources each other's ancestor, so a role assignment

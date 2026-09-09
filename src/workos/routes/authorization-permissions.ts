@@ -9,6 +9,7 @@ import {
 import { getWorkOSStore } from '../store.js';
 import { formatPermission, formatListResponse } from '../helpers.js';
 import { DEFAULT_RESOURCE_TYPE_SLUG, isValidResourceTypeSlug } from '../constants.js';
+import { removePermissionFromAgentBlueprints } from '../agent-sessions.js';
 
 export function authorizationPermissionRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -86,8 +87,9 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
     const permission = ws.permissions.findOneBy('slug', slug);
     if (!permission) throw notFound('Permission');
 
-    // Cascade: remove from all role-permission joins
+    // Cascade: remove from all role-permission joins and every agent blueprint ceiling
     ws.rolePermissions.deleteBy('permission_id', permission.id);
+    removePermissionFromAgentBlueprints(ws, permission.slug);
 
     ws.permissions.delete(permission.id);
     return c.body(null, 204);
