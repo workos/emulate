@@ -55,12 +55,16 @@ const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every(
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
- * Shape-check a blueprint body. Every field is optional here so create and update share
- * the code; create supplies `name` separately. Reports all problems at once, the way a
- * schema validator would, rather than the first one hit.
+ * Shape-check a blueprint body. The limits are shared; the two modes differ the way
+ * production's create and update schemas do. Create fills omitted fields with defaults and
+ * so takes no `null` description and only a complete `session_settings`; update lets
+ * `description: null` clear the field and merges a partial `session_settings` into the
+ * existing one. Reports all problems at once, the way a schema validator would, rather than
+ * the first one hit.
  */
 function validateBlueprintBody(
   body: Record<string, unknown>,
+  mode: 'create' | 'update',
   errors: FieldError[],
 ): {
   name?: string;
@@ -80,13 +84,16 @@ function validateBlueprintBody(
   }
 
   if (body.description !== undefined) {
-    if (body.description === null) {
+    if (body.description === null && mode === 'update') {
       out.description = null;
     } else if (!isNonEmptyString(body.description) || body.description.length > 1000) {
       errors.push({
         field: 'description',
         code: 'invalid',
-        message: 'description must be a string of 1 to 1000 characters, or null',
+        message:
+          mode === 'update'
+            ? 'description must be a string of 1 to 1000 characters, or null'
+            : 'description must be a string of 1 to 1000 characters',
       });
     } else {
       out.description = body.description;
@@ -138,7 +145,16 @@ function validateBlueprintBody(
       const settings: Partial<WorkOSAgentBlueprintSessionSettings> = {};
       for (const key of Object.keys(AGENT_SESSION_SETTING_LIMITS) as (keyof typeof AGENT_SESSION_SETTING_LIMITS)[]) {
         const value = body.session_settings[key];
-        if (value === undefined) continue;
+        if (value === undefined) {
+          if (mode === 'create') {
+            errors.push({
+              field: `session_settings.${key}`,
+              code: 'required',
+              message: `session_settings.${key} is required when session_settings is provided`,
+            });
+          }
+          continue;
+        }
         const max = AGENT_SESSION_SETTING_LIMITS[key];
         if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0 || value > max) {
           errors.push({
@@ -417,7 +433,7 @@ export function agentRoutes(ctx: RouteContext): void {
     const body = await parseJsonBody(c);
     const errors: FieldError[] = [];
     if (body.name === undefined) errors.push({ field: 'name', code: 'required', message: 'name is required' });
-    const parsed = validateBlueprintBody(body, errors);
+    const parsed = validateBlueprintBody(body, 'create', errors);
     if (errors.length > 0 || parsed.name === undefined) throw invalidRequest('Invalid request body', errors);
 
     const permissions = parsed.permissions ?? [];
@@ -450,7 +466,7 @@ export function agentRoutes(ctx: RouteContext): void {
     const blueprint = requireBlueprint(ws, c.req.param('id'));
     const body = await parseJsonBody(c);
     const errors: FieldError[] = [];
-    const parsed = validateBlueprintBody(body, errors);
+    const parsed = validateBlueprintBody(body, 'update', errors);
     if (errors.length > 0) throw invalidRequest('Invalid request body', errors);
 
     const invocable_by: WorkOSAgentBlueprintInvocableBy = {
@@ -499,8 +515,9 @@ export function agentRoutes(ctx: RouteContext): void {
         }
         // The presented token authenticates the user and names the organization; nothing
         // else on it is trusted. Authority comes from the live session and membership below.
+        // User tokens carry `sub_profile: 'user'` or omit it; any other family is rejected.
         if (
-          payload.sub_profile !== undefined ||
+          (payload.sub_profile !== undefined && payload.sub_profile !== USER_SUBJECT_PROFILE) ||
           typeof payload.sub !== 'string' ||
           typeof payload.org_id !== 'string' ||
           typeof payload.sid !== 'string' ||
@@ -743,7 +760,8 @@ export function agentRoutes(ctx: RouteContext): void {
   });
 
   // Revocation cascades to every session chained from this one and is idempotent: an
-  // already-revoked session answers 200 with its existing revoked_at.
+  // already-revoked session answers 200 with its existing revoked_at, and an already-expired
+  // one stays `expired` with a null revoked_at.
   app.post('/agents/sessions/:id/revoke', (c) => {
     const session = ws.agentInstanceSessions.get(c.req.param('id'));
     if (!session) throw notFound('Agent instance session');

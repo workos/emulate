@@ -90,16 +90,22 @@ export function findChainRoot(ws: WorkOSStore, session: WorkOSAgentInstanceSessi
   return { root: current, depth, ancestorRevoked };
 }
 
+function isSessionLive(session: WorkOSAgentInstanceSession, nowMs: number): boolean {
+  return session.revoked_at === null && new Date(session.expires_at).getTime() > nowMs;
+}
+
 /**
- * Revoke a session and every descendant chained from it. Only rows whose `revoked_at`
- * flips from null are touched, so the update hook emits one `agent.instance.session.revoked`
- * per session that was actually live. Returns how many sessions were revoked.
+ * Revoke a session and every descendant chained from it. Only live rows are touched, so the
+ * update hook emits one `agent.instance.session.revoked` per session that was actually live;
+ * already-revoked rows keep their `revoked_at` and already-expired rows stay `expired`, but
+ * both still have their children walked. Returns how many sessions were revoked.
  */
 export function revokeAgentSessionTree(
   ws: WorkOSStore,
   sessionId: string,
   revokedAt = new Date().toISOString(),
 ): number {
+  const nowMs = new Date(revokedAt).getTime();
   let count = 0;
   const pending = [sessionId];
   const seen = new Set<string>();
@@ -109,7 +115,7 @@ export function revokeAgentSessionTree(
     seen.add(id);
     const session = ws.agentInstanceSessions.get(id);
     if (!session) continue;
-    if (session.revoked_at === null) {
+    if (isSessionLive(session, nowMs)) {
       ws.agentInstanceSessions.update(id, { revoked_at: revokedAt });
       count += 1;
     }
@@ -124,9 +130,10 @@ export function revokeAgentSessionTree(
  */
 export function deleteAgentInstance(ws: WorkOSStore, instance: WorkOSAgentInstance): void {
   const sessions = ws.agentInstanceSessions.findBy('agent_instance_id', instance.id);
+  const revokedAt = new Date().toISOString();
   for (const session of sessions) {
-    if (session.revoked_at === null && new Date(session.expires_at).getTime() > Date.now()) {
-      ws.agentInstanceSessions.update(session.id, { revoked_at: new Date().toISOString() });
+    if (isSessionLive(session, new Date(revokedAt).getTime())) {
+      ws.agentInstanceSessions.update(session.id, { revoked_at: revokedAt });
     }
   }
   for (const session of sessions) ws.agentInstanceSessions.delete(session.id);
@@ -161,7 +168,7 @@ export function deleteAgentInstancesForMembership(ws: WorkOSStore, membershipId:
 export function revokeAgentSessionsForMembership(ws: WorkOSStore, membershipId: string): void {
   for (const instance of ws.agentInstances.findBy('organization_membership_id', membershipId)) {
     for (const session of ws.agentInstanceSessions.findBy('agent_instance_id', instance.id)) {
-      if (session.revoked_at === null) revokeAgentSessionTree(ws, session.id);
+      revokeAgentSessionTree(ws, session.id);
     }
   }
 }

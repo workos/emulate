@@ -61,12 +61,14 @@ function decodeJwt(token: string): { header: Record<string, any>; payload: Recor
 
 describe('Agent Auth routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let jwt: ReturnType<typeof createTestApp>['jwt'];
   let store: Store;
   const ws = () => getWorkOSStore(store);
 
   beforeEach(() => {
     const server = createTestApp();
     app = server.app;
+    jwt = server.jwt;
     store = server.store;
   });
 
@@ -207,7 +209,7 @@ describe('Agent Auth routes', () => {
       const res = await post('/agents/blueprints', {
         description: '',
         permissions: 'crm:read',
-        session_settings: { access_token_ttl_seconds: 3601, max_age_seconds: 0 },
+        session_settings: { access_token_ttl_seconds: 3601, max_age_seconds: 0, refresh_token_ttl_seconds: 60 },
       });
       expect(res.status).toBe(400);
       const body = await json(res);
@@ -219,6 +221,41 @@ describe('Agent Auth routes', () => {
         'session_settings.access_token_ttl_seconds',
         'session_settings.max_age_seconds',
       ]);
+    });
+
+    it('rejects on create what only update may send: a null description and partial settings', async () => {
+      const nullDescription = await post('/agents/blueprints', { name: 'Example A', description: null });
+      expect(nullDescription.status).toBe(400);
+      expect((await json(nullDescription)).errors.map((e: { field: string }) => e.field)).toEqual(['description']);
+
+      const partial = await post('/agents/blueprints', {
+        name: 'Example B',
+        session_settings: { access_token_ttl_seconds: 60 },
+      });
+      expect(partial.status).toBe(400);
+      expect((await json(partial)).errors.map((e: { field: string }) => e.field).sort()).toEqual([
+        'session_settings.max_age_seconds',
+        'session_settings.refresh_token_ttl_seconds',
+      ]);
+      expect((await json(await req('/agents/blueprints'))).data).toHaveLength(0);
+
+      const complete = await post('/agents/blueprints', {
+        name: 'Example C',
+        description: 'Full settings',
+        session_settings: { max_age_seconds: 600, access_token_ttl_seconds: 60, refresh_token_ttl_seconds: 600 },
+      });
+      expect(complete.status).toBe(201);
+
+      const { id } = await json(complete);
+      const patched = await req(`/agents/blueprints/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ description: null, session_settings: { access_token_ttl_seconds: 30 } }),
+      });
+      expect(patched.status).toBe(200);
+      expect(await json(patched)).toMatchObject({
+        description: null,
+        session_settings: { max_age_seconds: 600, access_token_ttl_seconds: 30, refresh_token_ttl_seconds: 600 },
+      });
     });
 
     it('rejects unknown permissions, roles and organizations with 422 codes', async () => {
@@ -398,7 +435,7 @@ describe('Agent Auth routes', () => {
 
     it('caps the access token TTL at the session lifetime', async () => {
       const { org, blueprint } = await seedWorld({
-        session_settings: { access_token_ttl_seconds: 300, refresh_token_ttl_seconds: 120 },
+        session_settings: { max_age_seconds: 3600, access_token_ttl_seconds: 300, refresh_token_ttl_seconds: 120 },
       });
       const body = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
       expect(body.expires_in).toBe(120);
@@ -441,6 +478,24 @@ describe('Agent Auth routes', () => {
       const login = await loginAs('bob@acme.com');
       const body = await mintOk(blueprint.id, { type: 'user_delegated', user_access_token: login.access_token });
       expect(body.permissions).toEqual(['crm:read']);
+    });
+
+    it('accepts a user token that names its subject profile explicitly', async () => {
+      const { alice, blueprint } = await seedWorld({ permissions: ['crm:read'] });
+      const login = await loginAs();
+      const { sub, sid, org_id, aud } = decodeJwt(login.access_token).payload;
+      const explicit = jwt.sign({ sub, sid, org_id, aud, sub_profile: 'user' });
+
+      const body = await mintOk(blueprint.id, { type: 'user_delegated', user_access_token: explicit });
+      expect(body.permissions).toEqual(['crm:read']);
+      expect(decodeJwt(body.access_token).payload.act).toEqual({ sub: alice.id, sub_profile: 'user' });
+
+      const other = jwt.sign({ sub, sid, org_id, aud, sub_profile: 'widget' });
+      await expectError(
+        await mint(blueprint.id, { type: 'user_delegated', user_access_token: other }),
+        400,
+        'invalid_user_access_token',
+      );
     });
 
     it('rejects garbage, foreign and agent tokens as invalid_user_access_token', async () => {
@@ -494,7 +549,9 @@ describe('Agent Auth routes', () => {
     });
 
     it('rejects a login older than max_age_seconds', async () => {
-      const { blueprint } = await seedWorld({ session_settings: { max_age_seconds: 60 } });
+      const { blueprint } = await seedWorld({
+        session_settings: { max_age_seconds: 60, access_token_ttl_seconds: 300, refresh_token_ttl_seconds: 3600 },
+      });
       const login = await loginAs();
       const { sid } = decodeJwt(login.access_token).payload;
       ws().sessions.updateSilent(sid, { created_at: new Date(Date.now() - 120_000).toISOString() });
@@ -589,7 +646,7 @@ describe('Agent Auth routes', () => {
 
     it('anchors every hop to the root session max-age window', async () => {
       const { org, blueprint } = await seedWorld({
-        session_settings: { max_age_seconds: 600, refresh_token_ttl_seconds: 3600 },
+        session_settings: { max_age_seconds: 600, access_token_ttl_seconds: 300, refresh_token_ttl_seconds: 3600 },
       });
       const root = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
       const rootRow = ws().agentInstanceSessions.get(root.agent_instance_session_id)!;
@@ -695,7 +752,7 @@ describe('Agent Auth routes', () => {
 
     it('never extends a session past the root max-age window', async () => {
       const { org, blueprint } = await seedWorld({
-        session_settings: { max_age_seconds: 600, refresh_token_ttl_seconds: 3600 },
+        session_settings: { max_age_seconds: 600, access_token_ttl_seconds: 300, refresh_token_ttl_seconds: 3600 },
       });
       const minted = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
       const row = ws().agentInstanceSessions.get(minted.agent_instance_session_id)!;
@@ -872,6 +929,34 @@ describe('Agent Auth routes', () => {
       );
       expect((await post('/agents/sessions/agent_session_missing/revoke', {})).status).toBe(404);
     });
+
+    it('leaves an already-expired session expired while still revoking its live descendants', async () => {
+      const { org, blueprint } = await seedWorld();
+      const root = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
+      const child = await mintOk(blueprint.id, { type: 'agent_delegated', agent_access_token: root.access_token });
+      const grandchild = await mintOk(blueprint.id, {
+        type: 'agent_delegated',
+        agent_access_token: child.access_token,
+      });
+      const expired = new Date(Date.now() - 1000).toISOString();
+      ws().agentInstanceSessions.updateSilent(root.agent_instance_session_id, { expires_at: expired });
+      ws().agentInstanceSessions.updateSilent(child.agent_instance_session_id, { expires_at: expired });
+
+      const res = await post(`/agents/sessions/${root.agent_instance_session_id}/revoke`, {});
+      expect(res.status).toBe(200);
+      expect(await json(res)).toMatchObject({
+        id: root.agent_instance_session_id,
+        status: 'expired',
+        revoked_at: null,
+      });
+
+      const session = async (id: string) => json(await req(`/agents/sessions/${id}`));
+      expect(await session(child.agent_instance_session_id)).toMatchObject({ status: 'expired', revoked_at: null });
+      expect(await session(grandchild.agent_instance_session_id)).toMatchObject({ status: 'revoked' });
+      expect(events('agent.instance.session.revoked').map((e) => e.data.id)).toEqual([
+        grandchild.agent_instance_session_id,
+      ]);
+    });
   });
 
   describe('cascades from the resources agents depend on', () => {
@@ -926,6 +1011,28 @@ describe('Agent Auth routes', () => {
       expect((await json(await validate(blueprint.id, autonomous.access_token))).valid).toBe(true);
       expect(events('agent.instance.deleted')).toHaveLength(1);
       expect(events('agent.instance.session.revoked')).toHaveLength(1);
+    });
+
+    it('deleting a user deletes the instances delegated from its memberships', async () => {
+      const { org, alice, blueprint } = await seedWorld();
+      const login = await loginAs();
+      const delegated = await mintOk(blueprint.id, {
+        type: 'user_delegated',
+        user_access_token: login.access_token,
+      });
+      const child = await mintOk(blueprint.id, { type: 'agent_delegated', agent_access_token: delegated.access_token });
+      const autonomous = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
+
+      expect((await req(`/user_management/users/${alice.id}`, { method: 'DELETE' })).status).toBe(204);
+
+      expect((await req(`/agents/instances/${delegated.agent_instance_id}`)).status).toBe(404);
+      for (const minted of [delegated, child]) {
+        expect((await req(`/agents/sessions/${minted.agent_instance_session_id}`)).status).toBe(404);
+        await expectError(await validate(blueprint.id, minted.access_token), 400, 'invalid_agent_access_token');
+      }
+      expect((await json(await validate(blueprint.id, autonomous.access_token))).valid).toBe(true);
+      expect(events('agent.instance.deleted').map((e) => e.data.id)).toEqual([delegated.agent_instance_id]);
+      expect(events('agent.instance.session.revoked')).toHaveLength(2);
     });
 
     it('deactivating a membership revokes its delegated sessions but keeps the instance', async () => {

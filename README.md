@@ -714,11 +714,13 @@ Revoking a session (`POST /agents/sessions/{id}/revoke`, or revoking or logging 
 session it was delegated from) cascades to every session chained from it. Deleting an instance
 revokes its live sessions first, and deleting a blueprint tears down its instances. The resources
 agents hang off cascade the same way: deleting an organization tears down every instance in it,
-deleting a membership tears down the instances delegated from it, deactivating a membership
-revokes their sessions (the instance survives for a reactivation), and deleting a permission
-removes it from every blueprint ceiling that named it. Session `status` is derived at read time
-from `revoked_at` and `expires_at`. The seven `agent.*` events
-fire through the same webhook and `/events` plumbing as everything else.
+deleting a membership or its user tears down the instances delegated from it, deactivating a
+membership revokes their sessions (the instance survives for a reactivation), and deleting a
+permission removes it from every blueprint ceiling that named it. Session `status` is derived at
+read time from `revoked_at` and `expires_at`; revoking touches only live sessions, so an
+already-expired one stays `expired` with a null `revoked_at` while its live descendants are
+still revoked. The seven `agent.*` events fire through the same webhook and `/events` plumbing
+as everything else.
 
 Errors use production's stable codes: `invalid_request` (400) for a malformed body;
 `permission_not_found`, `role_not_found`, `organization_not_found` (422) and `name_already_in_use`
