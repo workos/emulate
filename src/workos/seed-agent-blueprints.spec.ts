@@ -6,6 +6,7 @@
 import { describe, it, expect, afterEach } from 'bun:test';
 import { createEmulator, type Emulator } from '../index.js';
 import { validateSeedConfig } from './config-validator.js';
+import type { WorkOSSeedAgentBlueprint } from './index.js';
 
 describe('Seeding agent blueprints', () => {
   let emulator: Emulator | undefined;
@@ -36,7 +37,7 @@ describe('Seeding agent blueprints', () => {
         description: 'Finds prospects',
         permissions: ['crm:read', 'email:send'],
         invocable_by: { role_slugs: ['manager'], organizations: ['Acme Corp'] },
-        session_settings: { access_token_ttl_seconds: 60 },
+        session_settings: { max_age_seconds: 3600, access_token_ttl_seconds: 60, refresh_token_ttl_seconds: 3600 },
       },
       { name: 'Minimal Agent' },
     ],
@@ -123,12 +124,22 @@ describe('Seeding agent blueprints', () => {
     ]);
   });
 
-  it('rejects duplicate names and ids, and out-of-range session settings', () => {
+  it('rejects duplicate names and ids, and out-of-range or missing session settings', () => {
     const { valid, errors } = validateSeedConfig({
       agentBlueprints: [
         { id: 'agent_blueprint_dup', name: 'Same' },
-        { id: 'agent_blueprint_dup', name: 'Same', session_settings: { access_token_ttl_seconds: 3601 } },
-        { name: 'Bad Settings', session_settings: { max_age_seconds: 0, refresh_token_ttl_seconds: 1.5 } },
+        {
+          id: 'agent_blueprint_dup',
+          name: 'Same',
+          session_settings: { max_age_seconds: 3600, access_token_ttl_seconds: 3601, refresh_token_ttl_seconds: 3600 },
+        },
+        {
+          name: 'Bad Settings',
+          session_settings: {
+            max_age_seconds: 0,
+            refresh_token_ttl_seconds: 1.5,
+          } as WorkOSSeedAgentBlueprint['session_settings'],
+        },
       ],
     });
     expect(valid).toBe(false);
@@ -136,12 +147,22 @@ describe('Seeding agent blueprints', () => {
       'agentBlueprints[1].id',
       'agentBlueprints[1].name',
       'agentBlueprints[1].session_settings.access_token_ttl_seconds',
+      'agentBlueprints[2].session_settings.access_token_ttl_seconds',
       'agentBlueprints[2].session_settings.max_age_seconds',
       'agentBlueprints[2].session_settings.refresh_token_ttl_seconds',
     ]);
+    expect(errors.find((e) => e.path === 'agentBlueprints[2].session_settings.access_token_ttl_seconds')?.message).toBe(
+      'session_settings.access_token_ttl_seconds is required when session_settings is provided',
+    );
   });
 
-  it('applies the create route limits: non-empty description and list maxima', () => {
+  it('applies the create route limits: non-null, non-empty description and list maxima', () => {
+    const nulled = validateSeedConfig({
+      agentBlueprints: [{ name: 'Nulled', description: null as unknown as string }],
+    });
+    expect(nulled.valid).toBe(false);
+    expect(nulled.errors.map((e) => e.path)).toEqual(['agentBlueprints[0].description']);
+
     const { valid, errors } = validateSeedConfig({
       ...seed,
       agentBlueprints: [

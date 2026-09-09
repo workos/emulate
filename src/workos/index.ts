@@ -352,7 +352,8 @@ export interface WorkOSSeedAgentBlueprint {
   id?: string;
   /** Required and unique within the environment, as production enforces on create. */
   name: string;
-  description?: string | null;
+  /** 1 to 1000 characters. Omit for no description, as production's create endpoint requires. */
+  description?: string;
   /** Slugs of permissions defined in `permissions`; the ceiling on what a minted session may hold. */
   permissions?: string[];
   invocable_by?: {
@@ -364,11 +365,14 @@ export interface WorkOSSeedAgentBlueprint {
      */
     organizations?: string[];
   };
-  /** Defaults match production: 3600 / 300 / 3600 seconds. */
+  /**
+   * All three are required when the object is given, as on production's create endpoint.
+   * Omitting the object uses production's defaults: 3600 / 300 / 3600 seconds.
+   */
   session_settings?: {
-    max_age_seconds?: number;
-    access_token_ttl_seconds?: number;
-    refresh_token_ttl_seconds?: number;
+    max_age_seconds: number;
+    access_token_ttl_seconds: number;
+    refresh_token_ttl_seconds: number;
   };
 }
 
@@ -883,7 +887,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
           role_slugs: [...new Set(blueprintConfig.invocable_by?.role_slugs ?? [])],
           organization_ids: [...new Set(organizationIds)],
         },
-        session_settings: { ...DEFAULT_AGENT_SESSION_SETTINGS, ...blueprintConfig.session_settings },
+        session_settings: blueprintConfig.session_settings ?? { ...DEFAULT_AGENT_SESSION_SETTINGS },
       });
     }
   }

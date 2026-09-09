@@ -649,6 +649,9 @@ implemented (`/agents/blueprints`, `/agents/instances`, `/agents/sessions`). Blu
 created over the API or seeded; instances and sessions only ever come into being by minting.
 `permissions` and `invocable_by.role_slugs` name seeded `permissions` and `roles` by slug, and
 `invocable_by.organizations` names `organizations` by name, the same join feature-flag targets use.
+A seeded blueprint is validated the way `POST /agents/blueprints` validates a body: `description`
+is a non-empty string or omitted, and `session_settings` is either omitted (production's 3600 /
+300 / 3600 second defaults) or given with all three values.
 
 ```yaml
 permissions:

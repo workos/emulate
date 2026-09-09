@@ -1084,14 +1084,13 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
 
         if (
           blueprint.description !== undefined &&
-          blueprint.description !== null &&
           (typeof blueprint.description !== 'string' ||
             blueprint.description.length === 0 ||
             blueprint.description.length > 1000)
         ) {
           errors.push({
             path: at('description'),
-            message: 'description must be a string of 1 to 1000 characters, or null, if provided',
+            message: 'description must be a string of 1 to 1000 characters if provided',
             value: blueprint.description,
           });
         }
@@ -1180,10 +1179,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             ) as (keyof typeof AGENT_SESSION_SETTING_LIMITS)[]) {
               const value = settings[key];
               const max = AGENT_SESSION_SETTING_LIMITS[key];
-              if (value !== undefined && (!Number.isInteger(value) || value <= 0 || value > max)) {
+              if (value === undefined) {
                 errors.push({
                   path: at(`session_settings.${key}`),
-                  message: `session_settings.${key} must be a positive integer of at most ${max} if provided`,
+                  message: `session_settings.${key} is required when session_settings is provided`,
+                  value,
+                });
+              } else if (!Number.isInteger(value) || value <= 0 || value > max) {
+                errors.push({
+                  path: at(`session_settings.${key}`),
+                  message: `session_settings.${key} must be a positive integer of at most ${max}`,
                   value,
                 });
               }
