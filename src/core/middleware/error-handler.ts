@@ -6,7 +6,7 @@ export class WorkOSApiError extends Error {
     public status: number,
     message: string,
     public code: string,
-    public errors?: Array<{ field: string; code: string; message?: string }>,
+    public errors?: Array<{ field?: string; code: string; message?: string }>,
   ) {
     super(message);
     this.name = 'WorkOSApiError';
