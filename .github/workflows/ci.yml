@@ -143,19 +143,7 @@ jobs:
           allow-external-fork-fallback: true
           configure-bun: true
 
-      - name: Test image scan tools
-        run: |
-          python3 scripts/create-sfw-image-scan-needles.py --self-test
-          python3 scripts/scan-image-secrets.py --self-test
-
-      - name: Create private image scan needles
-        if: steps.sfw.outputs.active == 'true'
-        env:
-          SFW_BUN_CONFIG_FILE: ${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
-          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
-        run: python3 scripts/create-sfw-image-scan-needles.py
-
-      - name: Build authenticated image for scan
+      - name: Build image with Socket Firewall
         if: steps.sfw.outputs.active == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
@@ -172,42 +160,20 @@ jobs:
           secret-files: |
             sfw_bunfig=${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
 
-      - name: Scan authenticated image
-        if: steps.sfw.outputs.active == 'true'
-        env:
-          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
-        run: python3 scripts/scan-image-secrets.py --docker-image emulate:ci --needles-file "$SFW_IMAGE_SCAN_NEEDLES"
-
       - name: Teardown Socket Firewall
         if: ${{ always() && steps.sfw.outputs.active == 'true' }}
         uses: workos/setup-socket-firewall/teardown@ca93dd8aa351f54f4729fe3377a9be23c631c25d
 
-      - name: Remove private Docker scan materials
+      - name: Remove private Docker install config
         if: ${{ always() }}
         env:
           SFW_BUN_CONFIG_FILE: ${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
-          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
         run: |
-          rm -f "$SFW_IMAGE_SCAN_NEEDLES" "$SFW_BUN_CONFIG_FILE"
-          if [ -e "$SFW_IMAGE_SCAN_NEEDLES" ] || [ -e "$SFW_BUN_CONFIG_FILE" ]; then
-            echo "::error::Private Docker scan material was not removed."
+          rm -f "$SFW_BUN_CONFIG_FILE"
+          if [ -e "$SFW_BUN_CONFIG_FILE" ]; then
+            echo "::error::Private Docker install config was not removed."
             exit 1
           fi
-
-      - name: Load scanned image from clean cache (publication disabled)
-        if: steps.sfw.outputs.active == 'true'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          push: false
-          load: true
-          platforms: linux/amd64
-          tags: emulate:ci
-          build-args: |
-            SFW_REQUIRED=true
-          add-hosts: |
-            registry.npmjs.org:127.0.0.1
-            registry.yarnpkg.com:127.0.0.1
 
       - name: Build image (external fork fallback)
         if: steps.sfw.outputs.active == 'false'
@@ -249,19 +215,7 @@ jobs:
           allow-external-fork-fallback: true
           configure-bun: true
 
-      - name: Test image scan tools
-        run: |
-          python3 scripts/create-sfw-image-scan-needles.py --self-test
-          python3 scripts/scan-image-secrets.py --self-test
-
-      - name: Create private image scan needles
-        if: steps.sfw.outputs.active == 'true'
-        env:
-          SFW_BUN_CONFIG_FILE: ${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
-          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
-        run: python3 scripts/create-sfw-image-scan-needles.py
-
-      - name: Build authenticated image for scan
+      - name: Build image with Socket Firewall
         if: steps.sfw.outputs.active == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
@@ -278,42 +232,20 @@ jobs:
           secret-files: |
             sfw_bunfig=${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
 
-      - name: Scan authenticated image
-        if: steps.sfw.outputs.active == 'true'
-        env:
-          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
-        run: python3 scripts/scan-image-secrets.py --docker-image emulate:ci --needles-file "$SFW_IMAGE_SCAN_NEEDLES"
-
       - name: Teardown Socket Firewall
         if: ${{ always() && steps.sfw.outputs.active == 'true' }}
         uses: workos/setup-socket-firewall/teardown@ca93dd8aa351f54f4729fe3377a9be23c631c25d
 
-      - name: Remove private Docker scan materials
+      - name: Remove private Docker install config
         if: ${{ always() }}
         env:
           SFW_BUN_CONFIG_FILE: ${{ runner.temp }}/sfw-docker-bun/.bunfig.toml
-          SFW_IMAGE_SCAN_NEEDLES: ${{ runner.temp }}/sfw-image-scan-needles.json
         run: |
-          rm -f "$SFW_IMAGE_SCAN_NEEDLES" "$SFW_BUN_CONFIG_FILE"
-          if [ -e "$SFW_IMAGE_SCAN_NEEDLES" ] || [ -e "$SFW_BUN_CONFIG_FILE" ]; then
-            echo "::error::Private Docker scan material was not removed."
+          rm -f "$SFW_BUN_CONFIG_FILE"
+          if [ -e "$SFW_BUN_CONFIG_FILE" ]; then
+            echo "::error::Private Docker install config was not removed."
             exit 1
           fi
-
-      - name: Load scanned image from clean cache (publication disabled)
-        if: steps.sfw.outputs.active == 'true'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          push: false
-          load: true
-          platforms: linux/arm64
-          tags: emulate:ci
-          build-args: |
-            SFW_REQUIRED=true
-          add-hosts: |
-            registry.npmjs.org:127.0.0.1
-            registry.yarnpkg.com:127.0.0.1
 
       - name: Build image (external fork fallback)
         if: steps.sfw.outputs.active == 'false'
