@@ -77,8 +77,21 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      - name: Check out release tooling
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+          sparse-checkout: scripts/build-binaries.sh
+          sparse-checkout-cone-mode: false
+
       - name: Build standalone binary
-        run: scripts/build-binaries.sh "${{ inputs.tag_name }}" "${{ matrix.target }}" "${{ matrix.asset }}"
+        env:
+          TAG_NAME: ${{ inputs.tag_name }}
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
+        run: .release-tools/scripts/build-binaries.sh "$TAG_NAME" "$TARGET" "$ASSET"
 
       - name: Teardown Socket Firewall
         if: ${{ always() && steps.sfw.outputs.active == 'true' }}
