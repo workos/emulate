@@ -151,28 +151,56 @@ describe('User routes', () => {
   });
 
   it('is decoded as BadRequestException by @workos-inc/node', async () => {
+    const fetchFn: typeof fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const request = input instanceof Request ? new Request(input, init) : new Request(input.toString(), init);
+        return await app.request(request);
+      },
+      { preconnect: fetch.preconnect },
+    );
     const workos = new WorkOS({
       apiKey: 'sk_test_users',
       apiHostname: 'emulate.test',
       https: false,
       maxRetries: 0,
-      fetchFn: (async () =>
-        new Response(
-          JSON.stringify({
-            message: 'Could not create user.',
-            code: 'user_creation_error',
-            errors: [{ code: 'email_not_available', message: 'This email is not available.' }],
-          }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } },
-        )) as unknown as typeof fetch,
+      fetchFn,
     });
 
-    await expect(workos.userManagement.createUser({ email: 'dup@test.com' })).rejects.toMatchObject({
-      name: BadRequestException.name,
-      status: 400,
-      message: 'Could not create user.',
-      code: 'user_creation_error',
-      errors: [{ code: 'email_not_available', message: 'This email is not available.' }],
+    const created = await workos.userManagement.createUser({
+      email: 'sdk-dup@test.com',
+      firstName: 'Original',
+      lastName: 'User',
+      password: 'pass123',
+    });
+
+    try {
+      await workos.userManagement.createUser({
+        email: 'sdk-dup@test.com',
+        firstName: 'Changed',
+        lastName: 'User',
+        emailVerified: true,
+        externalId: 'sdk-dup@test.com',
+      });
+      throw new Error('Expected duplicate user creation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect(error).toMatchObject({
+        status: 400,
+        message: 'Could not create user.',
+        code: 'user_creation_error',
+        errors: [{ code: 'email_not_available', message: 'This email is not available.' }],
+      });
+    }
+
+    const unchanged = await workos.userManagement.getUser(created.id);
+    expect(unchanged).toMatchObject({
+      id: created.id,
+      email: 'sdk-dup@test.com',
+      firstName: 'Original',
+      lastName: 'User',
+      emailVerified: false,
+      externalId: null,
     });
   });
 
