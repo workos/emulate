@@ -36,6 +36,26 @@ describe('Connect routes', () => {
     expect(app.id).toMatch(/^connect_app_/);
   });
 
+  it('stores the emulator-only login_url without adding it to the API response', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Standalone', login_url: 'http://localhost:3000/login' }),
+    });
+    expect(res.status).toBe(201);
+    const created = await json(res);
+    expect(created.login_url).toBeUndefined();
+    expect(getWorkOSStore(store).connectApplications.get(created.id)?.login_url).toBe('http://localhost:3000/login');
+    expect((await json(await req(`/connect/applications/${created.id}`))).login_url).toBeUndefined();
+  });
+
+  it('rejects a non-string login_url', async () => {
+    const res = await req('/connect/applications', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Standalone', login_url: 123 }),
+    });
+    expect(res.status).toBe(422);
+  });
+
   it('rejects empty name', async () => {
     const res = await req('/connect/applications', {
       method: 'POST',

@@ -13,6 +13,7 @@ import type {
   WorkOSMagicAuth,
   WorkOSAuthenticationFactor,
   WorkOSAuthorizationCode,
+  WorkOSExternalAuthSession,
   WorkOSIdentity,
   WorkOSConnection,
   WorkOSSSOProfile,
@@ -65,6 +66,7 @@ export interface WorkOSStore {
   magicAuths: Collection<WorkOSMagicAuth>;
   authFactors: Collection<WorkOSAuthenticationFactor>;
   authCodes: Collection<WorkOSAuthorizationCode>;
+  externalAuthSessions: Collection<WorkOSExternalAuthSession>;
   identities: Collection<WorkOSIdentity>;
   connections: Collection<WorkOSConnection>;
   ssoProfiles: Collection<WorkOSSSOProfile>;
@@ -149,6 +151,11 @@ export function getWorkOSStore(store: Store): WorkOSStore {
       'user_id',
       'code',
     ]),
+    externalAuthSessions: store.collection<WorkOSExternalAuthSession>(
+      'workos.external_auth_sessions',
+      ID_PREFIXES.external_auth_session,
+      ['client_id'],
+    ),
     identities: store.collection<WorkOSIdentity>('workos.identities', ID_PREFIXES.identity, ['user_id']),
     connections: store.collection<WorkOSConnection>('workos.connections', ID_PREFIXES.connection, ['organization_id']),
     ssoProfiles: store.collection<WorkOSSSOProfile>('workos.sso_profiles', ID_PREFIXES.profile, [

@@ -1,9 +1,10 @@
 import type { Context } from 'hono';
 import { type RouteContext, OauthApiError, generateUlid } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
+import { assertAllowedRedirectUri, expiresIn, isExpired } from '../helpers.js';
 
 /**
- * M2M token exchange (OAuth 2.0 `client_credentials`).
+ * Connect token exchange (OAuth 2.0 `client_credentials` and `authorization_code`).
  *
  * This endpoint is deliberately hand-authored: it is absent from the WorkOS OpenAPI
  * spec at every version (the spec's `/sso/token` only documents `authorization_code`),
@@ -36,6 +37,8 @@ interface TokenParams {
   clientId?: string;
   clientSecret?: string;
   scope?: string;
+  code?: string;
+  redirectUri?: string;
 }
 
 /**
@@ -94,6 +97,8 @@ async function readTokenParams(c: Context): Promise<TokenParams> {
     clientId,
     clientSecret,
     scope: str(raw.scope),
+    code: str(raw.code),
+    redirectUri: str(raw.redirect_uri),
   };
 }
 
@@ -101,10 +106,44 @@ export function oauthRoutes(ctx: RouteContext): void {
   const { app, store, jwt } = ctx;
   const ws = getWorkOSStore(store);
 
-  app.post('/oauth2/token', async (c) => {
-    const { grantType, clientId, clientSecret, scope } = await readTokenParams(c);
+  // Standalone Connect's browser entry point. Like /oauth2/token, this route is
+  // hand-authored because the public spec only describes the server-side completion.
+  app.get('/oauth2/authorize', (c) => {
+    const { client_id: clientId, redirect_uri: redirectUri, response_type: responseType, state } = c.req.query();
+    if (!clientId || !redirectUri) {
+      throw new OauthApiError(400, 'invalid_request', 'client_id and redirect_uri are required.');
+    }
+    if (responseType !== 'code') {
+      throw new OauthApiError(400, 'unsupported_response_type', 'response_type must be code.');
+    }
+    const application = ws.connectApplications.findOneBy('client_id', clientId);
+    if (!application) throw new OauthApiError(400, 'invalid_client', 'Invalid client ID.');
+    if (application.application_type !== 'oauth' || !application.login_url) {
+      throw new OauthApiError(400, 'unauthorized_client', 'The client must be an OAuth application with login_url.');
+    }
+    if (application.redirect_uris.length > 0 && !application.redirect_uris.includes(redirectUri)) {
+      throw new OauthApiError(400, 'invalid_request', 'redirect_uri is not registered for this application.');
+    }
+    assertAllowedRedirectUri(redirectUri, store);
+    assertAllowedRedirectUri(application.login_url, store);
+    const login = new URL(application.login_url);
+    const session = ws.externalAuthSessions.insert({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      state: state ?? null,
+      expires_at: expiresIn(10),
+      completed_at: null,
+      redeemed_at: null,
+      user_id: null,
+    });
+    login.searchParams.set('external_auth_id', session.id);
+    return c.redirect(login.toString(), 302);
+  });
 
-    if (grantType !== 'client_credentials') {
+  app.post('/oauth2/token', async (c) => {
+    const { grantType, clientId, clientSecret, scope, code, redirectUri } = await readTokenParams(c);
+
+    if (grantType !== 'client_credentials' && grantType !== 'authorization_code') {
       throw new OauthApiError(
         400,
         'unsupported_grant_type',
@@ -121,12 +160,32 @@ export function oauthRoutes(ctx: RouteContext): void {
     if (!application || !secretMatches) {
       throw new OauthApiError(401, 'invalid_client', 'Invalid client ID or secret.');
     }
-    if (application.application_type !== 'm2m') {
+    const expectedType = grantType === 'client_credentials' ? 'm2m' : 'oauth';
+    if (application.application_type !== expectedType) {
       throw new OauthApiError(
         400,
         'unauthorized_client',
-        'The client is not authorized to use the client_credentials grant type.',
+        `The client is not authorized to use the ${grantType} grant type.`,
       );
+    }
+
+    // Minimal Standalone Connect exchange: no refresh token, id_token, or PKCE.
+    // Bind the code to this flow, client, and exact callback before consuming it.
+    const authCode = grantType === 'authorization_code' && code ? ws.authCodes.findOneBy('code', code) : undefined;
+    if (grantType === 'authorization_code') {
+      if (!code || !redirectUri) {
+        throw new OauthApiError(400, 'invalid_request', 'code and redirect_uri are required.');
+      }
+      if (
+        !authCode ||
+        isExpired(authCode.expires_at) ||
+        authCode.auth_method !== 'external_auth' ||
+        authCode.client_id !== clientId ||
+        authCode.redirect_uri !== redirectUri ||
+        !ws.users.get(authCode.user_id)
+      ) {
+        throw new OauthApiError(400, 'invalid_grant', 'The authorization code has expired or is invalid.');
+      }
     }
 
     // Grant the requested scopes, defaulting to all of the application's scopes. A
@@ -154,7 +213,7 @@ export function oauthRoutes(ctx: RouteContext): void {
     // aud defaults to the client_id; pin `audience` on the app to match production.
     const accessToken = jwt.sign(
       {
-        sub: clientId,
+        sub: authCode?.user_id ?? clientId,
         aud: application.audience ?? clientId,
         jti: generateUlid(),
         org_id: application.organization_id ?? undefined,
@@ -162,6 +221,8 @@ export function oauthRoutes(ctx: RouteContext): void {
       },
       { expiresIn: TOKEN_TTL_SECONDS },
     );
+
+    if (authCode) ws.authCodes.delete(authCode.id);
 
     return c.json({
       access_token: accessToken,

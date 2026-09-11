@@ -41,6 +41,10 @@ export function connectRoutes(ctx: RouteContext): void {
       throw validationError('scopes must be an array of strings', [{ field: 'scopes', code: 'invalid' }]);
     }
 
+    if (body.login_url !== undefined && body.login_url !== null && typeof body.login_url !== 'string') {
+      throw validationError('login_url must be a string or null', [{ field: 'login_url', code: 'invalid' }]);
+    }
+
     const applicationType = body.application_type === 'm2m' ? 'm2m' : 'oauth';
     const organizationId = (body.organization_id as string) ?? null;
     // m2m applications are owned by an organization; reject a null or dangling owner so
@@ -68,6 +72,7 @@ export function connectRoutes(ctx: RouteContext): void {
       scopes: (body.scopes as string[]) ?? [],
       audience: (body.audience as string) ?? null,
       redirect_uris: (body.redirect_uris as string[]) ?? [],
+      login_url: (body.login_url as string) ?? null,
       client_id: generateClientId(),
       logo_url: (body.logo_url as string) ?? null,
     });

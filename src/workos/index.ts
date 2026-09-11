@@ -35,6 +35,7 @@ import { vaultRoutes } from './routes/vault.js';
 import { radarRoutes } from './routes/radar.js';
 import { connectRoutes } from './routes/connect.js';
 import { oauthRoutes } from './routes/oauth.js';
+import { standaloneConnectRoutes } from './routes/standalone-connect.js';
 import { directoryRoutes } from './routes/directories.js';
 import { auditLogRoutes } from './routes/audit-logs.js';
 import { featureFlagRoutes } from './routes/feature-flags.js';
@@ -284,6 +285,8 @@ export interface WorkOSSeedConnectApplication {
   client_secret?: string;
   /** OAuth redirect URIs. Ignored for `m2m` applications. */
   redirect_uris?: string[];
+  /** Emulator-only Standalone Connect login page, receiving an external_auth_id. */
+  login_url?: string | null;
 }
 
 export interface WorkOSSeedApiKey {
@@ -749,6 +752,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         scopes: appConfig.scopes ?? [],
         audience: appConfig.audience ?? null,
         redirect_uris: appConfig.redirect_uris ?? [],
+        login_url: appConfig.login_url ?? null,
         client_id: appConfig.client_id ?? generateClientId(),
         logo_url: null,
       });
@@ -945,6 +949,7 @@ export const workosPlugin: ServicePlugin = {
     radarRoutes(ctx);
     connectRoutes(ctx);
     oauthRoutes(ctx);
+    standaloneConnectRoutes(ctx);
     directoryRoutes(ctx);
     auditLogRoutes(ctx);
     featureFlagRoutes(ctx);
