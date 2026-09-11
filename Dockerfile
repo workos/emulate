@@ -1,5 +1,10 @@
 # syntax=docker/dockerfile:1
 
+# CI/release callers pass Bun's Socket Firewall config as a BuildKit secret and
+# set SFW_REQUIRED=true. Local Docker builds omit both and keep using Bun's
+# normal public-registry configuration.
+ARG SFW_REQUIRED=false
+
 # Build stage: compile TypeScript to dist/ from the bun lockfile.
 # bun.lock pins tree-sitter-kotlin (a transitive devDep via @workos/openapi-spec
 # -> @workos/oagen) to a git+ssh URL that can't clone inside the image without
@@ -9,9 +14,19 @@
 # other dependency — including typescript@5.9.3 — stays at its locked version,
 # keeping the build reproducible.
 FROM oven/bun:1.3.14 AS builder
+ARG SFW_REQUIRED
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN sed -i \
+RUN --mount=type=secret,id=sfw_bunfig,target=/run/secrets/.bunfig.toml \
+    set -eu; \
+    if [ "${SFW_REQUIRED:-false}" = "true" ] && [ ! -s /run/secrets/.bunfig.toml ]; then \
+      echo "Socket Firewall Bun config secret is required for Docker dependency installs." >&2; \
+      exit 1; \
+    fi; \
+    if [ -s /run/secrets/.bunfig.toml ]; then \
+      export XDG_CONFIG_HOME=/run/secrets; \
+    fi; \
+    sed -i \
       -e 's|git+ssh://git@github.com/fwcd/tree-sitter-kotlin.git#|github:fwcd/tree-sitter-kotlin#|g' \
       -e 's/"sha512-onbog[^"]*"/""/g' \
       bun.lock \
@@ -24,9 +39,19 @@ RUN bun run build
 # This stage only needs production deps (no git+ssh transitive devDeps), so
 # the bun lockfile works correctly.
 FROM oven/bun:1.3.14 AS deps
+ARG SFW_REQUIRED
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production --ignore-scripts
+RUN --mount=type=secret,id=sfw_bunfig,target=/run/secrets/.bunfig.toml \
+    set -eu; \
+    if [ "${SFW_REQUIRED:-false}" = "true" ] && [ ! -s /run/secrets/.bunfig.toml ]; then \
+      echo "Socket Firewall Bun config secret is required for Docker dependency installs." >&2; \
+      exit 1; \
+    fi; \
+    if [ -s /run/secrets/.bunfig.toml ]; then \
+      export XDG_CONFIG_HOME=/run/secrets; \
+    fi; \
+    bun install --frozen-lockfile --production --ignore-scripts
 
 # Runtime stage: minimal Node image with only what the emulator needs.
 FROM node:22-alpine
