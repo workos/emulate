@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
+import { BadRequestException, WorkOS } from '@workos-inc/node';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
 
@@ -83,8 +84,11 @@ describe('User routes', () => {
       method: 'POST',
       body: JSON.stringify({ email: 'user@x.test' }),
     });
-    expect(second.status).toBe(409);
-    expect((await json(second)).code).toBe('user_already_exists');
+    expect(second.status).toBe(400);
+    expect(await json(second)).toMatchObject({
+      code: 'user_creation_error',
+      errors: [{ code: 'email_not_available' }],
+    });
   });
 
   // This is the lookup an SDK's listUsers({ email }) maps to, so it is how a caller finds the
@@ -106,17 +110,98 @@ describe('User routes', () => {
     expect(miss.data).toHaveLength(0);
   });
 
-  it('rejects duplicate email', async () => {
-    await req('/user_management/users', {
-      method: 'POST',
-      body: JSON.stringify({ email: 'dup@test.com' }),
-    });
+  it('matches the user-creation contract for a duplicate email without changing the existing user', async () => {
+    const created = await json(
+      await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: 'dup@test.com',
+          first_name: 'Original',
+          last_name: 'User',
+          password: 'pass123',
+        }),
+      }),
+    );
     const res = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'dup@test.com' }),
+      body: JSON.stringify({
+        email: 'dup@test.com',
+        first_name: 'Changed',
+        last_name: 'User',
+        email_verified: true,
+        external_id: 'dup@test.com',
+      }),
     });
-    expect(res.status).toBe(409);
-    expect((await json(res)).code).toBe('user_already_exists');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      message: 'Could not create user.',
+      code: 'user_creation_error',
+      errors: [{ code: 'email_not_available', message: 'This email is not available.' }],
+    });
+
+    const unchanged = await json(await req(`/user_management/users/${created.id}`));
+    expect(unchanged).toMatchObject({
+      id: created.id,
+      email: 'dup@test.com',
+      first_name: 'Original',
+      last_name: 'User',
+      email_verified: false,
+      external_id: null,
+    });
+  });
+
+  it('is decoded as BadRequestException by @workos-inc/node', async () => {
+    const fetchFn: typeof fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const request = input instanceof Request ? new Request(input, init) : new Request(input.toString(), init);
+        return await app.request(request);
+      },
+      { preconnect: fetch.preconnect },
+    );
+    const workos = new WorkOS({
+      apiKey: 'sk_test_users',
+      apiHostname: 'emulate.test',
+      https: false,
+      maxRetries: 0,
+      fetchFn,
+    });
+
+    const created = await workos.userManagement.createUser({
+      email: 'sdk-dup@test.com',
+      firstName: 'Original',
+      lastName: 'User',
+      password: 'pass123',
+    });
+
+    try {
+      await workos.userManagement.createUser({
+        email: 'sdk-dup@test.com',
+        firstName: 'Changed',
+        lastName: 'User',
+        emailVerified: true,
+        externalId: 'sdk-dup@test.com',
+      });
+      throw new Error('Expected duplicate user creation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect(error).toMatchObject({
+        status: 400,
+        message: 'Could not create user.',
+        code: 'user_creation_error',
+        errors: [{ code: 'email_not_available', message: 'This email is not available.' }],
+      });
+    }
+
+    const unchanged = await workos.userManagement.getUser(created.id);
+    expect(unchanged).toMatchObject({
+      id: created.id,
+      email: 'sdk-dup@test.com',
+      firstName: 'Original',
+      lastName: 'User',
+      emailVerified: false,
+      externalId: null,
+    });
   });
 
   it('gets user by id', async () => {
