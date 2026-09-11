@@ -137,6 +137,16 @@ export interface WorkOSAuthenticationFactor extends Entity {
   };
 }
 
+export interface WorkOSExternalAuthSession extends Entity {
+  client_id: string;
+  redirect_uri: string;
+  state: string | null;
+  expires_at: string;
+  completed_at: string | null;
+  redeemed_at: string | null;
+  user_id: string | null;
+}
+
 export interface WorkOSAuthorizationCode extends Entity {
   user_id: string;
   organization_id: string | null;
@@ -481,6 +491,8 @@ export interface WorkOSConnectApplication extends Entity {
   /** The `aud` claim minted into m2m tokens. Falls back to client_id when null. */
   audience: string | null;
   redirect_uris: string[];
+  /** Emulator-only Standalone Connect login page; never serialized on the API application. */
+  login_url: string | null;
   client_id: string;
   logo_url: string | null;
 }

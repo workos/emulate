@@ -201,6 +201,18 @@ describe('OAuth M2M token routes', () => {
     expect((await json(res)).error).toBe('unauthorized_client');
   });
 
+  it('rejects authorization_code for an m2m application', async () => {
+    const res = await form({
+      grant_type: 'authorization_code',
+      client_id: 'client_billing',
+      client_secret: 'secret_billing_value',
+      code: 'any_code',
+      redirect_uri: 'http://localhost:3000/cb',
+    });
+    expect(res.status).toBe(400);
+    expect((await json(res)).error).toBe('unauthorized_client');
+  });
+
   it('requires no API key (token endpoint is public)', async () => {
     // No Authorization header at all — must not be rejected by the auth middleware.
     const res = await form({
@@ -234,6 +246,7 @@ describe('OAuth M2M token routes', () => {
       redirect_uris: [],
       client_id: 'client_aud',
       logo_url: null,
+      login_url: null,
     });
     ws.clientSecrets.insert({
       object: 'client_secret',
@@ -261,6 +274,7 @@ describe('OAuth M2M token routes', () => {
       redirect_uris: [],
       client_id: 'client_percent',
       logo_url: null,
+      login_url: null,
     });
     ws.clientSecrets.insert({
       object: 'client_secret',
@@ -295,6 +309,7 @@ describe('OAuth M2M token routes', () => {
       redirect_uris: [],
       client_id: 'client_malformed',
       logo_url: null,
+      login_url: null,
     });
     ws.clientSecrets.insert({
       object: 'client_secret',

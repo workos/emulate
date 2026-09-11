@@ -835,7 +835,9 @@ export function authRoutes(ctx: RouteContext): void {
             new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
           );
         }
-        if (isExpired(authCode.expires_at)) {
+        // Standalone Connect codes belong to /oauth2/token, which enforces the Connect
+        // client's secret and redirect_uri. Reject them here without consuming the code.
+        if (authCode.auth_method === 'external_auth' || isExpired(authCode.expires_at)) {
           failAuth(
             'OAuth',
             { userId: authCode.user_id, email: ws.users.get(authCode.user_id)?.email },

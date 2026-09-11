@@ -60,6 +60,7 @@ export const ID_PREFIXES = {
   authentication_factor: 'auth_factor',
   authentication_challenge: 'auth_challenge',
   authorization_code: 'auth_code',
+  external_auth_session: 'ext_auth',
   identity: 'identity',
   sso_authorization: 'sso_auth',
   refresh_token: 'ref',

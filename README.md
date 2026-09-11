@@ -458,6 +458,64 @@ requesting a scope the application does not have returns `400 invalid_scope`, so
 authorization can be exercised locally. Unknown credentials return `401 invalid_client`, and an
 `oauth`-type application returns `400 unauthorized_client`.
 
+### Standalone Connect
+
+Bridge your application's own login to Connect with an OAuth application and an emulator-only
+`connectApplications[].login_url` (the stand-in for the login page configured in the WorkOS dashboard):
+
+```yaml
+connectApplications:
+  - name: Standalone App
+    type: oauth
+    client_id: client_local_standalone
+    client_secret: secret_local_standalone
+    login_url: http://localhost:3000/login
+    redirect_uris: [http://localhost:3000/callback]
+    scopes: [profile, email]
+```
+
+1. Send the browser to
+   `http://localhost:4100/oauth2/authorize?client_id=client_local_standalone&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&state=my-state`.
+   The emulator redirects to `login_url` with a fresh `external_auth_id` valid for ten minutes.
+2. Authenticate the user in your application, then call from your backend:
+
+   ```bash
+   curl -s http://localhost:4100/authkit/oauth2/complete \
+     -H "Authorization: Bearer sk_test_default" \
+     -H "Content-Type: application/json" \
+     -d '{"external_auth_id":"ext_auth_FROM_LOGIN_URL","user":{"id":"user_12345","email":"marcelina.davis@example.com"}}'
+   ```
+
+   This creates or updates the AuthKit user by `external_id = user.id`, marks their email verified,
+   emits `user.created` or `user.updated`, and returns `{"redirect_uri":"..."}`. Optional `name`,
+   `first_name`, `last_name`, and `metadata` update when supplied; omitted fields are preserved.
+
+3. Redirect the browser to that returned URL (`GET /oauth2/authorize/complete`). It is single-use
+   and redirects to the original client callback with `code` and the original `state`.
+4. Exchange the code at `POST /oauth2/token` with `grant_type=authorization_code`, `code`, the exact
+   original `redirect_uri`, `client_id`, and `client_secret` (form-encoded or JSON; Basic credentials
+   also work). Codes expire after ten minutes and are consumed on exchange. The response contains
+   an access token, `token_type`, `expires_in`, and `scope`. Its JWT `sub` is the AuthKit user ID;
+   `aud` is the application's `audience`, falling back to its `client_id`.
+
+Reusing a completed ID returns `400 external_auth_session_already_completed`; unknown or expired IDs
+return `404 not_found`. Missing required fields return `422`, malformed email returns `400 invalid_email`,
+and an email owned by another user returns `400 email_not_available` (including on updates). A failed
+validation does not consume the session. Browser redemption of an incomplete or already redeemed ID
+returns `404`.
+
+`login_url` can also be set on `POST /connect/applications`, but is not included in API application
+responses. Both browser destinations must pass the emulator's redirect-host policy (localhost by
+default; configure `--redirect-hosts` for other hosts). When `redirect_uris` is non-empty, the callback
+must also match an entry exactly.
+
+**Deliberate limitations:** no PKCE, refresh tokens, ID tokens, or consent UI. `user_consent_options`
+is ignored; the `email_change_not_allowed` policy is not modeled. The authorize request's `scope`
+is not tracked: tokens default to the application's configured scopes, optionally narrowed by `scope`
+at token exchange. The emulator's completion URL uses `/oauth2/authorize/complete?external_auth_id=...`,
+not production's AuthKit-domain `/oauth/authorize/complete?state=...`; always follow the returned URL
+rather than constructing it. This is a local testing flow, not a replacement authentication service.
+
 ### API Keys
 
 Seed organization- or user-owned API keys. Each seeded key is created as an `api_key` resource
