@@ -1,7 +1,14 @@
-import { type RouteContext, notFound, parseJsonBody } from '../../core/index.js';
+import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatAuthFactor } from '../helpers.js';
-import { randomBytes } from 'node:crypto';
+import {
+  BASE32_SECRET,
+  expiresIn,
+  formatAuthChallenge,
+  formatAuthFactor,
+  formatAuthFactorEnrolled,
+  generateCode,
+  newTotp,
+} from '../helpers.js';
 
 export function authFactorRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -14,22 +21,39 @@ export function authFactorRoutes(ctx: RouteContext): void {
 
     const body = await parseJsonBody(c);
     const type = (body.type as string) ?? 'totp';
-    const issuer = (body.totp_issuer as string) ?? 'WorkOS Emulator';
-    const secret = randomBytes(20).toString('hex').slice(0, 32).toUpperCase();
-    const uri = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(user.email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}`;
+    const secret = body.totp_secret as string | undefined;
+    if (secret !== undefined && !BASE32_SECRET.test(secret)) {
+      throw new WorkOSApiError(422, 'TOTP secret must be a valid Base32 string', 'invalid_totp_secret');
+    }
 
     const factor = ws.authFactors.insert({
       object: 'authentication_factor',
       user_id: user.id,
       type: type as 'totp',
-      totp: {
-        issuer,
-        user: user.email,
-        uri,
-      },
+      totp: newTotp(
+        (body.totp_issuer as string) ?? 'WorkOS Emulator',
+        (body.totp_user as string) ?? user.email,
+        secret,
+      ),
     });
 
-    return c.json(formatAuthFactor(factor), 201);
+    // Enrollment answers with the challenge whose verification completes it, as production does.
+    // A TOTP code is delivered nowhere, so the stored code is what a test reads to verify it.
+    const challenge = ws.authChallenges.insert({
+      object: 'authentication_challenge',
+      user_id: user.id,
+      factor_id: factor.id,
+      expires_at: expiresIn(10),
+      code: generateCode(),
+    });
+
+    return c.json(
+      {
+        authentication_factor: formatAuthFactorEnrolled(factor),
+        authentication_challenge: formatAuthChallenge(challenge),
+      },
+      201,
+    );
   });
 
   app.get('/user_management/users/:userlandUserId/auth_factors', (c) => {

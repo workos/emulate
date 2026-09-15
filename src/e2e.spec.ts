@@ -340,7 +340,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       }),
     });
     expect(factorRes.status).toBe(201);
-    const factor = (await factorRes.json()) as any;
+    const { authentication_factor: factor } = (await factorRes.json()) as any;
 
     // Step 2: Authenticate with password - should trigger MFA challenge
     const passwordRes = await fetch(`${emulator.url}/user_management/authenticate`, {
@@ -379,7 +379,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       }),
     });
     expect(factorRes.status).toBe(201);
-    const factor = (await factorRes.json()) as any;
+    const { authentication_factor: factor } = (await factorRes.json()) as any;
 
     // Step 2: Authenticate with password to trigger MFA challenge
     const passwordRes = await fetch(`${emulator.url}/user_management/authenticate`, {

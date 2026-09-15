@@ -45,7 +45,7 @@ describe('Auth challenge routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
-      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://totp/test' },
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://totp/test' },
     });
     return { user, factor };
   }

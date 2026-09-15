@@ -133,6 +133,8 @@ export interface WorkOSAuthenticationFactor extends Entity {
   totp: {
     issuer: string;
     user: string;
+    /** Base32, as authenticator apps take it. Enrollment is the only response that shows it. */
+    secret: string;
     uri: string;
   };
 }

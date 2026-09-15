@@ -1,7 +1,14 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatAuthFactor, formatAuthChallenge, expiresIn, isExpired, generateCode } from '../helpers.js';
-import { randomBytes } from 'node:crypto';
+import {
+  formatAuthFactor,
+  formatAuthFactorEnrolled,
+  formatAuthChallenge,
+  expiresIn,
+  isExpired,
+  generateCode,
+  newTotp,
+} from '../helpers.js';
 
 export function legacyMfaRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -13,17 +20,15 @@ export function legacyMfaRoutes(ctx: RouteContext): void {
     const type = (body.type as string) ?? 'totp';
     const issuer = (body.totp_issuer as string) ?? 'WorkOS Emulator';
     const totpUser = (body.totp_user as string) ?? 'legacy@emulator';
-    const secret = randomBytes(20).toString('hex').slice(0, 32).toUpperCase();
-    const uri = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(totpUser)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}`;
 
     const factor = ws.authFactors.insert({
       object: 'authentication_factor',
       user_id: 'legacy',
       type: type as 'totp',
-      totp: { issuer, user: totpUser, uri },
+      totp: newTotp(issuer, totpUser),
     });
 
-    return c.json(formatAuthFactor(factor), 201);
+    return c.json(formatAuthFactorEnrolled(factor), 201);
   });
 
   // Get factor

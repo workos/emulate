@@ -79,6 +79,7 @@ import {
   formatConnectedAccountEvent,
   dataIntegrationIdFor,
   linkOAuthIdentity,
+  newTotp,
 } from './helpers.js';
 import type {
   WorkOSConnectionType,
@@ -466,20 +467,13 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       }
 
       // The same record the enrollment route writes, so ListAuthFactors reports it and the
-      // password grant challenges it like any enrolled second factor. The secret surfaces only
-      // inside the URI, as enrollment leaves it.
+      // password grant challenges it like any enrolled second factor.
       if (userConfig.totp) {
-        const issuer = 'WorkOS Emulator';
-        const secret = randomBytes(20).toString('hex').slice(0, 32).toUpperCase();
         ws.authFactors.insert({
           object: 'authentication_factor',
           user_id: user.id,
           type: 'totp',
-          totp: {
-            issuer,
-            user: user.email,
-            uri: `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(user.email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}`,
-          },
+          totp: newTotp('WorkOS Emulator', user.email),
         });
       }
     }

@@ -29,6 +29,11 @@ describe('Legacy MFA routes', () => {
     expect(factor.object).toBe('authentication_factor');
     expect(factor.type).toBe('totp');
     expect(factor.id).toMatch(/^auth_factor_/);
+    // Enrollment is the one response that shows the secrets; GET strips them.
+    expect(factor.totp.secret).toMatch(/^[A-Z2-7]{32}$/);
+    expect(factor.totp.qr_code).toStartWith('data:image/png;base64,');
+    const got = await json(await req(`/auth/factors/${factor.id}`));
+    expect(got.totp).toEqual({ issuer: 'TestApp', user: 'user@test.com' });
   });
 
   it('gets a factor by id', async () => {

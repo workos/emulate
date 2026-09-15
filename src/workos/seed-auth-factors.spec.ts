@@ -43,9 +43,8 @@ describe('Seeding TOTP authentication factors', () => {
     expect(factor.object).toBe('authentication_factor');
     expect(factor.id).toMatch(/^auth_factor_/);
     expect(factor.type).toBe('totp');
-    expect(factor.totp.issuer).toBe('WorkOS Emulator');
-    expect(factor.totp.user).toBe('alice@acme.com');
-    expect(factor.totp.uri).toStartWith('otpauth://totp/');
+    // The list's AuthenticationFactor shows no secrets; only enrollment's response does.
+    expect(factor.totp).toEqual({ issuer: 'WorkOS Emulator', user: 'alice@acme.com' });
   });
 
   it('drives the password grant through the mfa_challenge step-up', async () => {

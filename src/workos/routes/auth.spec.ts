@@ -1817,7 +1817,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
-      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
     // MFA comes first: the org is not resolved while the login is still unauthenticated.
@@ -2062,7 +2062,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
-      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
     const passwordRes = await app.request('/user_management/authenticate', {
@@ -2110,7 +2110,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
-      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
     const passwordRes = await app.request('/user_management/authenticate', {
@@ -2193,7 +2193,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
-      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
     // Create a challenge
@@ -2239,7 +2239,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
-      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
     const challenge = ws.authChallenges.insert({
@@ -2891,7 +2891,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
-      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
     const challenge = ws.authChallenges.insert({
       object: 'authentication_challenge',
@@ -2984,7 +2984,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
-      totp: { issuer: 'Test', user: user.email, uri: 'otpauth://...' },
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
     // First factor: password returns an mfa_challenge carrying a pending token + challenge,
