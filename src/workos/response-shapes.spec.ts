@@ -30,6 +30,8 @@ import {
   formatApiKeyRecord,
   formatPasswordReset,
   formatFeatureFlag,
+  formatAuthFactor,
+  formatAuthChallenge,
 } from './helpers.js';
 import { RESPONSE_SHAPE_REQUIREMENTS } from './generated/response-shapes.js';
 import type {
@@ -44,6 +46,8 @@ import type {
   WorkOSApiKey,
   WorkOSPasswordReset,
   WorkOSFeatureFlag,
+  WorkOSAuthenticationFactor,
+  WorkOSAuthenticationChallenge,
 } from './entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -204,6 +208,33 @@ const featureFlag: WorkOSFeatureFlag = {
   updated_at: TS,
 };
 
+const authFactor: WorkOSAuthenticationFactor = {
+  id: 'auth_factor_01',
+  object: 'authentication_factor',
+  user_id: 'user_01',
+  type: 'totp',
+  totp: {
+    issuer: 'Acme',
+    user: 'alice@example.com',
+    secret: 'JBSWY3DPEHPK3PXP',
+    uri: 'otpauth://totp/Acme:alice%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=Acme',
+  },
+  created_at: TS,
+  updated_at: TS,
+};
+
+// The store's join columns and the code, all of which the wire challenge must not carry.
+const authChallenge: WorkOSAuthenticationChallenge = {
+  id: 'auth_challenge_01',
+  object: 'authentication_challenge',
+  user_id: 'user_01',
+  factor_id: 'auth_factor_01',
+  expires_at: TS,
+  code: '123456',
+  created_at: TS,
+  updated_at: TS,
+};
+
 const store = new Store();
 const ws = getWorkOSStore(store);
 
@@ -219,6 +250,8 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'api_key', output: formatApiKeyRecord(apiKey) },
   { objectType: 'password_reset', output: formatPasswordReset(passwordReset) },
   { objectType: 'feature_flag', output: formatFeatureFlag(featureFlag) },
+  { objectType: 'authentication_factor', output: formatAuthFactor(authFactor) },
+  { objectType: 'authentication_challenge', output: formatAuthChallenge(authChallenge) },
 ];
 
 /**

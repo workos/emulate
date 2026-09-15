@@ -50,6 +50,16 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
       'updated_at',
     ],
   },
+  authentication_challenge: {
+    schema: 'AuthenticationChallenge',
+    properties: ['authentication_factor_id', 'code', 'created_at', 'expires_at', 'id', 'object', 'updated_at'],
+    required: ['authentication_factor_id', 'created_at', 'id', 'object', 'updated_at'],
+  },
+  authentication_factor: {
+    schema: 'AuthenticationFactor',
+    properties: ['created_at', 'id', 'object', 'sms', 'totp', 'type', 'updated_at', 'user_id'],
+    required: ['created_at', 'id', 'object', 'type', 'updated_at'],
+  },
   connection: {
     schema: 'Connection',
     properties: [
@@ -297,6 +307,11 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
  * fields the route handler itself is responsible for.
  */
 export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequirement> = {
+  'GET /auth/factors/{id}': {
+    schema: 'AuthenticationFactor',
+    properties: ['created_at', 'id', 'object', 'sms', 'totp', 'type', 'updated_at', 'user_id'],
+    required: ['created_at', 'id', 'object', 'type', 'updated_at'],
+  },
   'GET /connect/applications': {
     schema: 'ConnectApplicationList',
     properties: ['data', 'list_metadata', 'object'],
@@ -365,6 +380,11 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
     properties: ['data', 'list_metadata', 'object'],
     required: ['data', 'list_metadata', 'object'],
   },
+  'GET /user_management/users/{userlandUserId}/auth_factors': {
+    schema: 'UserlandUserAuthenticationFactorList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
   'GET /webhook_endpoints': {
     schema: 'WebhookEndpointList',
     properties: ['data', 'list_metadata', 'object'],
@@ -374,6 +394,21 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
     schema: 'ApiKeyValidationResponse',
     properties: ['agent_registration_id', 'api_key'],
     required: ['api_key'],
+  },
+  'POST /auth/challenges/{id}/verify': {
+    schema: 'AuthenticationChallengeVerifyResponse',
+    properties: ['challenge', 'valid'],
+    required: ['challenge', 'valid'],
+  },
+  'POST /auth/factors/{id}/challenge': {
+    schema: 'AuthenticationChallenge',
+    properties: ['authentication_factor_id', 'code', 'created_at', 'expires_at', 'id', 'object', 'updated_at'],
+    required: ['authentication_factor_id', 'created_at', 'id', 'object', 'updated_at'],
+  },
+  'POST /auth/factors/enroll': {
+    schema: 'AuthenticationFactorEnrolled',
+    properties: ['created_at', 'id', 'object', 'sms', 'totp', 'type', 'updated_at', 'user_id'],
+    required: ['created_at', 'id', 'object', 'type', 'updated_at'],
   },
   'POST /authorization/organization_memberships/{organization_membership_id}/check': {
     schema: 'AuthorizationCheck',
@@ -417,6 +452,11 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
     schema: 'SendVerificationEmailResponse',
     properties: ['user'],
     required: ['user'],
+  },
+  'POST /user_management/users/{userlandUserId}/auth_factors': {
+    schema: 'UserlandUserAuthenticationFactorEnrollResponse',
+    properties: ['authentication_challenge', 'authentication_factor'],
+    required: ['authentication_challenge', 'authentication_factor'],
   },
   'POST /widgets/token': {
     schema: 'WidgetSessionTokenResponse',

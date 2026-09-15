@@ -57,6 +57,11 @@ export const OBJECT_SCHEMA_MAP: readonly ShapeMapEntry[] = [
   { objectType: 'api_key', schemaName: 'ApiKey' },
   { objectType: 'password_reset', schemaName: 'PasswordReset' },
   { objectType: 'feature_flag', schemaName: 'Flag' },
+  // The secretless factor GET and LIST return. `AuthenticationFactorEnrolled` shares its
+  // discriminator and top-level fields; the two differ only inside `totp`, below this loop's
+  // depth — enrollment's secrets are pinned by the route tests instead.
+  { objectType: 'authentication_factor', schemaName: 'AuthenticationFactor' },
+  { objectType: 'authentication_challenge', schemaName: 'AuthenticationChallenge' },
 ];
 
 export interface EnvelopeMapEntry {
@@ -111,6 +116,25 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
     schemaName: 'AuthorizationCheck',
   },
   { method: 'GET', path: '/sso/jwks/{clientId}', status: '200', schemaName: 'JwksResponse' },
+  // MFA. Enrollment is the envelope that went out bare for several releases (issue #110): every
+  // SDK reads `{ authentication_factor, authentication_challenge }`, and none could enroll a
+  // factor through the emulator. The legacy `/auth` routes are resource bodies, listed for the
+  // same reason as the password reset above: the route is the surface the SDKs read.
+  {
+    method: 'POST',
+    path: '/user_management/users/{userlandUserId}/auth_factors',
+    status: '201',
+    schemaName: 'UserlandUserAuthenticationFactorEnrollResponse',
+  },
+  { method: 'POST', path: '/auth/factors/enroll', status: '201', schemaName: 'AuthenticationFactorEnrolled' },
+  { method: 'GET', path: '/auth/factors/{id}', status: '200', schemaName: 'AuthenticationFactor' },
+  { method: 'POST', path: '/auth/factors/{id}/challenge', status: '201', schemaName: 'AuthenticationChallenge' },
+  {
+    method: 'POST',
+    path: '/auth/challenges/{id}/verify',
+    status: '201',
+    schemaName: 'AuthenticationChallengeVerifyResponse',
+  },
   // Paginated list envelopes. Several, not one, because each is wrapped by a different
   // route — a route that forgets `list_metadata` is invisible if only its neighbour is checked.
   { method: 'GET', path: '/organizations', status: '200', schemaName: 'OrganizationList' },
@@ -118,6 +142,12 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
   { method: 'GET', path: '/connect/applications', status: '200', schemaName: 'ConnectApplicationList' },
   { method: 'GET', path: '/webhook_endpoints', status: '200', schemaName: 'WebhookEndpointList' },
   { method: 'GET', path: '/events', status: '200', schemaName: 'EventList' },
+  {
+    method: 'GET',
+    path: '/user_management/users/{userlandUserId}/auth_factors',
+    status: '200',
+    schemaName: 'UserlandUserAuthenticationFactorList',
+  },
   {
     method: 'GET',
     path: '/organizations/{organizationId}/api_keys',

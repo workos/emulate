@@ -23,8 +23,9 @@
  * the coverage test, so a catalog entry can't sit unexercised.
  *
  * Scope: response *bodies*, not status codes. Some routes return 200 where the
- * spec says 201 (`/portal/generate_link`, `/widgets/token`); status conformance
- * is a separate axis and this loop only requires a 2xx.
+ * spec says 201 (`/portal/generate_link`, `/widgets/token`,
+ * `/auth/challenges/{id}/verify`); status conformance is a separate axis and
+ * this loop only requires a 2xx.
  */
 import { describe, it, expect, beforeAll } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../core/index.js';
@@ -49,6 +50,8 @@ interface Fixtures {
   clientId: string;
   passwordResetToken: string;
   passwordResetId: string;
+  factorId: string;
+  challengeId: string;
 }
 
 /** Each case names a catalog operation and returns that operation's live response body. */
@@ -108,6 +111,24 @@ const CASES: readonly EnvelopeCase[] = [
     operation: 'GET /sso/jwks/{clientId}',
     request: (app, f) => get(`/sso/jwks/${f.clientId}`)(app),
   },
+  {
+    operation: 'POST /user_management/users/{userlandUserId}/auth_factors',
+    request: (app, f) => post(`/user_management/users/${f.userId}/auth_factors`, { type: 'totp' })(app),
+  },
+  {
+    operation: 'GET /user_management/users/{userlandUserId}/auth_factors',
+    request: (app, f) => get(`/user_management/users/${f.userId}/auth_factors`)(app),
+  },
+  { operation: 'POST /auth/factors/enroll', request: post('/auth/factors/enroll', { type: 'totp' }) },
+  { operation: 'GET /auth/factors/{id}', request: (app, f) => get(`/auth/factors/${f.factorId}`)(app) },
+  {
+    operation: 'POST /auth/factors/{id}/challenge',
+    request: (app, f) => post(`/auth/factors/${f.factorId}/challenge`)(app),
+  },
+  {
+    operation: 'POST /auth/challenges/{id}/verify',
+    request: (app, f) => post(`/auth/challenges/${f.challengeId}/verify`, { code: '123456' })(app),
+  },
   { operation: 'GET /organizations', request: get('/organizations') },
   { operation: 'GET /user_management/users', request: get('/user_management/users') },
   { operation: 'GET /connect/applications', request: get('/connect/applications') },
@@ -164,7 +185,9 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
     const server = createServer(workosPlugin, { port: 0, baseUrl: BASE_URL, apiKeys });
     seedFromConfig(server.store, BASE_URL, {
       organizations: [{ name: 'Acme Corp' }],
-      users: [{ email: 'alice@acme.com', password: 'secret123' }],
+      // A seeded factor, so the factor list is a non-empty page whatever order the cases run in,
+      // and the legacy `/auth/factors/{id}` routes have a factor to read and challenge.
+      users: [{ email: 'alice@acme.com', password: 'secret123', totp: true }],
       permissions: [{ slug: 'posts:read', name: 'Read Posts' }],
       roles: [{ slug: 'member', name: 'Member', permissions: ['posts:read'] }],
       // Subscribed to an event this test never triggers, not the catch-all `[]`. Webhook
@@ -207,6 +230,17 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
     const passwordResetToken = insertPasswordReset('pw_reset_envelope').password_reset_token;
     const passwordResetId = insertPasswordReset('pw_reset_envelope_get').id;
 
+    // Verify spends the challenge it is handed, so it gets one of its own with a known code
+    // rather than the one the challenge case creates.
+    const factorId = ws.authFactors.findOneBy('user_id', userId)!.id;
+    const challengeId = ws.authChallenges.insert({
+      object: 'authentication_challenge',
+      user_id: userId,
+      factor_id: factorId,
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+      code: '123456',
+    }).id;
+
     const fixtures: Fixtures = {
       organizationId,
       userId,
@@ -214,6 +248,8 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       clientId: 'client_billing',
       passwordResetToken,
       passwordResetId,
+      factorId,
+      challengeId,
     };
 
     for (const { operation, request } of CASES) {
