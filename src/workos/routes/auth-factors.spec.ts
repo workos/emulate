@@ -61,9 +61,11 @@ describe('Auth factor routes', () => {
     expect(factor.totp.secret).toBe('JBSWY3DPEHPK3PXP');
     expect(factor.totp.uri).toContain('secret=JBSWY3DPEHPK3PXP');
 
-    const bad = await enroll({ type: 'totp', totp_secret: 'not base32!' });
-    expect(bad.status).toBe(422);
-    expect((await json(bad)).code).toBe('invalid_totp_secret');
+    for (const totp_secret of ['not base32!', 234567]) {
+      const bad = await enroll({ type: 'totp', totp_secret });
+      expect(bad.status, `totp_secret ${JSON.stringify(totp_secret)}`).toBe(422);
+      expect((await json(bad)).code).toBe('invalid_totp_secret');
+    }
   });
 
   it('defaults the TOTP account name to the user email', async () => {

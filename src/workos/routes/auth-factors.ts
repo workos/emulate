@@ -21,8 +21,9 @@ export function authFactorRoutes(ctx: RouteContext): void {
 
     const body = await parseJsonBody(c);
     const type = (body.type as string) ?? 'totp';
-    const secret = body.totp_secret as string | undefined;
-    if (secret !== undefined && !BASE32_SECRET.test(secret)) {
+    const secret = body.totp_secret;
+    // A JSON number of 2–7 digits would pass the regex by coercion and be stored as a number.
+    if (secret !== undefined && (typeof secret !== 'string' || !BASE32_SECRET.test(secret))) {
       throw new WorkOSApiError(422, 'TOTP secret must be a valid Base32 string', 'invalid_totp_secret');
     }
 
