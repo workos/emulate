@@ -736,6 +736,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: appConfig.audience,
           });
         }
+        // Only the type is checked here: host policy lives in assertAllowedRedirectUri and
+        // depends on runtime store state, so a non-string is refused at seed and a
+        // disallowed host is reported by /oauth2/authorize.
+        if (appConfig.login_url != null && typeof appConfig.login_url !== 'string') {
+          errors.push({
+            path: `connectApplications[${index}].login_url`,
+            message: 'login_url must be a string if provided',
+            value: appConfig.login_url,
+          });
+        }
       });
 
       // A client_id identifies exactly one application; duplicates make token exchange

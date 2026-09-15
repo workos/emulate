@@ -310,6 +310,15 @@ describe('Seed config validation for M2M apps and API keys', () => {
     ).toBeDefined();
   });
 
+  it('rejects a non-string connect application login_url', () => {
+    expect(
+      findError(
+        { connectApplications: [{ name: 'Bad', type: 'oauth', login_url: ['http://localhost:3000/login'] as never }] },
+        'connectApplications[0].login_url',
+      ),
+    ).toBeDefined();
+  });
+
   it('rejects two connect applications pinning the same client_id', () => {
     expect(
       findError(
