@@ -905,10 +905,13 @@ export function assertAllowedRedirectUri(uri: string, store: Store): void {
   );
 }
 
-const AUTH_CHALLENGE_EXCLUDE = new Set([...INTERNAL_FIELDS, 'code']);
+// `code` stays server-side as production keeps a TOTP challenge's; `user_id` and `factor_id`
+// are the store's join columns — the spec's challenge names its factor `authentication_factor_id`
+// and carries no user at all.
+const AUTH_CHALLENGE_EXCLUDE = new Set([...INTERNAL_FIELDS, 'code', 'user_id', 'factor_id']);
 
 export function formatAuthChallenge(c: WorkOSAuthenticationChallenge): Record<string, unknown> {
-  return formatEntity(c, { exclude: AUTH_CHALLENGE_EXCLUDE });
+  return { ...formatEntity(c, { exclude: AUTH_CHALLENGE_EXCLUDE }), authentication_factor_id: c.factor_id };
 }
 
 export function formatRole(role: WorkOSRole, ws: WorkOSStore): Record<string, unknown> {

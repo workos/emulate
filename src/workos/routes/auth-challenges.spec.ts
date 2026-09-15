@@ -60,7 +60,11 @@ describe('Auth challenge routes', () => {
     expect(res.status).toBe(201);
     const body = await json(res);
     expect(body.object).toBe('authentication_challenge');
-    expect(body.factor_id).toBe(factor.id);
+    expect(body.authentication_factor_id).toBe(factor.id);
+    // The store's join columns are not part of the spec's challenge.
+    expect(body).not.toHaveProperty('factor_id');
+    expect(body).not.toHaveProperty('user_id');
+    expect(body).not.toHaveProperty('code');
   });
 
   it('verifies a challenge with correct code', async () => {
