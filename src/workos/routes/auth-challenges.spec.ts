@@ -53,7 +53,7 @@ describe('Auth challenge routes', () => {
   it('creates a challenge for a factor', async () => {
     const { factor } = seedUserWithFactor();
 
-    const res = await req(`/user_management/auth_factors/${factor.id}/challenges`, {
+    const res = await req(`/auth/factors/${factor.id}/challenge`, {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -80,7 +80,7 @@ describe('Auth challenge routes', () => {
       code: '999999',
     });
 
-    const res = await req(`/user_management/auth_challenges/${challenge.id}/verify`, {
+    const res = await req(`/auth/challenges/${challenge.id}/verify`, {
       method: 'POST',
       body: JSON.stringify({ code: '999999' }),
     });
@@ -101,7 +101,7 @@ describe('Auth challenge routes', () => {
       code: '111111',
     });
 
-    const res = await req(`/user_management/auth_challenges/${challenge.id}/verify`, {
+    const res = await req(`/auth/challenges/${challenge.id}/verify`, {
       method: 'POST',
       body: JSON.stringify({ code: '000000' }),
     });
@@ -122,7 +122,7 @@ describe('Auth challenge routes', () => {
       code: '123456',
     });
 
-    const res = await req(`/user_management/auth_challenges/${challenge.id}/verify`, {
+    const res = await req(`/auth/challenges/${challenge.id}/verify`, {
       method: 'POST',
       body: JSON.stringify({ code: '123456' }),
     });
@@ -132,7 +132,7 @@ describe('Auth challenge routes', () => {
   });
 
   it('returns 404 for nonexistent factor', async () => {
-    const res = await req('/user_management/auth_factors/auth_factor_bogus/challenges', {
+    const res = await req('/auth/factors/auth_factor_bogus/challenge', {
       method: 'POST',
       body: JSON.stringify({}),
     });

@@ -69,13 +69,4 @@ export function authFactorRoutes(ctx: RouteContext): void {
       list_metadata: { before: null, after: null },
     });
   });
-
-  app.delete('/user_management/auth_factors/:id', (c) => {
-    const factorId = c.req.param('id');
-    const factor = ws.authFactors.get(factorId);
-    if (!factor) throw notFound('AuthenticationFactor');
-
-    ws.authFactors.delete(factor.id);
-    return c.body(null, 204);
-  });
 }

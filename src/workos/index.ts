@@ -18,7 +18,6 @@ import { connectionRoutes } from './routes/connections.js';
 import { ssoRoutes } from './routes/sso.js';
 import { pipeRoutes } from './routes/pipes.js';
 import { connectedAccountRoutes } from './routes/connected-accounts.js';
-import { authChallengeRoutes } from './routes/auth-challenges.js';
 import { invitationRoutes } from './routes/invitations.js';
 import { configRoutes } from './routes/config.js';
 import { userFeatureRoutes } from './routes/user-features.js';
@@ -916,7 +915,6 @@ export const workosPlugin: ServicePlugin = {
     passwordResetRoutes(ctx);
     magicAuthRoutes(ctx);
     authFactorRoutes(ctx);
-    authChallengeRoutes(ctx);
     sessionRoutes(ctx);
     authRoutes(ctx);
     connectionRoutes(ctx);

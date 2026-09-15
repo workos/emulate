@@ -363,7 +363,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
     expect(authWebhooks.length).toBe(0);
 
     // Cleanup: Remove the MFA factor for other tests
-    await api(`/user_management/auth_factors/${factor.id}`, {
+    await api(`/auth/factors/${factor.id}`, {
       method: 'DELETE',
     });
   });
@@ -439,7 +439,7 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
     expectSpecShape(authWebhook);
 
     // Cleanup: Remove the MFA factor for other tests
-    await api(`/user_management/auth_factors/${factor.id}`, {
+    await api(`/auth/factors/${factor.id}`, {
       method: 'DELETE',
     });
   });
