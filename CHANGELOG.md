@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.1](https://github.com/workos/emulate/compare/v0.13.0...v0.13.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* **connect:** complete Standalone Connect logins ([#111](https://github.com/workos/emulate/issues/111)) ([6095131](https://github.com/workos/emulate/commit/60951313a8845edbd3c2009d97e9bdf27cb94528))
+* **mfa:** remove three MFA routes the API does not have ([#115](https://github.com/workos/emulate/issues/115)) ([a780aa0](https://github.com/workos/emulate/commit/a780aa0a16c5c881fbe6050311806e0ecdc349af))
+* **mfa:** return the spec's auth-factor enrollment envelope ([#114](https://github.com/workos/emulate/issues/114)) ([9b438ee](https://github.com/workos/emulate/commit/9b438eebe5b01a1a6954e099e7bdea72aac8e0d3))
+* **users:** match duplicate email creation contract ([#108](https://github.com/workos/emulate/issues/108)) ([c2a609c](https://github.com/workos/emulate/commit/c2a609c94d168634142197672550d12143384433))
+
 ## [0.13.0](https://github.com/workos/emulate/compare/v0.12.0...v0.13.0) (2026-09-09)
 
 
