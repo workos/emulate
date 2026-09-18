@@ -183,8 +183,12 @@ export interface WorkOSSeedDirectory {
   state?: 'linked' | 'unlinked' | 'invalid_credentials';
   domain?: string;
   external_key?: string;
-  /** Group names. A directory user joins these by name; ids are generated at startup. */
-  groups?: string[];
+  /**
+   * Directory groups. A bare string declares a group with no role mapping; the object form
+   * maps the group to an organization role, the way a directory's role assignments do in
+   * the dashboard.
+   */
+  groups?: Array<string | { name: string; role?: string }>;
   users?: Array<{
     email: string;
     first_name?: string;
@@ -192,9 +196,10 @@ export interface WorkOSSeedDirectory {
     username?: string;
     idp_id?: string;
     state?: 'active' | 'inactive';
-    role?: string;
     /** Names from this directory's `groups`. */
     groups?: string[];
+    /** Overrides the role mapped from `groups`. */
+    role?: string;
     custom_attributes?: Record<string, unknown>;
   }>;
 }
@@ -662,7 +667,14 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       // Groups are inserted first: a seeded user embeds the groups it belongs to, and the
       // embedded copy carries the generated id, so the group must exist to be joined.
       const groupsByName = new Map<string, WorkOSDirectoryGroup>();
-      for (const groupName of dirConfig.groups ?? []) {
+      // Declaration order is the mapping's priority order — see roleForGroups below.
+      const roleByGroupName = new Map<string, string>();
+      const declaredGroups: string[] = [];
+      for (const entry of dirConfig.groups ?? []) {
+        const groupName = typeof entry === 'string' ? entry : entry.name;
+        const mappedRole = typeof entry === 'string' ? undefined : entry.role;
+        declaredGroups.push(groupName);
+        if (mappedRole) roleByGroupName.set(groupName, mappedRole);
         groupsByName.set(
           groupName,
           ws.directoryGroups.insert({
@@ -676,7 +688,18 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         );
       }
 
+      /**
+       * The role a directory's group mapping resolves to. A user in several mapped groups
+       * takes the first in declaration order, which is the emulator's stand-in for the
+       * dashboard's role-assignment priority.
+       */
+      const roleForGroups = (memberOf: string[]): string | undefined => {
+        const mapped = declaredGroups.find((name) => memberOf.includes(name) && roleByGroupName.has(name));
+        return mapped ? roleByGroupName.get(mapped) : undefined;
+      };
+
       for (const u of dirConfig.users ?? []) {
+        const role = u.role ?? roleForGroups(u.groups ?? []);
         const memberships = (u.groups ?? []).map((groupName) => {
           const group = groupsByName.get(groupName);
           if (!group) {
@@ -697,11 +720,25 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
           email: u.email,
           username: u.username ?? null,
           state: u.state ?? 'active',
-          role: u.role ? { slug: u.role } : null,
+          role: role ? { slug: role } : null,
           custom_attributes: u.custom_attributes ?? {},
           raw_attributes: { email: u.email },
           groups: memberships,
         });
+
+        // Production resolves the mapping and stamps the role on the organization
+        // membership, which is what an app reads — the directory user is only the record it
+        // was derived from. Seeding a directory provisions no AuthKit user, so this applies
+        // only where `users` and `memberships` already put one in the org.
+        if (role) {
+          const authKitUser = findUserByEmail(ws, u.email);
+          const membership = authKitUser
+            ? ws.organizationMemberships.findBy('organization_id', org.id).find((m) => m.user_id === authKitUser.id)
+            : undefined;
+          if (membership) {
+            ws.organizationMemberships.update(membership.id, { role: { slug: role } });
+          }
+        }
       }
     }
   }

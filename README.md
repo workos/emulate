@@ -595,7 +595,13 @@ directories:
     type: okta scim v2.0
     domain: acme.com
     groups:
-      - Engineering
+      # Object form maps the group to an organization role, the way a directory's role
+      # assignments do in the dashboard. A bare string declares a group with no mapping.
+      - name: Admins
+        role: admin
+      - name: Engineering
+        role: member
+      - Contractors
     users:
       - email: dev@acme.com
         first_name: Dev
@@ -604,11 +610,15 @@ directories:
           - Engineering
 ```
 
-A seeded directory user is a Directory Sync record and nothing else: it creates no AuthKit
-user and no organization membership. Production resolves a directory group to an
-organization role through dashboard configuration and stamps it on the membership, so a
-directory user's `role` here is that outcome, not a mapping — seed `users` and
-`memberships` for the AuthKit side.
+A user in several mapped groups takes the first in declaration order, the emulator's
+stand-in for the dashboard's role-assignment priority; a user's own `role` overrides the
+mapping. The resolved role is set on the directory user and, where `users` and
+`memberships` already put that person in the organization, on their organization
+membership — which is what an app reads, and where production puts it too.
+
+Seeding a directory creates no AuthKit user and no organization membership: seed `users`
+and `memberships` for those. A membership still reports `directory_managed: false`, which
+the emulator hardcodes.
 
 `state` defaults to `linked` and `type` to `generic scim v2.0`. Seeding emits `dsync.activated`
 and `dsync.user.created`, queryable at `GET /events`. They are not delivered to a seeded webhook

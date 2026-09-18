@@ -145,7 +145,7 @@ export const FEATURES: FeatureDef[] = [
     tags: ['directories', 'directory-users', 'directory-groups'],
     seedKeys: ['directories'],
     notes:
-      'Read-only over HTTP, as production is: a directory is connected in the dashboard, so there is no POST route to emulate. Seed `directories` to get one, with its groups and users; seeding emits `dsync.activated` and `dsync.user.created` (queryable at `GET /events`, not delivered — seeded endpoints register after), and `DELETE /directories/:id` emits a delivered `dsync.deleted`. `dsync.group.user_added` / `user_removed` are never emitted — there is no group membership mutation surface.',
+      'Read-only over HTTP, as production is: a directory is connected in the dashboard, so there is no POST route to emulate. Seed `directories` to get one, with its groups, its users, and group-to-role mappings resolved onto the organization membership; seeding emits `dsync.activated` and `dsync.user.created` (queryable at `GET /events`, not delivered — seeded endpoints register after), and `DELETE /directories/:id` emits a delivered `dsync.deleted`. `dsync.group.user_added` / `user_removed` are never emitted — there is no group membership mutation surface.',
   },
   {
     name: 'Multi-Factor Auth',

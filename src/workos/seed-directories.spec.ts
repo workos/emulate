@@ -109,6 +109,119 @@ describe('Seeding directories', () => {
     expect(names).toContain('dsync.user.created');
   });
 
+  it('maps a group to a role, on the directory user and the organization membership', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        users: [{ email: 'dev@acme.com' }, { email: 'boss@acme.com' }, { email: 'temp@acme.com' }],
+        organizations: [
+          {
+            name: 'Acme Corp',
+            memberships: [{ email: 'dev@acme.com' }, { email: 'boss@acme.com' }, { email: 'temp@acme.com' }],
+          },
+        ],
+        directories: [
+          {
+            name: 'Acme Okta',
+            organization: 'Acme Corp',
+            // Declaration order is the priority order: Admins wins for a user in both.
+            groups: [{ name: 'Admins', role: 'admin' }, { name: 'Engineering', role: 'member' }, 'Contractors'],
+            users: [
+              { email: 'dev@acme.com', groups: ['Engineering'] },
+              { email: 'boss@acme.com', groups: ['Engineering', 'Admins'] },
+              { email: 'temp@acme.com', groups: ['Contractors'] },
+            ],
+          },
+        ],
+      },
+    });
+
+    const users = await get(`${emulator.url}/directory_users`, emulator.apiKey);
+    const roleOf = (email: string) => users.data.find((u: any) => u.email === email).role;
+    expect(roleOf('dev@acme.com')).toEqual({ slug: 'member' });
+    expect(roleOf('boss@acme.com')).toEqual({ slug: 'admin' });
+    // An unmapped group leaves the user without a role, as an unmapped group does upstream.
+    expect(roleOf('temp@acme.com')).toBeNull();
+
+    // The mapped role reaches the organization membership, which is what an app reads.
+    const orgs = await get(`${emulator.url}/organizations`, emulator.apiKey);
+    const memberships = await get(
+      `${emulator.url}/user_management/organization_memberships?organization_id=${orgs.data[0].id}`,
+      emulator.apiKey,
+    );
+    const membershipRole = (email: string) => memberships.data.find((m: any) => m.user.email === email)?.role?.slug;
+    expect(membershipRole('dev@acme.com')).toBe('member');
+    expect(membershipRole('boss@acme.com')).toBe('admin');
+    // Unmapped, so the membership keeps the role its own seed gave it.
+    expect(membershipRole('temp@acme.com')).toBe('member');
+  });
+
+  it('lets an explicit user role override the group mapping', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        directories: [
+          {
+            name: 'Acme Okta',
+            organization: 'Acme Corp',
+            groups: [{ name: 'Engineering', role: 'member' }],
+            users: [{ email: 'dev@acme.com', groups: ['Engineering'], role: 'admin' }],
+          },
+        ],
+      },
+    });
+
+    const users = await get(`${emulator.url}/directory_users`, emulator.apiKey);
+    expect(users.data[0].role).toEqual({ slug: 'admin' });
+  });
+
+  it('reports malformed entries instead of throwing', () => {
+    const cases: Array<[string, unknown, string]> = [
+      ['a null directory', { directories: [null] }, 'directories[0]'],
+      [
+        'a scalar groups value',
+        { organizations: [{ name: 'A' }], directories: [{ name: 'D', organization: 'A', groups: 'Engineering' }] },
+        'directories[0].groups',
+      ],
+      [
+        'a null group entry',
+        { organizations: [{ name: 'A' }], directories: [{ name: 'D', organization: 'A', groups: [null] }] },
+        'directories[0].groups[0]',
+      ],
+      [
+        'a null user',
+        { organizations: [{ name: 'A' }], directories: [{ name: 'D', organization: 'A', users: [null] }] },
+        'directories[0].users[0]',
+      ],
+      [
+        'a scalar user groups value',
+        {
+          organizations: [{ name: 'A' }],
+          directories: [{ name: 'D', organization: 'A', users: [{ email: 'a@b.com', groups: 'Engineering' }] }],
+        },
+        'directories[0].users[0].groups',
+      ],
+      [
+        'an unsupported user state',
+        {
+          organizations: [{ name: 'A' }],
+          directories: [{ name: 'D', organization: 'A', users: [{ email: 'a@b.com', state: 'suspended' }] }],
+        },
+        'directories[0].users[0].state',
+      ],
+    ];
+
+    for (const [name, config, expectedPath] of cases) {
+      const result = validateSeedConfig(config as never);
+      expect(result.valid, name).toBe(false);
+      expect(
+        result.errors.map((e) => e.path),
+        name,
+      ).toContain(expectedPath);
+    }
+  });
+
   it('rejects a user group that the directory does not declare', () => {
     const result = validateSeedConfig({
       organizations: [{ name: 'Acme Corp' }],

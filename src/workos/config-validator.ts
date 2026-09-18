@@ -444,6 +444,16 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
       });
     } else {
       config.directories.forEach((dir, index) => {
+        // A non-object entry (e.g. `directories: [null]` from a YAML typo) would throw on
+        // the property reads below; record a structured error instead of crashing startup.
+        if (dir === null || typeof dir !== 'object') {
+          errors.push({
+            path: `directories[${index}]`,
+            message: 'each directory must be an object',
+            value: dir,
+          });
+          return;
+        }
         if (!dir.name || typeof dir.name !== 'string') {
           errors.push({
             path: `directories[${index}].name`,
@@ -457,7 +467,11 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             message: 'organization is required and must be a string',
             value: dir.organization,
           });
-        } else if (!config.organizations?.some((org) => org.name === dir.organization)) {
+        } else if (
+          !(Array.isArray(config.organizations) ? config.organizations : []).some(
+            (org) => org !== null && typeof org === 'object' && org.name === dir.organization,
+          )
+        ) {
           // seedFromConfig skips a directory whose organization does not resolve, so without
           // this a typo silently produces no directory at all.
           errors.push({
@@ -473,20 +487,68 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: dir.state,
           });
         }
-        // A user's group names are resolved to generated ids at seed time, so an unknown
-        // name would throw there. Reject it here, where the error names the config path.
+
         const groupNames = new Set<string>();
-        dir.groups?.forEach((groupName) => {
-          if (groupNames.has(groupName)) {
-            errors.push({
-              path: `directories[${index}].groups`,
-              message: `duplicate group name '${groupName}'`,
-              value: groupName,
-            });
-          }
-          groupNames.add(groupName);
-        });
+        if (dir.groups !== undefined && !Array.isArray(dir.groups)) {
+          errors.push({
+            path: `directories[${index}].groups`,
+            message: 'groups must be an array of strings',
+            value: dir.groups,
+          });
+        } else {
+          dir.groups?.forEach((entry, groupIndex) => {
+            const groupName = typeof entry === 'string' ? entry : entry?.name;
+            if (entry === null || (typeof entry !== 'string' && typeof entry !== 'object')) {
+              errors.push({
+                path: `directories[${index}].groups[${groupIndex}]`,
+                message: 'each group must be a name or an object with a name',
+                value: entry,
+              });
+              return;
+            }
+            if (typeof groupName !== 'string' || !groupName) {
+              errors.push({
+                path: `directories[${index}].groups[${groupIndex}].name`,
+                message: 'name is required and must be a non-empty string',
+                value: groupName,
+              });
+              return;
+            }
+            if (typeof entry === 'object' && entry.role !== undefined && typeof entry.role !== 'string') {
+              errors.push({
+                path: `directories[${index}].groups[${groupIndex}].role`,
+                message: 'role must be a string if provided',
+                value: entry.role,
+              });
+            }
+            if (groupNames.has(groupName)) {
+              errors.push({
+                path: `directories[${index}].groups`,
+                message: `duplicate group name '${groupName}'`,
+                value: groupName,
+              });
+            }
+            groupNames.add(groupName);
+          });
+        }
+
+        if (dir.users !== undefined && !Array.isArray(dir.users)) {
+          errors.push({
+            path: `directories[${index}].users`,
+            message: 'users must be an array',
+            value: dir.users,
+          });
+          return;
+        }
         dir.users?.forEach((user, userIndex) => {
+          if (user === null || typeof user !== 'object') {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}]`,
+              message: 'each directory user must be an object',
+              value: user,
+            });
+            return;
+          }
           if (!user.email || typeof user.email !== 'string') {
             errors.push({
               path: `directories[${index}].users[${userIndex}].email`,
@@ -494,6 +556,23 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
               value: user.email,
             });
           }
+          if (user.state && !['active', 'inactive'].includes(user.state)) {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].state`,
+              message: 'state must be "active" or "inactive" if provided',
+              value: user.state,
+            });
+          }
+          if (user.groups !== undefined && !Array.isArray(user.groups)) {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].groups`,
+              message: 'groups must be an array of strings',
+              value: user.groups,
+            });
+            return;
+          }
+          // A user's group names are resolved to generated ids at seed time, so an unknown
+          // name would throw there. Reject it here, where the error names the config path.
           user.groups?.forEach((groupName) => {
             if (!groupNames.has(groupName)) {
               errors.push({
