@@ -126,9 +126,9 @@ export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStor
   // `custom_attributes`, `roles`, and an embedded `user`. The emulator previously omitted
   // them, which breaks strict SDK deserializers (e.g. the WorkOS Python SDK's
   // `OrganizationMembership.from_dict`, whose required-key lookup raises on the first
-  // missing field). `directory_managed` is `false` for any API-created membership (no
-  // directory-sync surface), `custom_attributes` defaults to `{}`, `roles` is the single
-  // primary role, and the `user` is resolved from `user_id`.
+  // missing field). `directory_managed` is stored on the membership — seeding a directory
+  // sets it — `custom_attributes` defaults to `{}`, `roles` is the single primary role, and
+  // the `user` is resolved from `user_id`.
   const user = ws.users.get(m.user_id);
   if (!user) {
     // Every insertion path guarantees a live user (the create route 404s an unknown
@@ -142,7 +142,7 @@ export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStor
   }
   return {
     ...formatEntity(m),
-    directory_managed: false,
+    directory_managed: m.directory_managed ?? false,
     custom_attributes: {},
     roles: [m.role],
     user: formatUser(user),
@@ -156,7 +156,7 @@ export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStor
 export function formatMembershipEvent(m: WorkOSOrganizationMembership): Record<string, unknown> {
   return {
     ...formatEntity(m),
-    directory_managed: false,
+    directory_managed: m.directory_managed ?? false,
     custom_attributes: {},
   };
 }
@@ -175,7 +175,7 @@ export function formatMembershipBase(m: WorkOSOrganizationMembership): Record<st
     user_id: m.user_id,
     organization_id: m.organization_id,
     status: m.status,
-    directory_managed: false,
+    directory_managed: m.directory_managed ?? false,
     custom_attributes: {},
     created_at: m.created_at,
     updated_at: m.updated_at,

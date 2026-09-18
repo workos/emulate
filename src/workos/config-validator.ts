@@ -239,6 +239,12 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
               value: org.memberships,
             });
           } else {
+            // `POST /user_management/organization_memberships` 409s a second non-inactive
+            // membership for the same user, so seeding must not create one either: every
+            // lookup that joins a user to their membership in an organization reads the
+            // first match and would otherwise leave the second stale. Repeated `inactive`
+            // entries are legal — deactivating and re-adding leaves exactly that trail.
+            const liveMemberEmails = new Set<string>();
             org.memberships.forEach((membership, mIndex) => {
               // The pre-rename key: it read as "pass a user_... id", which can never
               // resolve (ids are generated at startup) — point at `email` instead.
@@ -277,6 +283,17 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
                   message: 'status must be "active", "inactive", or "pending" if provided',
                   value: membership.status,
                 });
+              }
+              if (memberEmail.ok && membership.status !== 'inactive') {
+                const key = memberEmail.email.toLowerCase();
+                if (liveMemberEmails.has(key)) {
+                  errors.push({
+                    path: `organizations[${index}].memberships[${mIndex}].email`,
+                    message: `duplicate membership for '${membership.email}' — an organization holds at most one membership per user that is not inactive`,
+                    value: membership.email,
+                  });
+                }
+                liveMemberEmails.add(key);
               }
             });
           }
@@ -430,6 +447,172 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: conn.state,
           });
         }
+      });
+    }
+  }
+
+  // Validate directories
+  if (config.directories) {
+    if (!Array.isArray(config.directories)) {
+      errors.push({
+        path: 'directories',
+        message: 'directories must be an array',
+        value: config.directories,
+      });
+    } else {
+      config.directories.forEach((dir, index) => {
+        // A non-object entry (e.g. `directories: [null]` from a YAML typo) would throw on
+        // the property reads below; record a structured error instead of crashing startup.
+        if (dir === null || typeof dir !== 'object') {
+          errors.push({
+            path: `directories[${index}]`,
+            message: 'each directory must be an object',
+            value: dir,
+          });
+          return;
+        }
+        if (!dir.name || typeof dir.name !== 'string') {
+          errors.push({
+            path: `directories[${index}].name`,
+            message: 'name is required and must be a string',
+            value: dir.name,
+          });
+        }
+        if (!dir.organization || typeof dir.organization !== 'string') {
+          errors.push({
+            path: `directories[${index}].organization`,
+            message: 'organization is required and must be a string',
+            value: dir.organization,
+          });
+        } else if (
+          !(Array.isArray(config.organizations) ? config.organizations : []).some(
+            (org) => org !== null && typeof org === 'object' && org.name === dir.organization,
+          )
+        ) {
+          // seedFromConfig skips a directory whose organization does not resolve, so without
+          // this a typo silently produces no directory at all.
+          errors.push({
+            path: `directories[${index}].organization`,
+            message: `organization '${dir.organization}' is not declared in organizations`,
+            value: dir.organization,
+          });
+        }
+        if (dir.state && !['linked', 'unlinked', 'invalid_credentials'].includes(dir.state)) {
+          errors.push({
+            path: `directories[${index}].state`,
+            message: 'state must be "linked", "unlinked", or "invalid_credentials" if provided',
+            value: dir.state,
+          });
+        }
+
+        const groupNames = new Set<string>();
+        if (dir.groups !== undefined && !Array.isArray(dir.groups)) {
+          errors.push({
+            path: `directories[${index}].groups`,
+            message: 'groups must be an array of strings',
+            value: dir.groups,
+          });
+        } else {
+          dir.groups?.forEach((entry, groupIndex) => {
+            const groupName = typeof entry === 'string' ? entry : entry?.name;
+            if (entry === null || (typeof entry !== 'string' && typeof entry !== 'object')) {
+              errors.push({
+                path: `directories[${index}].groups[${groupIndex}]`,
+                message: 'each group must be a name or an object with a name',
+                value: entry,
+              });
+              return;
+            }
+            if (typeof groupName !== 'string' || !groupName) {
+              errors.push({
+                path: `directories[${index}].groups[${groupIndex}].name`,
+                message: 'name is required and must be a non-empty string',
+                value: groupName,
+              });
+              return;
+            }
+            if (typeof entry === 'object' && entry.role !== undefined && typeof entry.role !== 'string') {
+              errors.push({
+                path: `directories[${index}].groups[${groupIndex}].role`,
+                message: 'role must be a string if provided',
+                value: entry.role,
+              });
+            }
+            if (groupNames.has(groupName)) {
+              errors.push({
+                path: `directories[${index}].groups`,
+                message: `duplicate group name '${groupName}'`,
+                value: groupName,
+              });
+            }
+            groupNames.add(groupName);
+          });
+        }
+
+        if (dir.users !== undefined && !Array.isArray(dir.users)) {
+          errors.push({
+            path: `directories[${index}].users`,
+            message: 'users must be an array',
+            value: dir.users,
+          });
+          return;
+        }
+        const userEmails = new Set<string>();
+        dir.users?.forEach((user, userIndex) => {
+          if (user === null || typeof user !== 'object') {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}]`,
+              message: 'each directory user must be an object',
+              value: user,
+            });
+            return;
+          }
+          const email = seedEmail(user.email);
+          if (!email.ok) {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].email`,
+              message:
+                email.problem === 'malformed'
+                  ? 'email must be a valid email address'
+                  : 'email is required and must be a string',
+              value: user.email,
+            });
+          } else if (userEmails.has(email.email.toLowerCase())) {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].email`,
+              message: `duplicate directory user '${user.email}'`,
+              value: user.email,
+            });
+          } else {
+            userEmails.add(email.email.toLowerCase());
+          }
+          if (user.state && !['active', 'inactive'].includes(user.state)) {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].state`,
+              message: 'state must be "active" or "inactive" if provided',
+              value: user.state,
+            });
+          }
+          if (user.groups !== undefined && !Array.isArray(user.groups)) {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].groups`,
+              message: 'groups must be an array of strings',
+              value: user.groups,
+            });
+            return;
+          }
+          // A user's group names are resolved to generated ids at seed time, so an unknown
+          // name would throw there. Reject it here, where the error names the config path.
+          user.groups?.forEach((groupName) => {
+            if (!groupNames.has(groupName)) {
+              errors.push({
+                path: `directories[${index}].users[${userIndex}].groups`,
+                message: `group '${groupName}' is not declared in directories[${index}].groups`,
+                value: groupName,
+              });
+            }
+          });
+        });
       });
     }
   }

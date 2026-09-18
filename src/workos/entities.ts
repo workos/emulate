@@ -44,6 +44,8 @@ export interface WorkOSOrganizationMembership extends Entity {
   status: 'active' | 'inactive' | 'pending';
   external_id: string | null;
   metadata: Record<string, string>;
+  /** True when Directory Sync owns this membership's role. Absent means false. */
+  directory_managed?: boolean;
 }
 
 /** An AuthKit group within an organization (`/organizations/{org}/groups`). */

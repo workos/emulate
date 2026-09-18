@@ -578,6 +578,62 @@ only registers values for authentication without creating resources. A map-form 
 requests but has no `api_key` resource behind it, so validating one returns `{"api_key": null}` —
 use the array form for keys your code validates.
 
+### Directory Sync
+
+Production connects a directory through the dashboard or Admin Portal — there is no
+create-directory endpoint — so the `directories` seed key is how one comes into existence at
+all. A directory joins its organization by name, the same way `connections` do, and its users
+join the directory's own groups by name.
+
+```yaml
+organizations:
+  - name: Acme Corp
+
+directories:
+  - name: Acme Okta
+    organization: Acme Corp
+    type: okta scim v2.0
+    domain: acme.com
+    groups:
+      # Object form maps the group to an organization role, the way a directory's role
+      # assignments do in the dashboard. A bare string declares a group with no mapping.
+      - name: Admins
+        role: admin
+      - name: Engineering
+        role: member
+      - Contractors
+    users:
+      - email: dev@acme.com
+        first_name: Dev
+        last_name: Eloper
+        groups:
+          - Engineering
+```
+
+A user in several mapped groups takes the first in declaration order, the emulator's
+stand-in for the dashboard's role-assignment priority; a user's own `role` overrides the
+mapping. The resolved role is set on the directory user and, where `users` and
+`memberships` already put that person in the organization, on their organization
+membership — which is what an app reads, and where production puts it too.
+
+A membership matching a seeded directory user reports `directory_managed: true`, whether or
+not a role mapped. Where two directories in one organization map the same person, the first
+in declaration order keeps the role.
+
+`DELETE /directories/:id` clears `directory_managed` only once no directory in the
+organization still lists that person. While one does, the membership stays managed, and the
+first surviving directory that maps a role takes the role over. A membership no directory
+ever claimed is left alone, so an application-owned membership survives an unrelated
+directory being deleted.
+
+Seeding a directory creates no AuthKit user and no organization membership: seed `users`
+and `memberships` for those.
+
+`state` defaults to `linked` and `type` to `generic scim v2.0`. Seeding emits `dsync.activated`
+and `dsync.user.created`, queryable at `GET /events`. They are not delivered to a seeded webhook
+endpoint, which registers after them — as with every other seeded resource. `DELETE
+/directories/:id` emits `dsync.deleted`, which is delivered.
+
 ### Feature Flags
 
 Production has no create-flag endpoint — flags are made in the dashboard — so the `featureFlags`
@@ -1442,7 +1498,9 @@ organizations:
         state: verified
     memberships:
       # Reference users by the email declared in `users` above — user ids are
-      # generated at startup, so memberships are joined by email.
+      # generated at startup, so memberships are joined by email. One person gets
+      # one membership per organization that is not `inactive`, the same rule
+      # POST /user_management/organization_memberships answers 409 for.
       - email: admin@acme.com
         role: admin
         status: active

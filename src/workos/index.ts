@@ -83,6 +83,8 @@ import {
 } from './helpers.js';
 import type {
   WorkOSConnectionType,
+  WorkOSDirectoryGroup,
+  WorkOSOrganizationMembership,
   PipeProvider,
   PipeConnectionStatus,
   ConnectedAccountState,
@@ -171,6 +173,36 @@ export interface WorkOSSeedUser {
    * on restart.
    */
   totp?: boolean;
+}
+
+export interface WorkOSSeedDirectory {
+  name: string;
+  /** Organization name, the same lookup key `connections` uses. */
+  organization: string;
+  /** Provider descriptor, e.g. `okta scim v2.0`. Free text, as the spec's list is open. */
+  type?: string;
+  state?: 'linked' | 'unlinked' | 'invalid_credentials';
+  domain?: string;
+  external_key?: string;
+  /**
+   * Directory groups. A bare string declares a group with no role mapping; the object form
+   * maps the group to an organization role, the way a directory's role assignments do in
+   * the dashboard.
+   */
+  groups?: Array<string | { name: string; role?: string }>;
+  users?: Array<{
+    email: string;
+    first_name?: string;
+    last_name?: string;
+    username?: string;
+    idp_id?: string;
+    state?: 'active' | 'inactive';
+    /** Names from this directory's `groups`. */
+    groups?: string[];
+    /** Overrides the role mapped from `groups`. */
+    role?: string;
+    custom_attributes?: Record<string, unknown>;
+  }>;
 }
 
 export interface WorkOSSeedConnection {
@@ -418,6 +450,12 @@ export interface WorkOSSeedConfig {
    */
   featureFlags?: WorkOSSeedFeatureFlag[];
   /**
+   * Directories, their groups and their users. Production has no create-directory
+   * endpoint — a directory is connected through the dashboard or Admin Portal — so
+   * seeding is the only way to get one into the emulator.
+   */
+  directories?: WorkOSSeedDirectory[];
+  /**
    * Agent blueprints, so a test suite can mint agent tokens without a create call. Instances
    * and sessions are never seeded: they only come into being by minting.
    */
@@ -607,6 +645,108 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
             groups: p.groups ?? [],
             raw_attributes: { email: p.email },
           });
+        }
+      }
+    }
+  }
+
+  if (config.directories) {
+    // First declaration wins: two directories in one organization can list the same
+    // person, and last-write-wins would make their access depend on array order.
+    const rolesApplied = new Set<string>();
+    for (const dirConfig of config.directories) {
+      const org = ws.organizations.findOneBy('name', dirConfig.organization);
+      if (!org) continue;
+
+      const directory = ws.directories.insert({
+        object: 'directory',
+        organization_id: org.id,
+        name: dirConfig.name,
+        domain: dirConfig.domain ?? null,
+        type: dirConfig.type ?? 'generic scim v2.0',
+        state: dirConfig.state ?? 'linked',
+        external_key: dirConfig.external_key ?? null,
+      });
+
+      // Groups are inserted first: a seeded user embeds the groups it belongs to, and the
+      // embedded copy carries the generated id, so the group must exist to be joined.
+      const groupsByName = new Map<string, WorkOSDirectoryGroup>();
+      // Declaration order is the mapping's priority order — see roleForGroups below.
+      const roleByGroupName = new Map<string, string>();
+      const declaredGroups: string[] = [];
+      for (const entry of dirConfig.groups ?? []) {
+        const groupName = typeof entry === 'string' ? entry : entry.name;
+        const mappedRole = typeof entry === 'string' ? undefined : entry.role;
+        declaredGroups.push(groupName);
+        if (mappedRole) roleByGroupName.set(groupName, mappedRole);
+        groupsByName.set(
+          groupName,
+          ws.directoryGroups.insert({
+            object: 'directory_group',
+            directory_id: directory.id,
+            organization_id: org.id,
+            idp_id: `idp_${generateId('dir_grp')}`,
+            name: groupName,
+            raw_attributes: {},
+          }),
+        );
+      }
+
+      /**
+       * The role a directory's group mapping resolves to. A user in several mapped groups
+       * takes the first in declaration order, which is the emulator's stand-in for the
+       * dashboard's role-assignment priority.
+       */
+      const roleForGroups = (memberOf: string[]): string | undefined => {
+        const mapped = declaredGroups.find((name) => memberOf.includes(name) && roleByGroupName.has(name));
+        return mapped ? roleByGroupName.get(mapped) : undefined;
+      };
+
+      for (const u of dirConfig.users ?? []) {
+        const role = u.role ?? roleForGroups(u.groups ?? []);
+        const memberships = (u.groups ?? []).map((groupName) => {
+          const group = groupsByName.get(groupName);
+          if (!group) {
+            throw new Error(
+              `Seed directory '${dirConfig.name}' user '${u.email}' references unknown group '${groupName}'`,
+            );
+          }
+          return { object: 'directory_group' as const, id: group.id, name: group.name };
+        });
+
+        ws.directoryUsers.insert({
+          object: 'directory_user',
+          directory_id: directory.id,
+          organization_id: org.id,
+          idp_id: u.idp_id ?? `idp_${generateId('dir_usr')}`,
+          first_name: u.first_name ?? null,
+          last_name: u.last_name ?? null,
+          email: u.email.trim(),
+          username: u.username ?? null,
+          state: u.state ?? 'active',
+          role: role ? { slug: role } : null,
+          custom_attributes: u.custom_attributes ?? {},
+          raw_attributes: { email: u.email.trim() },
+          groups: memberships,
+        });
+
+        // Production resolves the mapping and stamps the role on the organization
+        // membership, which is what an app reads — the directory user is only the record it
+        // was derived from. Seeding a directory provisions no AuthKit user, so this applies
+        // only where `users` and `memberships` already put one in the org.
+        const authKitUser = findUserByEmail(ws, u.email);
+        const membership = authKitUser
+          ? ws.organizationMemberships
+              .findBy('organization_id', org.id)
+              .find((m) => m.user_id === authKitUser.id && m.status !== 'inactive')
+          : undefined;
+        if (membership) {
+          const updates: Partial<WorkOSOrganizationMembership> = { directory_managed: true };
+          if (role && !rolesApplied.has(membership.id)) {
+            rolesApplied.add(membership.id);
+            updates.role = { slug: role };
+          }
+          ws.organizationMemberships.update(membership.id, updates);
         }
       }
     }

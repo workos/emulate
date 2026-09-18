@@ -220,6 +220,38 @@ describe('Seeding organization memberships', () => {
       expect(error.message).toContain('unique');
     });
 
+    // The invariant every membership lookup relies on: `POST
+    // /user_management/organization_memberships` answers 409 for a second non-inactive
+    // membership, so a seed that got one through would leave every join by user id reading
+    // the first row and silently ignoring the second.
+    it('rejects two non-inactive memberships for one user in an organization', () => {
+      const error = findError(
+        {
+          users: [{ email: 'admin@acme.com' }],
+          organizations: [{ name: 'Acme', memberships: [{ email: 'admin@acme.com' }, { email: 'Admin@Acme.com' }] }],
+        },
+        'organizations[0].memberships[1].email',
+      );
+      expect(error.message).toContain('at most one membership per user that is not inactive');
+    });
+
+    it('accepts an inactive membership alongside a live one for the same user', () => {
+      const result = validateSeedConfig({
+        users: [{ email: 'admin@acme.com' }],
+        organizations: [
+          {
+            name: 'Acme',
+            memberships: [
+              { email: 'admin@acme.com', status: 'inactive' },
+              { email: 'admin@acme.com', status: 'active' },
+            ],
+          },
+        ],
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.valid).toBe(true);
+    });
+
     it('accepts a membership referencing a seeded user by email', () => {
       const result = validateSeedConfig({
         users: [{ email: 'admin@acme.com' }],
