@@ -616,9 +616,12 @@ mapping. The resolved role is set on the directory user and, where `users` and
 `memberships` already put that person in the organization, on their organization
 membership — which is what an app reads, and where production puts it too.
 
+A membership matching a seeded directory user reports `directory_managed: true`, whether or
+not a role mapped, and `DELETE /directories/:id` clears it again. Where two directories in
+one organization map the same person, the first in declaration order keeps the role.
+
 Seeding a directory creates no AuthKit user and no organization membership: seed `users`
-and `memberships` for those. A membership still reports `directory_managed: false`, which
-the emulator hardcodes.
+and `memberships` for those.
 
 `state` defaults to `linked` and `type` to `generic scim v2.0`. Seeding emits `dsync.activated`
 and `dsync.user.created`, queryable at `GET /events`. They are not delivered to a seeded webhook

@@ -540,6 +540,7 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           });
           return;
         }
+        const userEmails = new Set<string>();
         dir.users?.forEach((user, userIndex) => {
           if (user === null || typeof user !== 'object') {
             errors.push({
@@ -549,12 +550,24 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             });
             return;
           }
-          if (!user.email || typeof user.email !== 'string') {
+          const email = seedEmail(user.email);
+          if (!email.ok) {
             errors.push({
               path: `directories[${index}].users[${userIndex}].email`,
-              message: 'email is required and must be a string',
+              message:
+                email.problem === 'malformed'
+                  ? 'email must be a valid email address'
+                  : 'email is required and must be a string',
               value: user.email,
             });
+          } else if (userEmails.has(email.email.toLowerCase())) {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].email`,
+              message: `duplicate directory user '${user.email}'`,
+              value: user.email,
+            });
+          } else {
+            userEmails.add(email.email.toLowerCase());
           }
           if (user.state && !['active', 'inactive'].includes(user.state)) {
             errors.push({

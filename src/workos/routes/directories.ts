@@ -1,6 +1,12 @@
 import { type RouteContext, notFound, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatDirectory, formatDirectoryUser, formatDirectoryGroup, formatListResponse } from '../helpers.js';
+import {
+  formatDirectory,
+  formatDirectoryUser,
+  formatDirectoryGroup,
+  formatListResponse,
+  findUserByEmail,
+} from '../helpers.js';
 
 export function directoryRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -36,6 +42,20 @@ export function directoryRoutes(ctx: RouteContext): void {
   app.delete('/directories/:id', (c) => {
     const dir = ws.directories.get(c.req.param('id'));
     if (!dir) throw notFound('Directory');
+
+    // Release the memberships this directory managed, so an app can exercise
+    // "directory disconnected, the membership is the app's again".
+    for (const u of ws.directoryUsers.findBy('directory_id', dir.id)) {
+      if (!u.email) continue;
+      const authKitUser = findUserByEmail(ws, u.email);
+      if (!authKitUser) continue;
+      const membership = ws.organizationMemberships
+        .findBy('organization_id', dir.organization_id ?? '')
+        .find((m) => m.user_id === authKitUser.id);
+      if (membership?.directory_managed) {
+        ws.organizationMemberships.update(membership.id, { directory_managed: false });
+      }
+    }
 
     ws.directoryUsers.deleteBy('directory_id', dir.id);
     ws.directoryGroups.deleteBy('directory_id', dir.id);

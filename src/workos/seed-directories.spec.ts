@@ -113,11 +113,21 @@ describe('Seeding directories', () => {
     emulator = await createEmulator({
       port: 0,
       seed: {
-        users: [{ email: 'dev@acme.com' }, { email: 'boss@acme.com' }, { email: 'temp@acme.com' }],
+        users: [
+          { email: 'dev@acme.com' },
+          { email: 'boss@acme.com' },
+          { email: 'temp@acme.com' },
+          { email: 'local@acme.com' },
+        ],
         organizations: [
           {
             name: 'Acme Corp',
-            memberships: [{ email: 'dev@acme.com' }, { email: 'boss@acme.com' }, { email: 'temp@acme.com' }],
+            memberships: [
+              { email: 'dev@acme.com' },
+              { email: 'boss@acme.com' },
+              { email: 'temp@acme.com' },
+              { email: 'local@acme.com' },
+            ],
           },
         ],
         directories: [
@@ -154,6 +164,13 @@ describe('Seeding directories', () => {
     expect(membershipRole('boss@acme.com')).toBe('admin');
     // Unmapped, so the membership keeps the role its own seed gave it.
     expect(membershipRole('temp@acme.com')).toBe('member');
+
+    // The flag says directory sync owns the membership, not that a role mapped: an
+    // unmapped group still counts. Only someone the directory does not list is app-managed.
+    const managedOf = (email: string) => memberships.data.find((m: any) => m.user.email === email)?.directory_managed;
+    expect(managedOf('dev@acme.com')).toBe(true);
+    expect(managedOf('temp@acme.com')).toBe(true);
+    expect(managedOf('local@acme.com')).toBe(false);
   });
 
   it('lets an explicit user role override the group mapping', async () => {
@@ -174,6 +191,194 @@ describe('Seeding directories', () => {
 
     const users = await get(`${emulator.url}/directory_users`, emulator.apiKey);
     expect(users.data[0].role).toEqual({ slug: 'admin' });
+  });
+
+  it('gives the membership role to the first directory that maps it', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        users: [{ email: 'dev@acme.com' }],
+        organizations: [{ name: 'Acme Corp', memberships: [{ email: 'dev@acme.com' }] }],
+        directories: [
+          {
+            name: 'Acme Okta',
+            organization: 'Acme Corp',
+            groups: [{ name: 'Engineering', role: 'admin' }],
+            users: [{ email: 'dev@acme.com', groups: ['Engineering'] }],
+          },
+          {
+            name: 'Acme Jumpcloud',
+            organization: 'Acme Corp',
+            groups: [{ name: 'Contractors', role: 'member' }],
+            users: [{ email: 'dev@acme.com', groups: ['Contractors'] }],
+          },
+        ],
+      },
+    });
+
+    const orgs = await get(`${emulator.url}/organizations`, emulator.apiKey);
+    const memberships = await get(
+      `${emulator.url}/user_management/organization_memberships?organization_id=${orgs.data[0].id}`,
+      emulator.apiKey,
+    );
+    expect(memberships.data.find((m: any) => m.user.email === 'dev@acme.com').role.slug).toBe('admin');
+  });
+
+  it('rejects the same person listed twice in one directory', () => {
+    const result = validateSeedConfig({
+      organizations: [{ name: 'Acme Corp' }],
+      directories: [
+        {
+          name: 'Acme Okta',
+          organization: 'Acme Corp',
+          users: [{ email: 'dev@acme.com' }, { email: 'DEV@acme.com' }],
+        },
+      ],
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.path === 'directories[0].users[1].email')).toBe(true);
+  });
+
+  it('releases the memberships it managed when the directory is deleted', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        users: [{ email: 'dev@acme.com' }],
+        organizations: [{ name: 'Acme Corp', memberships: [{ email: 'dev@acme.com' }] }],
+        directories: [
+          {
+            name: 'Acme Okta',
+            organization: 'Acme Corp',
+            groups: [{ name: 'Engineering', role: 'admin' }],
+            users: [{ email: 'dev@acme.com', groups: ['Engineering'] }],
+          },
+        ],
+      },
+    });
+
+    const orgs = await get(`${emulator.url}/organizations`, emulator.apiKey);
+    const dirs = await get(`${emulator.url}/directories`, emulator.apiKey);
+    const membershipsUrl = `${emulator.url}/user_management/organization_memberships?organization_id=${orgs.data[0].id}`;
+    expect((await get(membershipsUrl, emulator.apiKey)).data[0].directory_managed).toBe(true);
+
+    await fetch(`${emulator.url}/directories/${dirs.data[0].id}`, {
+      method: 'DELETE',
+      headers: auth(emulator.apiKey),
+    });
+
+    expect((await get(membershipsUrl, emulator.apiKey)).data[0].directory_managed).toBe(false);
+  });
+
+  it('stores every optional field, and a non-default state', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        directories: [
+          {
+            name: 'Acme Okta',
+            organization: 'Acme Corp',
+            state: 'unlinked',
+            external_key: 'ext_acme',
+            groups: ['Engineering'],
+            users: [
+              {
+                email: 'dev@acme.com',
+                username: 'dev',
+                idp_id: 'idp_pinned',
+                state: 'inactive',
+                custom_attributes: { department: 'Platform' },
+                groups: ['Engineering'],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const directory = (await get(`${emulator.url}/directories`, emulator.apiKey)).data[0];
+    expect(directory.state).toBe('unlinked');
+    expect(directory.external_key).toBe('ext_acme');
+
+    const user = (await get(`${emulator.url}/directory_users`, emulator.apiKey)).data[0];
+    expect(user.username).toBe('dev');
+    expect(user.idp_id).toBe('idp_pinned');
+    expect(user.state).toBe('inactive');
+    expect(user.custom_attributes).toEqual({ department: 'Platform' });
+  });
+
+  it('stores a padded email trimmed, so the email filter finds it', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        directories: [{ name: 'Acme Okta', organization: 'Acme Corp', users: [{ email: '  dev@acme.com  ' }] }],
+      },
+    });
+
+    const filtered = await get(`${emulator.url}/directory_users?email=dev@acme.com`, emulator.apiKey);
+    expect(filtered.data).toHaveLength(1);
+    expect(filtered.data[0].email).toBe('dev@acme.com');
+  });
+
+  it('seeds several directories for one organization', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }, { name: 'Other Ltd' }],
+        directories: [
+          { name: 'Acme Okta', organization: 'Acme Corp' },
+          { name: 'Acme Jumpcloud', organization: 'Acme Corp' },
+          { name: 'Other Okta', organization: 'Other Ltd' },
+        ],
+      },
+    });
+
+    const orgs = await get(`${emulator.url}/organizations`, emulator.apiKey);
+    const acme = orgs.data.find((o: any) => o.name === 'Acme Corp');
+    const scoped = await get(`${emulator.url}/directories?organization_id=${acme.id}`, emulator.apiKey);
+    expect(scoped.data.map((d: any) => d.name).sort()).toEqual(['Acme Jumpcloud', 'Acme Okta']);
+    expect((await get(`${emulator.url}/directories`, emulator.apiKey)).data).toHaveLength(3);
+  });
+
+  it('emits dsync.deleted when the directory is deleted', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        directories: [{ name: 'Acme Okta', organization: 'Acme Corp' }],
+      },
+    });
+
+    const directory = (await get(`${emulator.url}/directories`, emulator.apiKey)).data[0];
+    await fetch(`${emulator.url}/directories/${directory.id}`, {
+      method: 'DELETE',
+      headers: auth(emulator.apiKey),
+    });
+
+    const evts = await get(`${emulator.url}/events?events[]=dsync.deleted`, emulator.apiKey);
+    expect(evts.data.map((e: any) => e.event)).toContain('dsync.deleted');
+  });
+
+  it('maps a role for a directory user with no AuthKit membership', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        directories: [
+          {
+            name: 'Acme Okta',
+            organization: 'Acme Corp',
+            groups: [{ name: 'Engineering', role: 'admin' }],
+            users: [{ email: 'nobody@acme.com', groups: ['Engineering'] }],
+          },
+        ],
+      },
+    });
+
+    const user = (await get(`${emulator.url}/directory_users`, emulator.apiKey)).data[0];
+    expect(user.role).toEqual({ slug: 'admin' });
   });
 
   it('reports malformed entries instead of throwing', () => {

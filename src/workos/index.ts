@@ -84,6 +84,7 @@ import {
 import type {
   WorkOSConnectionType,
   WorkOSDirectoryGroup,
+  WorkOSOrganizationMembership,
   PipeProvider,
   PipeConnectionStatus,
   ConnectedAccountState,
@@ -650,6 +651,9 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
   }
 
   if (config.directories) {
+    // First declaration wins: two directories in one organization can list the same
+    // person, and last-write-wins would make their access depend on array order.
+    const rolesApplied = new Set<string>();
     for (const dirConfig of config.directories) {
       const org = ws.organizations.findOneBy('name', dirConfig.organization);
       if (!org) continue;
@@ -717,12 +721,12 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
           idp_id: u.idp_id ?? `idp_${generateId('dir_usr')}`,
           first_name: u.first_name ?? null,
           last_name: u.last_name ?? null,
-          email: u.email,
+          email: u.email.trim(),
           username: u.username ?? null,
           state: u.state ?? 'active',
           role: role ? { slug: role } : null,
           custom_attributes: u.custom_attributes ?? {},
-          raw_attributes: { email: u.email },
+          raw_attributes: { email: u.email.trim() },
           groups: memberships,
         });
 
@@ -730,14 +734,17 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         // membership, which is what an app reads — the directory user is only the record it
         // was derived from. Seeding a directory provisions no AuthKit user, so this applies
         // only where `users` and `memberships` already put one in the org.
-        if (role) {
-          const authKitUser = findUserByEmail(ws, u.email);
-          const membership = authKitUser
-            ? ws.organizationMemberships.findBy('organization_id', org.id).find((m) => m.user_id === authKitUser.id)
-            : undefined;
-          if (membership) {
-            ws.organizationMemberships.update(membership.id, { role: { slug: role } });
+        const authKitUser = findUserByEmail(ws, u.email);
+        const membership = authKitUser
+          ? ws.organizationMemberships.findBy('organization_id', org.id).find((m) => m.user_id === authKitUser.id)
+          : undefined;
+        if (membership) {
+          const updates: Partial<WorkOSOrganizationMembership> = { directory_managed: true };
+          if (role && !rolesApplied.has(membership.id)) {
+            rolesApplied.add(membership.id);
+            updates.role = { slug: role };
           }
+          ws.organizationMemberships.update(membership.id, updates);
         }
       }
     }
