@@ -239,6 +239,12 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
               value: org.memberships,
             });
           } else {
+            // `POST /user_management/organization_memberships` 409s a second non-inactive
+            // membership for the same user, so seeding must not create one either: every
+            // lookup that joins a user to their membership in an organization reads the
+            // first match and would otherwise leave the second stale. Repeated `inactive`
+            // entries are legal — deactivating and re-adding leaves exactly that trail.
+            const liveMemberEmails = new Set<string>();
             org.memberships.forEach((membership, mIndex) => {
               // The pre-rename key: it read as "pass a user_... id", which can never
               // resolve (ids are generated at startup) — point at `email` instead.
@@ -277,6 +283,17 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
                   message: 'status must be "active", "inactive", or "pending" if provided',
                   value: membership.status,
                 });
+              }
+              if (memberEmail.ok && membership.status !== 'inactive') {
+                const key = memberEmail.email.toLowerCase();
+                if (liveMemberEmails.has(key)) {
+                  errors.push({
+                    path: `organizations[${index}].memberships[${mIndex}].email`,
+                    message: `duplicate membership for '${membership.email}' — an organization holds at most one membership per user that is not inactive`,
+                    value: membership.email,
+                  });
+                }
+                liveMemberEmails.add(key);
               }
             });
           }

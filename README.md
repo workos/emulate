@@ -1498,7 +1498,9 @@ organizations:
         state: verified
     memberships:
       # Reference users by the email declared in `users` above — user ids are
-      # generated at startup, so memberships are joined by email.
+      # generated at startup, so memberships are joined by email. One person gets
+      # one membership per organization that is not `inactive`, the same rule
+      # POST /user_management/organization_memberships answers 409 for.
       - email: admin@acme.com
         role: admin
         status: active
