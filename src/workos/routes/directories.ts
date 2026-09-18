@@ -6,6 +6,7 @@ import {
   formatDirectoryGroup,
   formatListResponse,
   findUserByEmail,
+  emailsMatch,
 } from '../helpers.js';
 
 export function directoryRoutes(ctx: RouteContext): void {
@@ -43,17 +44,39 @@ export function directoryRoutes(ctx: RouteContext): void {
     const dir = ws.directories.get(c.req.param('id'));
     if (!dir) throw notFound('Directory');
 
-    // Release the memberships this directory managed, so an app can exercise
-    // "directory disconnected, the membership is the app's again".
+    // Hand each membership back to whatever still has a claim on it: a surviving directory
+    // in the same organization owns the role it maps, and with no survivor the membership
+    // is the application's again.
+    // First survivor wins the role, so the order must be declaration order. `all()` reads the
+    // item map, which keeps insertion order across updates; `findBy` reads an index set that
+    // `Collection.update` re-appends to, and `created_at` is too coarse to sort a seed run back.
+    // Directory state is deliberately ignored, matching the seed path: an unlinked
+    // directory still lists the user and still claims them once relinked.
+    const survivors = ws.directories
+      .all()
+      .filter((d) => d.id !== dir.id && d.organization_id === dir.organization_id)
+      .flatMap((d) => ws.directoryUsers.findBy('directory_id', d.id));
     for (const u of ws.directoryUsers.findBy('directory_id', dir.id)) {
-      if (!u.email) continue;
-      const authKitUser = findUserByEmail(ws, u.email);
+      const email = u.email;
+      if (!email) continue;
+      const authKitUser = findUserByEmail(ws, email);
       if (!authKitUser) continue;
       const membership = ws.organizationMemberships
         .findBy('organization_id', dir.organization_id ?? '')
-        .find((m) => m.user_id === authKitUser.id);
-      if (membership?.directory_managed) {
+        .find((m) => m.user_id === authKitUser.id && m.status !== 'inactive');
+      // Only a membership a directory already claimed: deleting one directory must not
+      // seize a membership the application owns.
+      if (!membership?.directory_managed) continue;
+
+      if (!survivors.some((s) => emailsMatch(s.email ?? '', email))) {
         ws.organizationMemberships.update(membership.id, { directory_managed: false });
+        continue;
+      }
+      // Role-less survivors claim the membership but not the role, the same way seeding
+      // lets a directory with no mapping leave the role to the next one.
+      const roleSurvivor = survivors.find((s) => s.role && emailsMatch(s.email ?? '', email));
+      if (roleSurvivor?.role && roleSurvivor.role.slug !== membership.role.slug) {
+        ws.organizationMemberships.update(membership.id, { role: { slug: roleSurvivor.role.slug } });
       }
     }
 

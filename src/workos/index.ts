@@ -736,7 +736,9 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         // only where `users` and `memberships` already put one in the org.
         const authKitUser = findUserByEmail(ws, u.email);
         const membership = authKitUser
-          ? ws.organizationMemberships.findBy('organization_id', org.id).find((m) => m.user_id === authKitUser.id)
+          ? ws.organizationMemberships
+              .findBy('organization_id', org.id)
+              .find((m) => m.user_id === authKitUser.id && m.status !== 'inactive')
           : undefined;
         if (membership) {
           const updates: Partial<WorkOSOrganizationMembership> = { directory_managed: true };
