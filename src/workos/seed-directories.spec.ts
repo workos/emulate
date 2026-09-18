@@ -498,6 +498,43 @@ describe('Seeding directories', () => {
     expect(membership.role.slug).toBe('member');
   });
 
+  it('leaves the role with the first-declared survivor, not the last', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        users: [{ email: 'dev@acme.com' }],
+        organizations: [{ name: 'Acme Corp', memberships: [{ email: 'dev@acme.com' }] }],
+        directories: [
+          {
+            name: 'A admin',
+            organization: 'Acme Corp',
+            groups: [{ name: 'Admins', role: 'admin' }],
+            users: [{ email: 'dev@acme.com', groups: ['Admins'] }],
+          },
+          {
+            name: 'B member',
+            organization: 'Acme Corp',
+            groups: [{ name: 'Staff', role: 'member' }],
+            users: [{ email: 'dev@acme.com', groups: ['Staff'] }],
+          },
+          { name: 'C no mapping', organization: 'Acme Corp', users: [{ email: 'dev@acme.com' }] },
+        ],
+      },
+    });
+
+    const orgs = await get(`${emulator.url}/organizations`, emulator.apiKey);
+    const membershipsUrl = `${emulator.url}/user_management/organization_memberships?organization_id=${orgs.data[0].id}`;
+    const c = (await get(`${emulator.url}/directories`, emulator.apiKey)).data.find(
+      (d: any) => d.name === 'C no mapping',
+    );
+    await fetch(`${emulator.url}/directories/${c.id}`, { method: 'DELETE', headers: auth(emulator.apiKey) });
+
+    // A and B both survive and both map a role; declaration order gives it to A.
+    const after = (await get(membershipsUrl, emulator.apiKey)).data[0];
+    expect(after.role.slug).toBe('admin');
+    expect(after.directory_managed).toBe(true);
+  });
+
   it('skips a role-less survivor when handing over the role', async () => {
     emulator = await createEmulator({
       port: 0,
