@@ -604,6 +604,12 @@ directories:
           - Engineering
 ```
 
+A seeded directory user is a Directory Sync record and nothing else: it creates no AuthKit
+user and no organization membership. Production resolves a directory group to an
+organization role through dashboard configuration and stamps it on the membership, so a
+directory user's `role` here is that outcome, not a mapping — seed `users` and
+`memberships` for the AuthKit side.
+
 `state` defaults to `linked` and `type` to `generic scim v2.0`. Seeding emits `dsync.activated`
 and `dsync.user.created`, queryable at `GET /events`. They are not delivered to a seeded webhook
 endpoint, which registers after them — as with every other seeded resource. `DELETE
