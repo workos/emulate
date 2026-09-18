@@ -617,8 +617,14 @@ mapping. The resolved role is set on the directory user and, where `users` and
 membership — which is what an app reads, and where production puts it too.
 
 A membership matching a seeded directory user reports `directory_managed: true`, whether or
-not a role mapped, and `DELETE /directories/:id` clears it again. Where two directories in
-one organization map the same person, the first in declaration order keeps the role.
+not a role mapped. Where two directories in one organization map the same person, the first
+in declaration order keeps the role.
+
+`DELETE /directories/:id` clears `directory_managed` only once no directory in the
+organization still lists that person. While one does, the membership stays managed, and the
+first surviving directory that maps a role takes the role over. A membership no directory
+ever claimed is left alone, so an application-owned membership survives an unrelated
+directory being deleted.
 
 Seeding a directory creates no AuthKit user and no organization membership: seed `users`
 and `memberships` for those.
