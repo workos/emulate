@@ -434,6 +434,80 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
     }
   }
 
+  // Validate directories
+  if (config.directories) {
+    if (!Array.isArray(config.directories)) {
+      errors.push({
+        path: 'directories',
+        message: 'directories must be an array',
+        value: config.directories,
+      });
+    } else {
+      config.directories.forEach((dir, index) => {
+        if (!dir.name || typeof dir.name !== 'string') {
+          errors.push({
+            path: `directories[${index}].name`,
+            message: 'name is required and must be a string',
+            value: dir.name,
+          });
+        }
+        if (!dir.organization || typeof dir.organization !== 'string') {
+          errors.push({
+            path: `directories[${index}].organization`,
+            message: 'organization is required and must be a string',
+            value: dir.organization,
+          });
+        } else if (!config.organizations?.some((org) => org.name === dir.organization)) {
+          // seedFromConfig skips a directory whose organization does not resolve, so without
+          // this a typo silently produces no directory at all.
+          errors.push({
+            path: `directories[${index}].organization`,
+            message: `organization '${dir.organization}' is not declared in organizations`,
+            value: dir.organization,
+          });
+        }
+        if (dir.state && !['linked', 'unlinked', 'invalid_credentials'].includes(dir.state)) {
+          errors.push({
+            path: `directories[${index}].state`,
+            message: 'state must be "linked", "unlinked", or "invalid_credentials" if provided',
+            value: dir.state,
+          });
+        }
+        // A user's group names are resolved to generated ids at seed time, so an unknown
+        // name would throw there. Reject it here, where the error names the config path.
+        const groupNames = new Set<string>();
+        dir.groups?.forEach((groupName) => {
+          if (groupNames.has(groupName)) {
+            errors.push({
+              path: `directories[${index}].groups`,
+              message: `duplicate group name '${groupName}'`,
+              value: groupName,
+            });
+          }
+          groupNames.add(groupName);
+        });
+        dir.users?.forEach((user, userIndex) => {
+          if (!user.email || typeof user.email !== 'string') {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].email`,
+              message: 'email is required and must be a string',
+              value: user.email,
+            });
+          }
+          user.groups?.forEach((groupName) => {
+            if (!groupNames.has(groupName)) {
+              errors.push({
+                path: `directories[${index}].users[${userIndex}].groups`,
+                message: `group '${groupName}' is not declared in directories[${index}].groups`,
+                value: groupName,
+              });
+            }
+          });
+        });
+      });
+    }
+  }
+
   // Validate connected accounts
   if (config.connectedAccounts) {
     if (!Array.isArray(config.connectedAccounts)) {

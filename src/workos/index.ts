@@ -83,6 +83,7 @@ import {
 } from './helpers.js';
 import type {
   WorkOSConnectionType,
+  WorkOSDirectoryGroup,
   PipeProvider,
   PipeConnectionStatus,
   ConnectedAccountState,
@@ -171,6 +172,31 @@ export interface WorkOSSeedUser {
    * on restart.
    */
   totp?: boolean;
+}
+
+export interface WorkOSSeedDirectory {
+  name: string;
+  /** Organization name, the same lookup key `connections` uses. */
+  organization: string;
+  /** Provider descriptor, e.g. `okta scim v2.0`. Free text, as the spec's list is open. */
+  type?: string;
+  state?: 'linked' | 'unlinked' | 'invalid_credentials';
+  domain?: string;
+  external_key?: string;
+  /** Group names. A directory user joins these by name; ids are generated at startup. */
+  groups?: string[];
+  users?: Array<{
+    email: string;
+    first_name?: string;
+    last_name?: string;
+    username?: string;
+    idp_id?: string;
+    state?: 'active' | 'inactive';
+    role?: string;
+    /** Names from this directory's `groups`. */
+    groups?: string[];
+    custom_attributes?: Record<string, unknown>;
+  }>;
 }
 
 export interface WorkOSSeedConnection {
@@ -418,6 +444,12 @@ export interface WorkOSSeedConfig {
    */
   featureFlags?: WorkOSSeedFeatureFlag[];
   /**
+   * Directories, their groups and their users. Production has no create-directory
+   * endpoint — a directory is connected through the dashboard or Admin Portal — so
+   * seeding is the only way to get one into the emulator.
+   */
+  directories?: WorkOSSeedDirectory[];
+  /**
    * Agent blueprints, so a test suite can mint agent tokens without a create call. Instances
    * and sessions are never seeded: they only come into being by minting.
    */
@@ -608,6 +640,68 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
             raw_attributes: { email: p.email },
           });
         }
+      }
+    }
+  }
+
+  if (config.directories) {
+    for (const dirConfig of config.directories) {
+      const org = ws.organizations.findOneBy('name', dirConfig.organization);
+      if (!org) continue;
+
+      const directory = ws.directories.insert({
+        object: 'directory',
+        organization_id: org.id,
+        name: dirConfig.name,
+        domain: dirConfig.domain ?? null,
+        type: dirConfig.type ?? 'generic scim v2.0',
+        state: dirConfig.state ?? 'linked',
+        external_key: dirConfig.external_key ?? null,
+      });
+
+      // Groups are inserted first: a seeded user embeds the groups it belongs to, and the
+      // embedded copy carries the generated id, so the group must exist to be joined.
+      const groupsByName = new Map<string, WorkOSDirectoryGroup>();
+      for (const groupName of dirConfig.groups ?? []) {
+        groupsByName.set(
+          groupName,
+          ws.directoryGroups.insert({
+            object: 'directory_group',
+            directory_id: directory.id,
+            organization_id: org.id,
+            idp_id: `idp_${generateId('dir_grp')}`,
+            name: groupName,
+            raw_attributes: {},
+          }),
+        );
+      }
+
+      for (const u of dirConfig.users ?? []) {
+        const memberships = (u.groups ?? []).map((groupName) => {
+          const group = groupsByName.get(groupName);
+          if (!group) {
+            throw new Error(
+              `Seed directory '${dirConfig.name}' user '${u.email}' references unknown group '${groupName}'`,
+            );
+          }
+          return { object: 'directory_group' as const, id: group.id, name: group.name };
+        });
+
+        ws.directoryUsers.insert({
+          object: 'directory_user',
+          directory_id: directory.id,
+          organization_id: org.id,
+          idp_id: u.idp_id ?? `idp_${generateId('dir_usr')}`,
+          first_name: u.first_name ?? null,
+          last_name: u.last_name ?? null,
+          email: u.email,
+          username: u.username ?? null,
+          state: u.state ?? 'active',
+          role: u.role ? { slug: u.role } : null,
+          custom_attributes: u.custom_attributes ?? {},
+          raw_attributes: { email: u.email },
+          groups: memberships,
+        });
       }
     }
   }

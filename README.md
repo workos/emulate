@@ -578,6 +578,37 @@ only registers values for authentication without creating resources. A map-form 
 requests but has no `api_key` resource behind it, so validating one returns `{"api_key": null}` —
 use the array form for keys your code validates.
 
+### Directory Sync
+
+Production connects a directory through the dashboard or Admin Portal — there is no
+create-directory endpoint — so the `directories` seed key is how one comes into existence at
+all. A directory joins its organization by name, the same way `connections` do, and its users
+join the directory's own groups by name.
+
+```yaml
+organizations:
+  - name: Acme Corp
+
+directories:
+  - name: Acme Okta
+    organization: Acme Corp
+    type: okta scim v2.0
+    domain: acme.com
+    groups:
+      - Engineering
+    users:
+      - email: dev@acme.com
+        first_name: Dev
+        last_name: Eloper
+        groups:
+          - Engineering
+```
+
+`state` defaults to `linked` and `type` to `generic scim v2.0`. Seeding emits `dsync.activated`
+and `dsync.user.created`, queryable at `GET /events`. They are not delivered to a seeded webhook
+endpoint, which registers after them — as with every other seeded resource. `DELETE
+/directories/:id` emits `dsync.deleted`, which is delivered.
+
 ### Feature Flags
 
 Production has no create-flag endpoint — flags are made in the dashboard — so the `featureFlags`
