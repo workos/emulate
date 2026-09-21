@@ -91,22 +91,45 @@ describe('Seeding directories', () => {
     expect(byGroup.data[0].email).toBe('dev@acme.com');
   });
 
-  it('emits dsync.activated and dsync.user.created for seeded directories', async () => {
+  it('emits dsync.activated, dsync.group.created and dsync.user.created for seeded directories', async () => {
     emulator = await createEmulator({
       port: 0,
       seed: {
         organizations: [{ name: 'Acme Corp' }],
-        directories: [{ name: 'Acme Okta', organization: 'Acme Corp', users: [{ email: 'dev@acme.com' }] }],
+        directories: [
+          { name: 'Acme Okta', organization: 'Acme Corp', groups: ['Engineering'], users: [{ email: 'dev@acme.com' }] },
+        ],
       },
     });
 
     const evts = await get(
-      `${emulator.url}/events?events[]=dsync.activated&events[]=dsync.user.created`,
+      `${emulator.url}/events?events[]=dsync.activated&events[]=dsync.group.created&events[]=dsync.user.created`,
       emulator.apiKey,
     );
     const names = evts.data.map((e: any) => e.event);
     expect(names).toContain('dsync.activated');
+    expect(names).toContain('dsync.group.created');
     expect(names).toContain('dsync.user.created');
+  });
+
+  it('emits dsync.activated only for a linked directory', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        directories: [
+          { name: 'Linked', organization: 'Acme Corp' },
+          { name: 'Unlinked', organization: 'Acme Corp', state: 'unlinked' },
+          { name: 'Broken', organization: 'Acme Corp', state: 'invalid_credentials' },
+        ],
+      },
+    });
+
+    // Activation is what `linked` means; the other two states have not activated, the same
+    // way an inactive connection does not emit connection.activated.
+    const evts = await get(`${emulator.url}/events?events[]=dsync.activated`, emulator.apiKey);
+    expect(evts.data).toHaveLength(1);
+    expect(evts.data[0].data.name).toBe('Linked');
   });
 
   it('maps a group to a role, on the directory user and the organization membership', async () => {
@@ -128,6 +151,7 @@ describe('Seeding directories', () => {
               { email: 'temp@acme.com' },
               { email: 'local@acme.com' },
             ],
+            groups: [{ name: 'Platform', members: ['dev@acme.com'] }],
           },
         ],
         directories: [
@@ -171,6 +195,35 @@ describe('Seeding directories', () => {
     expect(managedOf('dev@acme.com')).toBe(true);
     expect(managedOf('temp@acme.com')).toBe(true);
     expect(managedOf('local@acme.com')).toBe(false);
+
+    // A group's member listing serializes the same stored flag, not a hardcoded false.
+    const groups = await get(`${emulator.url}/organizations/${orgs.data[0].id}/groups`, emulator.apiKey);
+    const members = await get(
+      `${emulator.url}/organizations/${orgs.data[0].id}/groups/${groups.data[0].id}/organization-memberships`,
+      emulator.apiKey,
+    );
+    expect(members.data).toHaveLength(1);
+    expect(members.data[0].directory_managed).toBe(true);
+  });
+
+  it('writes a claimed membership once, and the event carries the flag', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        users: [{ email: 'dev@acme.com' }],
+        organizations: [{ name: 'Acme Corp', memberships: [{ email: 'dev@acme.com' }] }],
+        directories: [
+          { name: 'Acme Okta', organization: 'Acme Corp', users: [{ email: 'dev@acme.com' }] },
+          { name: 'Acme Jumpcloud', organization: 'Acme Corp', users: [{ email: 'dev@acme.com' }] },
+        ],
+      },
+    });
+
+    // The second directory changes nothing — already managed, no role to hand over — so it
+    // must not bump updated_at or announce an update that says nothing.
+    const evts = await get(`${emulator.url}/events?events[]=organization_membership.updated`, emulator.apiKey);
+    expect(evts.data).toHaveLength(1);
+    expect(evts.data[0].data.directory_managed).toBe(true);
   });
 
   it('lets an explicit user role override the group mapping', async () => {
@@ -605,6 +658,37 @@ describe('Seeding directories', () => {
           directories: [{ name: 'D', organization: 'A', users: [{ email: 'a@b.com', state: 'suspended' }] }],
         },
         'directories[0].users[0].state',
+      ],
+      [
+        'a non-string directory domain',
+        { organizations: [{ name: 'A' }], directories: [{ name: 'D', organization: 'A', domain: 123 }] },
+        'directories[0].domain',
+      ],
+      [
+        'a non-string user role',
+        {
+          organizations: [{ name: 'A' }],
+          directories: [{ name: 'D', organization: 'A', users: [{ email: 'a@b.com', role: 123 }] }],
+        },
+        'directories[0].users[0].role',
+      ],
+      [
+        'a scalar custom_attributes value',
+        {
+          organizations: [{ name: 'A' }],
+          directories: [{ name: 'D', organization: 'A', users: [{ email: 'a@b.com', custom_attributes: 'x' }] }],
+        },
+        'directories[0].users[0].custom_attributes',
+      ],
+      [
+        'a null user group entry',
+        {
+          organizations: [{ name: 'A' }],
+          directories: [
+            { name: 'D', organization: 'A', groups: ['Engineering'], users: [{ email: 'a@b.com', groups: [null] }] },
+          ],
+        },
+        'directories[0].users[0].groups[0]',
       ],
     ];
 

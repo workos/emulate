@@ -630,9 +630,10 @@ Seeding a directory creates no AuthKit user and no organization membership: seed
 and `memberships` for those.
 
 `state` defaults to `linked` and `type` to `generic scim v2.0`. Seeding emits `dsync.activated`
-and `dsync.user.created`, queryable at `GET /events`. They are not delivered to a seeded webhook
-endpoint, which registers after them — as with every other seeded resource. `DELETE
-/directories/:id` emits `dsync.deleted`, which is delivered.
+for a `linked` directory, plus `dsync.group.created` and `dsync.user.created`, all queryable at
+`GET /events`. They are not delivered to a seeded webhook endpoint, which registers after them —
+as with every other seeded resource. `DELETE /directories/:id` emits `dsync.deleted`, which is
+delivered.
 
 ### Feature Flags
 

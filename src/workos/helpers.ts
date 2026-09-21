@@ -542,6 +542,22 @@ export function findUserByEmail(ws: WorkOSStore, email: string): WorkOSUser | un
 }
 
 /**
+ * The one membership a user holds in an organization that is not `inactive`. `POST
+ * /user_management/organization_memberships` 409s a second live membership and
+ * validateSeedConfig rejects one, so the first match is the only match — and a stale
+ * deactivated record is never taken for the live one.
+ */
+export function liveMembershipFor(
+  ws: WorkOSStore,
+  organizationId: string,
+  userId: string,
+): WorkOSOrganizationMembership | undefined {
+  return ws.organizationMemberships
+    .findBy('organization_id', organizationId)
+    .find((m) => m.user_id === userId && m.status !== 'inactive');
+}
+
+/**
  * Hash password using SHA256.
  * NOTE: This is intentionally weak for emulator/testing only.
  * Production systems should use bcrypt, scrypt, or Argon2 with proper salt and iterations.

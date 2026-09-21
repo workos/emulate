@@ -7,6 +7,7 @@ import {
   formatListResponse,
   findUserByEmail,
   emailsMatch,
+  liveMembershipFor,
 } from '../helpers.js';
 
 export function directoryRoutes(ctx: RouteContext): void {
@@ -61,9 +62,7 @@ export function directoryRoutes(ctx: RouteContext): void {
       if (!email) continue;
       const authKitUser = findUserByEmail(ws, email);
       if (!authKitUser) continue;
-      const membership = ws.organizationMemberships
-        .findBy('organization_id', dir.organization_id ?? '')
-        .find((m) => m.user_id === authKitUser.id && m.status !== 'inactive');
+      const membership = liveMembershipFor(ws, dir.organization_id ?? '', authKitUser.id);
       // Only a membership a directory already claimed: deleting one directory must not
       // seize a membership the application owns.
       if (!membership?.directory_managed) continue;

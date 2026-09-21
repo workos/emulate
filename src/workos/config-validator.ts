@@ -504,12 +504,24 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: dir.state,
           });
         }
+        // Only the type is checked: the seed path stores these verbatim, so a YAML
+        // `domain: 123` would otherwise reach `GET /directories` as a number. Null is
+        // accepted as absent, the way `?? null` reads it there.
+        for (const field of ['type', 'domain', 'external_key'] as const) {
+          if (dir[field] != null && typeof dir[field] !== 'string') {
+            errors.push({
+              path: `directories[${index}].${field}`,
+              message: `${field} must be a string if provided`,
+              value: dir[field],
+            });
+          }
+        }
 
         const groupNames = new Set<string>();
         if (dir.groups !== undefined && !Array.isArray(dir.groups)) {
           errors.push({
             path: `directories[${index}].groups`,
-            message: 'groups must be an array of strings',
+            message: 'groups must be an array of names or { name, role } objects',
             value: dir.groups,
           });
         } else {
@@ -593,6 +605,25 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
               value: user.state,
             });
           }
+          for (const field of ['first_name', 'last_name', 'username', 'idp_id', 'role'] as const) {
+            if (user[field] != null && typeof user[field] !== 'string') {
+              errors.push({
+                path: `directories[${index}].users[${userIndex}].${field}`,
+                message: `${field} must be a string if provided`,
+                value: user[field],
+              });
+            }
+          }
+          if (
+            user.custom_attributes != null &&
+            (typeof user.custom_attributes !== 'object' || Array.isArray(user.custom_attributes))
+          ) {
+            errors.push({
+              path: `directories[${index}].users[${userIndex}].custom_attributes`,
+              message: 'custom_attributes must be an object if provided',
+              value: user.custom_attributes,
+            });
+          }
           if (user.groups !== undefined && !Array.isArray(user.groups)) {
             errors.push({
               path: `directories[${index}].users[${userIndex}].groups`,
@@ -603,7 +634,15 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           }
           // A user's group names are resolved to generated ids at seed time, so an unknown
           // name would throw there. Reject it here, where the error names the config path.
-          user.groups?.forEach((groupName) => {
+          user.groups?.forEach((groupName, gIndex) => {
+            if (typeof groupName !== 'string') {
+              errors.push({
+                path: `directories[${index}].users[${userIndex}].groups[${gIndex}]`,
+                message: 'each group must be a name',
+                value: groupName,
+              });
+              return;
+            }
             if (!groupNames.has(groupName)) {
               errors.push({
                 path: `directories[${index}].users[${userIndex}].groups`,

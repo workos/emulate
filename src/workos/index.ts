@@ -79,6 +79,7 @@ import {
   formatConnectedAccountEvent,
   dataIntegrationIdFor,
   linkOAuthIdentity,
+  liveMembershipFor,
   newTotp,
 } from './helpers.js';
 import type {
@@ -735,18 +736,18 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         // was derived from. Seeding a directory provisions no AuthKit user, so this applies
         // only where `users` and `memberships` already put one in the org.
         const authKitUser = findUserByEmail(ws, u.email);
-        const membership = authKitUser
-          ? ws.organizationMemberships
-              .findBy('organization_id', org.id)
-              .find((m) => m.user_id === authKitUser.id && m.status !== 'inactive')
-          : undefined;
+        const membership = authKitUser ? liveMembershipFor(ws, org.id, authKitUser.id) : undefined;
         if (membership) {
-          const updates: Partial<WorkOSOrganizationMembership> = { directory_managed: true };
+          // Write only what changes: a later directory re-listing an already-managed person
+          // with no role to give would otherwise bump `updated_at` and emit an
+          // `organization_membership.updated` that says nothing.
+          const updates: Partial<WorkOSOrganizationMembership> = {};
+          if (!membership.directory_managed) updates.directory_managed = true;
           if (role && !rolesApplied.has(membership.id)) {
             rolesApplied.add(membership.id);
             updates.role = { slug: role };
           }
-          ws.organizationMemberships.update(membership.id, updates);
+          if (Object.keys(updates).length > 0) ws.organizationMemberships.update(membership.id, updates);
         }
       }
     }
@@ -1232,8 +1233,12 @@ export const workosPlugin: ServicePlugin = {
       onDelete: (p) => eventBus.emit({ event: EVENTS.permissionDeleted, data: formatPermission(p) }),
     });
     ws.directories.setHooks({
-      // The spec has no dsync.updated — only activation and deletion
-      onInsert: (d) => eventBus.emit({ event: EVENTS.dsyncActivated, data: formatDirectory(d) }),
+      // The spec has no dsync.updated — only activation and deletion. Activation is what
+      // `linked` means: a directory seeded `unlinked` or `invalid_credentials` has not
+      // activated, the same way an inactive connection does not announce itself.
+      onInsert: (d) => {
+        if (d.state === 'linked') eventBus.emit({ event: EVENTS.dsyncActivated, data: formatDirectory(d) });
+      },
       onDelete: (d) => eventBus.emit({ event: EVENTS.dsyncDeleted, data: formatDirectory(d) }),
     });
     ws.directoryUsers.setHooks({
