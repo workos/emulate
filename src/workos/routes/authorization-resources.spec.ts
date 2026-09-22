@@ -44,7 +44,7 @@ describe('Authorization resource routes', () => {
     expect(resource.resource_type_slug).toBe('document');
     expect(resource.external_id).toBe('doc-123');
     expect(resource.organization_id).toBe(org.id);
-    expect(resource.id).toMatch(/^auth_res_/);
+    expect(resource.id).toMatch(/^authz_resource_/);
   });
 
   it('rejects missing required fields', async () => {
@@ -327,7 +327,7 @@ describe('Authorization resource routes', () => {
         external_id: 'proj-3',
         organization_id: org.id,
         name: 'proj-3',
-        parent_resource_id: 'auth_res_nonexistent',
+        parent_resource_id: 'authz_resource_nonexistent',
       }),
     });
     expect(unknownParent.status).toBe(404);

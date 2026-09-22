@@ -8,9 +8,12 @@
  *   - RESPONSE_SHAPE_REQUIREMENTS    per resource   (OBJECT_SCHEMA_MAP)
  *   - RESPONSE_ENVELOPE_REQUIREMENTS per operation  (ENVELOPE_SCHEMA_MAP)
  *
- * Consumed by src/workos/response-shapes.spec.ts and
- * src/workos/response-envelopes.spec.ts to assert the emulator matches the
- * spec and never leaks internal fields.
+ * Plus ID_PREFIX_REQUIREMENTS, discovered structurally from the spec's own
+ * `id` examples rather than from a curated map.
+ *
+ * Consumed by src/workos/response-shapes.spec.ts,
+ * src/workos/response-envelopes.spec.ts and src/workos/id-prefixes.spec.ts to
+ * assert the emulator matches the spec and never leaks internal fields.
  */
 
 export interface ResponseShapeRequirement {
@@ -462,5 +465,355 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
     schema: 'WidgetSessionTokenResponse',
     properties: ['token'],
     required: ['token'],
+  },
+};
+
+export interface IdPrefixRequirement {
+  /** The prefix the spec's canonical `id` example carries, without the trailing underscore. */
+  prefix: string;
+  /** The example it was read from, verbatim. */
+  example: string;
+  /** The top-level spec schema (or path) the example was found under. */
+  source: string;
+  /** Other prefixes the spec uses for this object elsewhere, where it contradicts itself. */
+  conflicts: readonly string[];
+}
+
+/**
+ * The id prefix the spec documents for each object, keyed by `object` discriminator.
+ * Covers every object the spec gives a prefixed `id` example for, including ones the
+ * emulator does not model — src/workos/id-prefixes.spec.ts matches it against
+ * ID_PREFIXES and ledgers what is left over.
+ */
+export const ID_PREFIX_REQUIREMENTS: Record<string, IdPrefixRequirement> = {
+  agent_blueprint: {
+    prefix: 'agent_blueprint',
+    example: 'agent_blueprint_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'AgentBlueprint',
+    conflicts: [],
+  },
+  agent_identity: {
+    prefix: 'agent_identity',
+    example: 'agent_identity_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'EventSchema',
+    conflicts: [],
+  },
+  agent_instance: {
+    prefix: 'agent',
+    example: 'agent_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'AgentInstance',
+    conflicts: [],
+  },
+  agent_instance_session: {
+    prefix: 'agent_session',
+    example: 'agent_session_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'AgentInstanceSession',
+    conflicts: [],
+  },
+  agent_registration: {
+    prefix: 'agent_reg',
+    example: 'agent_reg_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'EventSchema',
+    conflicts: [],
+  },
+  agent_registration_claim: {
+    prefix: 'agent_reg_claim',
+    example: 'agent_reg_claim_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'EventSchema',
+    conflicts: [],
+  },
+  agent_registration_claim_attempt: {
+    prefix: 'agent_reg_claim_attempt',
+    example: 'agent_reg_claim_attempt_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'EventSchema',
+    conflicts: [],
+  },
+  agent_registration_credential: {
+    prefix: 'agent_reg_credential',
+    example: 'agent_reg_credential_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'EventSchema',
+    conflicts: [],
+  },
+  api_key: {
+    prefix: 'api_key',
+    example: 'api_key_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'ApiKey',
+    conflicts: [],
+  },
+  audit_log_export: {
+    prefix: 'audit_log_export',
+    example: 'audit_log_export_01GBZK5MP7TD1YCFQHFR22180V',
+    source: 'AuditLogExportJson',
+    conflicts: [],
+  },
+  authentication_challenge: {
+    prefix: 'auth_challenge',
+    example: 'auth_challenge_01FVYZ5QM8N98T9ME5BCB2BBMJ',
+    source: 'AuthenticationChallenge',
+    conflicts: [],
+  },
+  authentication_factor: {
+    prefix: 'auth_factor',
+    example: 'auth_factor_01FVYZ5QM8N98T9ME5BCB2BBMJ',
+    source: 'AuthenticationFactor',
+    conflicts: [],
+  },
+  authorization_resource: {
+    prefix: 'authz_resource',
+    example: 'authz_resource_01HXYZ123456789ABCDEFGH',
+    source: 'AuthorizationResource',
+    conflicts: [],
+  },
+  authorized_connect_application: {
+    prefix: 'authorized_connect_app',
+    example: 'authorized_connect_app_01HXYZ123456789ABCDEFGHIJ',
+    source: 'AuthorizedConnectApplicationList',
+    conflicts: [],
+  },
+  connect_application: {
+    prefix: 'conn_app',
+    example: 'conn_app_01HXYZ123456789ABCDEFGHIJ',
+    source: 'ConnectApplication',
+    conflicts: [],
+  },
+  connect_application_secret: {
+    prefix: 'secret',
+    example: 'secret_01J9Q2Z3X4Y5W6V7U8T9S0R1Q',
+    source: 'NewConnectApplicationSecret',
+    conflicts: [],
+  },
+  connected_account: {
+    prefix: 'data_installation',
+    example: 'data_installation_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'ConnectedAccount',
+    conflicts: [],
+  },
+  connection: {
+    prefix: 'conn',
+    example: 'conn_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'Connection',
+    conflicts: [],
+  },
+  connection_domain: {
+    prefix: 'org_domain',
+    example: 'org_domain_01EHZNVPK2QXHMVWCEDQEKY69A',
+    source: 'Connection',
+    conflicts: ['conn_domain'],
+  },
+  cors_origin: {
+    prefix: 'cors_origin',
+    example: 'cors_origin_01HXYZ123456789ABCDEFGHIJ',
+    source: 'CorsOriginResponse',
+    conflicts: [],
+  },
+  data_integration: {
+    prefix: 'data_integration',
+    example: 'data_integration_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'DataIntegration',
+    conflicts: [],
+  },
+  data_integration_configuration: {
+    prefix: 'data_integration',
+    example: 'data_integration_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'DataIntegrationConfigurationResponse',
+    conflicts: [],
+  },
+  data_provider: {
+    prefix: 'data_integration',
+    example: 'data_integration_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'DataIntegrationsListResponse',
+    conflicts: [],
+  },
+  directory: {
+    prefix: 'directory',
+    example: 'directory_01ECAZ4NV9QMV47GW873HDCX74',
+    source: 'Directory',
+    conflicts: [],
+  },
+  directory_group: {
+    prefix: 'directory_group',
+    example: 'directory_group_01E1JJS84MFPPQ3G655FHTKX6Z',
+    source: 'DirectoryGroup',
+    conflicts: [],
+  },
+  directory_token: {
+    prefix: 'directory_token',
+    example: 'directory_token_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'EventSchema',
+    conflicts: [],
+  },
+  directory_user: {
+    prefix: 'directory_user',
+    example: 'directory_user_01E1JG7J09H96KYP8HM9B0G5SJ',
+    source: 'DirectoryUser',
+    conflicts: [],
+  },
+  email_verification: {
+    prefix: 'email_verification',
+    example: 'email_verification_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'EmailVerification',
+    conflicts: [],
+  },
+  event: {
+    prefix: 'event',
+    example: 'event_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'EventSchema',
+    conflicts: [],
+  },
+  feature_flag: {
+    prefix: 'flag',
+    example: 'flag_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'Flag',
+    conflicts: [],
+  },
+  group: {
+    prefix: 'group',
+    example: 'group_01HXYZ123456789ABCDEFGHIJ',
+    source: 'Group',
+    conflicts: [],
+  },
+  group_role_assignment: {
+    prefix: 'gra',
+    example: 'gra_01HXYZ123456789ABCDEFGH',
+    source: 'GroupRoleAssignment',
+    conflicts: [],
+  },
+  invitation: {
+    prefix: 'invitation',
+    example: 'invitation_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'UserlandUserInvite',
+    conflicts: [],
+  },
+  it_contact: {
+    prefix: 'it_contact',
+    example: 'it_contact_01HXYZ123456789ABCDEFGHIJ',
+    source: 'ItContact',
+    conflicts: [],
+  },
+  magic_auth: {
+    prefix: 'magic_auth',
+    example: 'magic_auth_01HWZBQZY2M3AMQW166Q22K88F',
+    source: 'MagicAuth',
+    conflicts: [],
+  },
+  organization: {
+    prefix: 'org',
+    example: 'org_01EHWNCE74X7JSDV0X3SZ3KJNY',
+    source: 'Organization',
+    conflicts: [],
+  },
+  organization_domain: {
+    prefix: 'org_domain',
+    example: 'org_domain_01EHZNVPK2QXHMVWCEDQEKY69A',
+    source: 'OrganizationDomainStandAlone',
+    conflicts: [],
+  },
+  organization_membership: {
+    prefix: 'om',
+    example: 'om_01HXYZ123456789ABCDEFGHIJ',
+    source: 'UserlandUserOrganizationMembership',
+    conflicts: [],
+  },
+  password_reset: {
+    prefix: 'password_reset',
+    example: 'password_reset_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'PasswordReset',
+    conflicts: [],
+  },
+  permission: {
+    prefix: 'perm',
+    example: 'perm_01HXYZ123456789ABCDEFGHIJ',
+    source: 'AuthorizationPermission',
+    conflicts: [],
+  },
+  profile: {
+    prefix: 'prof',
+    example: 'prof_01DMC79VCBZ0NY2099737PSVF1',
+    source: 'Profile',
+    conflicts: [],
+  },
+  radar_challenge: {
+    prefix: 'radar_challenge',
+    example: 'radar_challenge_01HWZBQZY2M3AMQW166Q22K88F',
+    source: 'RadarChallenge',
+    conflicts: [],
+  },
+  redirect_uri: {
+    prefix: 'redir',
+    example: 'redir_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'RedirectUri',
+    conflicts: [],
+  },
+  role: {
+    prefix: 'role',
+    example: 'role_01EHQMYV6MBK39QC5PZXHY59C3',
+    source: 'Role',
+    conflicts: [],
+  },
+  role_assignment: {
+    prefix: 'role_assignment',
+    example: 'role_assignment_01HXYZ123456789ABCDEFGH',
+    source: 'UserRoleAssignment',
+    conflicts: [],
+  },
+  saml_idp_signing_certificate: {
+    prefix: 'saml_x509_cert',
+    example: 'saml_x509_cert_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'SamlIdpSigningCertificate',
+    conflicts: [],
+  },
+  saml_sp_encryption_certificate: {
+    prefix: 'saml_enc_key_pair',
+    example: 'saml_enc_key_pair_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'SamlSpEncryptionCertificate',
+    conflicts: [],
+  },
+  saml_sp_signing_certificate: {
+    prefix: 'saml_party_trust',
+    example: 'saml_party_trust_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'SamlSpSigningCertificate',
+    conflicts: [],
+  },
+  session: {
+    prefix: 'session',
+    example: 'session_01H93ZY4F80QPBEZ1R5B2SHQG8',
+    source: 'EventSchema',
+    conflicts: [],
+  },
+  team: {
+    prefix: 'team',
+    example: 'team_01JX9AN6E02HAG2Q2CKGC1XT5W',
+    source: 'Team',
+    conflicts: [],
+  },
+  user: {
+    prefix: 'user',
+    example: 'user_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'UserlandUser',
+    conflicts: [],
+  },
+  waitlist: {
+    prefix: 'waitlist',
+    example: 'waitlist_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'Waitlist',
+    conflicts: [],
+  },
+  waitlist_entry: {
+    prefix: 'wl_user',
+    example: 'wl_user_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'WaitlistEntry',
+    conflicts: [],
+  },
+  waitlist_user: {
+    prefix: 'wl_user',
+    example: 'wl_user_01E4ZCR3C56J083X43JQXF3JK5',
+    source: 'WaitlistUser',
+    conflicts: [],
+  },
+  webhook_endpoint: {
+    prefix: 'we',
+    example: 'we_0123456789',
+    source: 'WebhookEndpointJson',
+    conflicts: [],
   },
 };

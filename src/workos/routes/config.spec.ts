@@ -56,7 +56,7 @@ describe('Config routes', () => {
       const data = await json(res);
       expect(data.object).toBe('cors_origin');
       expect(data.origin).toBe('http://localhost:3000');
-      expect(data.id).toMatch(/^cors_/);
+      expect(data.id).toMatch(/^cors_origin_/);
     });
 
     it('rejects duplicate CORS origin', async () => {

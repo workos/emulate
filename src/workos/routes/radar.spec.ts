@@ -61,7 +61,7 @@ describe('Radar routes', () => {
   });
 
   it('returns 404 for nonexistent attempt', async () => {
-    const res = await req('/radar/attempts/radar_attempt_nonexistent');
+    const res = await req('/radar/attempts/radar_att_nonexistent');
     expect(res.status).toBe(404);
   });
 

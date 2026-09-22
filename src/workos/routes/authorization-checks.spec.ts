@@ -716,7 +716,7 @@ describe('Authorization check + role assignment routes', () => {
     const { membership } = await setupWithResource();
     const res = await req(`/authorization/organization_memberships/${membership.id}/check`, {
       method: 'POST',
-      body: JSON.stringify({ permission_slug: 'posts:read', resource_id: 'auth_res_nonexistent' }),
+      body: JSON.stringify({ permission_slug: 'posts:read', resource_id: 'authz_resource_nonexistent' }),
     });
     expect(res.status).toBe(404);
   });

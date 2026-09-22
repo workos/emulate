@@ -31,7 +31,7 @@ describe('Invitation routes', () => {
     expect(inv.state).toBe('pending');
     expect(inv.token).toBeDefined();
     expect(inv.accept_invitation_url).toContain(inv.token);
-    expect(inv.id).toMatch(/^inv_/);
+    expect(inv.id).toMatch(/^invitation_/);
     // The generated SDK reads these as required keys; omitting them raises KeyError on parse.
     expect(inv.accepted_at).toBeNull();
     expect(inv.revoked_at).toBeNull();

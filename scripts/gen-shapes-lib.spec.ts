@@ -5,6 +5,7 @@ import {
   extractEnvelope,
   parseShapeCatalog,
   parseEnvelopeCatalog,
+  parseIdPrefixCatalog,
   generateShapesFile,
   type ShapeMapEntry,
   type EnvelopeMapEntry,
@@ -226,6 +227,82 @@ describe('parseEnvelopeCatalog', () => {
   });
 });
 
+describe('parseIdPrefixCatalog', () => {
+  /** A schema with an `object` discriminator and an example id. */
+  function resource(objectType: string, example: string): EventSchemaNode {
+    return {
+      type: 'object',
+      properties: { object: { type: 'string', const: objectType }, id: { type: 'string', example } },
+    } as unknown as EventSchemaNode;
+  }
+
+  it('extracts the prefix from each object id example', () => {
+    const s = spec({ Widget: resource('widget', 'widget_01HXYZ123456789ABCDEFGHIJ') });
+    expect(parseIdPrefixCatalog(s)).toEqual([
+      {
+        objectType: 'widget',
+        prefix: 'widget',
+        example: 'widget_01HXYZ123456789ABCDEFGHIJ',
+        source: 'Widget',
+        conflicts: [],
+      },
+    ]);
+  });
+
+  it("accepts examples that are not valid Crockford Base32 — the spec's contain I and U", () => {
+    const s = spec({ Widget: resource('widget', 'widget_01HXYZ123456789ABCDEFGHIJ') });
+    expect(parseIdPrefixCatalog(s)[0].prefix).toBe('widget');
+  });
+
+  it('resolves an `object` discriminator that sits in a different allOf member than `id`', () => {
+    const s = spec({
+      Base: { type: 'object', properties: { object: { type: 'string', const: 'widget' } } },
+      Widget: {
+        allOf: [
+          { $ref: '#/components/schemas/Base' },
+          { type: 'object', properties: { id: { type: 'string', example: 'wg_01HXYZ123456789ABCDEFGHIJ' } } },
+        ],
+      } as unknown as EventSchemaNode,
+    });
+    expect(parseIdPrefixCatalog(s)).toEqual([
+      { objectType: 'widget', prefix: 'wg', example: 'wg_01HXYZ123456789ABCDEFGHIJ', source: 'Widget', conflicts: [] },
+    ]);
+  });
+
+  it('finds an object whose only example is in an inline schema nested inside a list', () => {
+    const s = spec({
+      WidgetList: {
+        type: 'object',
+        properties: { data: { type: 'array', items: resource('widget', 'widget_01HXYZ123456789ABCDEFGHIJ') } },
+      } as unknown as EventSchemaNode,
+    });
+    expect(parseIdPrefixCatalog(s).map((e) => e.objectType)).toEqual(['widget']);
+  });
+
+  it('prefers the shallowest example where the spec contradicts itself, and keeps the loser visible', () => {
+    const s = spec({
+      Widget: resource('widget', 'widget_01HXYZ123456789ABCDEFGHIJ'),
+      EventSchema: {
+        type: 'object',
+        properties: {
+          data: { type: 'object', properties: { widget: resource('widget', 'wg_01HXYZ123456789ABCDEFGHIJ') } },
+        },
+      } as unknown as EventSchemaNode,
+    });
+    const [entry] = parseIdPrefixCatalog(s);
+    expect(entry.prefix).toBe('widget');
+    expect(entry.conflicts).toEqual(['wg']);
+  });
+
+  it('ignores an id example with no prefix, and a schema with no object discriminator', () => {
+    const s = spec({
+      Bare: { type: 'object', properties: { id: { type: 'string', example: '01HXYZ123456789ABCDEFGHIJ' } } },
+      Anonymous: { type: 'object', properties: { id: { type: 'string', example: 'wg_01HXYZ123456789ABCDEFGHIJ' } } },
+    });
+    expect(parseIdPrefixCatalog(s)).toEqual([]);
+  });
+});
+
 describe('generateShapesFile', () => {
   const out = generateShapesFile(
     [{ objectType: 'widget', schemaName: 'Widget', properties: ['id', 'object'], required: ['id'] }],
@@ -237,6 +314,7 @@ describe('generateShapesFile', () => {
         required: ['widget'],
       },
     ],
+    [{ objectType: 'widget', prefix: 'wg', example: 'wg_01HXYZ123', source: 'Widget', conflicts: ['widget'] }],
   );
 
   it('emits a RESPONSE_SHAPE_REQUIREMENTS record keyed by object type', () => {
@@ -250,5 +328,12 @@ describe('generateShapesFile', () => {
     expect(out).toContain('export const RESPONSE_ENVELOPE_REQUIREMENTS');
     expect(out).toContain("'POST /widgets/validations': {");
     expect(out).toContain("schema: 'WidgetValidation'");
+  });
+
+  it('emits an ID_PREFIX_REQUIREMENTS record keyed by object type', () => {
+    expect(out).toContain('export const ID_PREFIX_REQUIREMENTS');
+    expect(out).toContain("prefix: 'wg'");
+    expect(out).toContain("example: 'wg_01HXYZ123'");
+    expect(out).toContain("conflicts: ['widget']");
   });
 });
