@@ -13,7 +13,7 @@ ARG SFW_REQUIRED=false
 # integrity hash (the hash was computed from a git clone, not a tarball). Every
 # other dependency — including typescript@5.9.3 — stays at its locked version,
 # keeping the build reproducible.
-FROM oven/bun:1.3.14 AS builder
+FROM oven/bun:1.4.2 AS builder
 ARG SFW_REQUIRED
 WORKDIR /app
 COPY package.json bun.lock ./
@@ -38,7 +38,7 @@ RUN bun run build
 # Deps stage: install production dependencies from the frozen bun lockfile.
 # This stage only needs production deps (no git+ssh transitive devDeps), so
 # the bun lockfile works correctly.
-FROM oven/bun:1.3.14 AS deps
+FROM oven/bun:1.4.2 AS deps
 ARG SFW_REQUIRED
 WORKDIR /app
 COPY package.json bun.lock ./

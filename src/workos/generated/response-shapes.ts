@@ -573,6 +573,12 @@ export const ID_PREFIX_REQUIREMENTS: Record<string, IdPrefixRequirement> = {
     source: 'AuthenticationFactor',
     conflicts: [],
   },
+  authkit_oauth_resource: {
+    prefix: 'authkit_oauth_resource',
+    example: 'authkit_oauth_resource_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'AuthkitOauthResource',
+    conflicts: [],
+  },
   authorization_resource: {
     prefix: 'authz_resource',
     example: 'authz_resource_01HXYZ123456789ABCDEFGH',

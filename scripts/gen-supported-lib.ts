@@ -189,11 +189,11 @@ export const FEATURES: FeatureDef[] = [
   },
   {
     name: 'Pipes / Connected Apps',
-    tags: ['pipes', 'pipes.provider', 'user-management.data-providers'],
+    tags: ['pipes', 'pipes.provider', 'user-management.data-providers', 'organizations.data-providers'],
     emulatorCreateRoutes: ['/pipes'],
     seedKeys: ['connectedAccounts'],
     notes:
-      'Connected-account CRUD and access-token retrieval are supported; a refresh mints a local `di_mock_` token rather than contacting the provider. The older `/pipes/connections` routes remain emulator-specific.',
+      'User-owned connected-account CRUD and access-token retrieval are supported; a refresh mints a local `di_mock_` token rather than contacting the provider. Organization-owned connected accounts are not implemented. The older `/pipes/connections` routes remain emulator-specific.',
   },
   {
     name: 'Applications',
@@ -231,8 +231,9 @@ export const FEATURES: FeatureDef[] = [
   },
   {
     name: 'AuthKit Configuration',
-    tags: ['user-management.redirect-uris', 'user-management.cors-origins'],
-    notes: 'Redirect URIs are accepted but not enforced against authorize requests.',
+    tags: ['user-management.redirect-uris', 'user-management.cors-origins', 'user-management.authkit-oauth-resources'],
+    notes:
+      'Redirect URIs are accepted but not enforced against authorize requests. OAuth resource indicators are not implemented.',
   },
   {
     name: 'Admin Portal',

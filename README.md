@@ -1766,7 +1766,7 @@ The WorkOS Emulator is designed for testing and development environments. When u
 
 ## Development
 
-The repository uses Bun 1.3.14, pinned by the `packageManager` field in `package.json`.
+The repository uses the Bun version pinned by the `packageManager` field in `package.json`.
 
 ```bash
 bun install --frozen-lockfile
