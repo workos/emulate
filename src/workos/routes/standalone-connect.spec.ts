@@ -330,4 +330,40 @@ describe('Standalone Connect', () => {
     expect(res.status).toBe(400);
     expect((await json(res)).error).toBe('invalid_grant');
   });
+
+  // Deleting the application fails the logins in flight with it — the pending session can no
+  // longer complete and the issued code can no longer be redeemed — and only those: another
+  // application's login carries on.
+  it('fails in-flight logins when their application is deleted, and only theirs', async () => {
+    const pending = await mint();
+    const { callbackUrl } = await issueCode();
+    const code = callbackUrl.searchParams.get('code')!;
+
+    const bystander = await json(
+      await server.app.request('/connect/applications', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: 'Bystander',
+          login_url: 'http://localhost:3000/login',
+          redirect_uris: [callback],
+        }),
+      }),
+    );
+    const bystanderLogin = await authorize({ client_id: bystander.client_id });
+    expect(bystanderLogin.status).toBe(302);
+    const bystanderPending = new URL(bystanderLogin.headers.get('location')!).searchParams.get('external_auth_id')!;
+
+    const application = ws.connectApplications.findOneBy('client_id', 'client_standalone')!;
+    const res = await server.app.request(`/connect/applications/${application.id}`, { method: 'DELETE', headers });
+    expect(res.status).toBe(204);
+
+    expect(ws.externalAuthSessions.get(pending)).toBeUndefined();
+    expect((await complete(pending)).status).toBe(404);
+    expect(ws.authCodes.findOneBy('code', code)).toBeUndefined();
+    expect((await exchange(code)).status).toBe(401);
+
+    expect(ws.externalAuthSessions.get(bystanderPending)?.client_id).toBe(bystander.client_id);
+    expect((await complete(bystanderPending, { id: 'user_67890', email: 'bystander@example.com' })).status).toBe(200);
+  });
 });
