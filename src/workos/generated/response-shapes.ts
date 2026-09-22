@@ -60,6 +60,11 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
     properties: ['created_at', 'id', 'object', 'sms', 'totp', 'type', 'updated_at', 'user_id'],
     required: ['created_at', 'id', 'object', 'type', 'updated_at'],
   },
+  connect_application_secret: {
+    schema: 'NewConnectApplicationSecret',
+    properties: ['created_at', 'id', 'last_used_at', 'object', 'secret', 'secret_hint', 'updated_at'],
+    required: ['created_at', 'id', 'last_used_at', 'object', 'secret', 'secret_hint', 'updated_at'],
+  },
   connection: {
     schema: 'Connection',
     properties: [
@@ -414,6 +419,16 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
     schema: 'AuthorizationCheck',
     properties: ['authorized'],
     required: ['authorized'],
+  },
+  'POST /client/token': {
+    schema: 'ClientApiTokenResponse',
+    properties: ['token'],
+    required: ['token'],
+  },
+  'POST /connect/applications/{id}/client_secrets': {
+    schema: 'NewConnectApplicationSecret',
+    properties: ['created_at', 'id', 'last_used_at', 'object', 'secret', 'secret_hint', 'updated_at'],
+    required: ['created_at', 'id', 'last_used_at', 'object', 'secret', 'secret_hint', 'updated_at'],
   },
   'POST /portal/generate_link': {
     schema: 'PortalLinkResponse',

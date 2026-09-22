@@ -62,6 +62,14 @@ export const OBJECT_SCHEMA_MAP: readonly ShapeMapEntry[] = [
   // depth — enrollment's secrets are pinned by the route tests instead.
   { objectType: 'authentication_factor', schemaName: 'AuthenticationFactor' },
   { objectType: 'authentication_challenge', schemaName: 'AuthenticationChallenge' },
+  // The spec names only the secret-bearing creation shape; the list route's secretless
+  // variant is an inline schema, so `secret` is carried as a tracked gap on this entry.
+  { objectType: 'connect_application_secret', schemaName: 'NewConnectApplicationSecret' },
+  // `connect_application` is deliberately absent: `ConnectApplication` is an allOf over a
+  // four-way oneOf (first-party / dynamically registered / third-party oauth, and m2m), and
+  // this catalog models one flat shape per object. Flattening it would drop the discriminated
+  // fields — the exact thing resolveSchema refuses to do — so each variant is pinned by a route
+  // test in src/workos/routes/connect.spec.ts instead.
 ];
 
 export interface EnvelopeMapEntry {
@@ -116,6 +124,16 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
     schemaName: 'AuthorizationCheck',
   },
   { method: 'GET', path: '/sso/jwks/{clientId}', status: '200', schemaName: 'JwksResponse' },
+  { method: 'POST', path: '/client/token', status: '201', schemaName: 'ClientApiTokenResponse' },
+  // The created secret is the one place the plaintext `secret` is ever returned, so the
+  // envelope and the resource are the same body — listed here because no named spec schema
+  // covers the secretless variant the list route serves.
+  {
+    method: 'POST',
+    path: '/connect/applications/{id}/client_secrets',
+    status: '201',
+    schemaName: 'NewConnectApplicationSecret',
+  },
   // MFA. Enrollment is the envelope that went out bare for several releases (issue #110): every
   // SDK reads `{ authentication_factor, authentication_challenge }`, and none could enroll a
   // factor through the emulator. The legacy `/auth` routes are resource bodies, listed for the

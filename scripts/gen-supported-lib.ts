@@ -206,6 +206,8 @@ export const FEATURES: FeatureDef[] = [
       'workos-connect',
     ],
     seedKeys: ['connectApplications'],
+    notes:
+      "A redirect URI is stored as a bare string, so `default` is accepted on create and update but always reported as `false`. `uses_pkce` and `is_first_party` are stored and reported, but nothing is registered dynamically, so `was_dynamically_registered` is always `false` and the list route's `registration_types` filter only ever matches `authenticated`. `POST /client/token` mints a signed, short-lived token, but the spec documents only the `{ token }` envelope — the claims inside are an emulator convention, and no Client GraphQL API is served for it to authenticate against.",
   },
   {
     name: 'JWT Templates',

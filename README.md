@@ -415,11 +415,33 @@ connectApplications:
     client_id: client_local_backend # optional; generated if omitted
     client_secret: secret_local_backend # optional; generated if omitted
     audience: https://api.acme.example # optional; the token `aud` claim, defaults to client_id
+
+  - name: Partner App
+    type: oauth
+    is_first_party: false # optional, oauth only; a third-party app needs `organization`
+    organization: Acme Corp
+    uses_pkce: true # optional, oauth only; reported on the app, not enforced
 ```
 
 Each seeded application is provisioned with a client secret. Pin `client_secret` to bake a known
 value into a service's environment; otherwise one is generated. The application is then available
-via `GET /connect/applications`.
+through the full Connect Applications surface:
+
+| Method   | Path                                       | Notes                                                 |
+| -------- | ------------------------------------------ | ----------------------------------------------------- |
+| `GET`    | `/connect/applications`                    | Filters on `organization_id` and `registration_types` |
+| `POST`   | `/connect/applications`                    |                                                       |
+| `GET`    | `/connect/applications/:id`                | `:id` is the application ID **or** the client ID      |
+| `PUT`    | `/connect/applications/:id`                | `name`, `description`, `scopes`, `redirect_uris`      |
+| `DELETE` | `/connect/applications/:id`                | Cascades secrets and in-flight Connect logins         |
+| `GET`    | `/connect/applications/:id/client_secrets` | A bare array; never includes the plaintext            |
+| `POST`   | `/connect/applications/:id/client_secrets` | The one response carrying the plaintext, as `secret`  |
+| `DELETE` | `/connect/client_secrets/:id`              |                                                       |
+
+`registration_types` defaults to `authenticated`, as production does — nothing in the emulator
+performs dynamic client registration, so an unfiltered list shows every application it can create.
+A secret's `last_used_at` is stamped when a token exchange actually succeeds, not merely when the
+secret is presented.
 
 #### Token exchange (`client_credentials`)
 
@@ -529,6 +551,22 @@ is not tracked: tokens default to the application's configured scopes, optionall
 at token exchange. The emulator's completion URL uses `/oauth2/authorize/complete?external_auth_id=...`,
 not production's AuthKit-domain `/oauth/authorize/complete?state=...`; always follow the returned URL
 rather than constructing it. This is a local testing flow, not a replacement authentication service.
+
+### Client API tokens
+
+`POST /client/token` mints the short-lived token the Client GraphQL API expects, scoped to an
+organization and a user:
+
+```bash
+curl -X POST http://localhost:4100/client/token \
+  -H "Authorization: Bearer sk_test_ci_key" -H "Content-Type: application/json" \
+  -d '{"organization_id":"org_01K...","user_id":"user_01K..."}'
+```
+
+Unknown ids return `404`. The token is signed with the emulator key, so it verifies against
+`/sso/jwks`, and carries `sub`, `org_id`, and `aud: client` with a five-minute expiry. The spec
+documents only the `{ token }` response, so those claims are an emulator convention — and the
+emulator does not serve the Client GraphQL API itself, so nothing consumes the token.
 
 ### API Keys
 
