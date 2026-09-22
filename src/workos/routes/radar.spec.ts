@@ -56,6 +56,9 @@ describe('Radar routes', () => {
     const res = await req(`/radar/attempts/${attempt.id}`);
     expect(res.status).toBe(200);
     const data = await json(res);
+    // The spec has no object-level example for the prefix conformance suite to check; the
+    // `/radar/attempts/{id}` path documents `radar_att_…`, so this pins it.
+    expect(data.id).toMatch(/^radar_att_[0-9A-HJKMNP-TV-Z]{26}$/);
     expect(data.ip_address).toBe('5.6.7.8');
     expect(data.signals).toHaveLength(1);
   });
