@@ -148,9 +148,9 @@ const KNOWN_PREFIXES: Record<string, string> = {
   sso_authorization: 'sso_auth',
   directory: 'directory',
   directory_user: 'directory_user',
-  directory_group: 'directory_grp',
+  directory_group: 'directory_group',
   event: 'event',
-  invitation: 'inv',
+  invitation: 'invitation',
 };
 
 /** Base entity fields that are auto-managed — excluded from generated fields. */

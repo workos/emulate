@@ -7,6 +7,8 @@ import type { WorkOSEventName } from './constants.js';
 export interface EventPayload {
   event: WorkOSEventName | string;
   data: Record<string, unknown>;
+  /** The organization the event occurred within, for payloads whose `data.organization_id` does not say. */
+  organization_id?: string | null;
   environment_id?: string;
   /** Spec `context` envelope, delivered alongside `data` to webhook endpoints. */
   context?: Record<string, unknown>;
@@ -67,11 +69,13 @@ export class EventBus {
 
   emit(payload: EventPayload): void {
     const ws = getWorkOSStore(this.store);
+    const dataOrganizationId = payload.data.organization_id;
 
     const event = ws.events.insert({
       object: 'event',
       event: payload.event,
       data: payload.data,
+      organization_id: payload.organization_id ?? (typeof dataOrganizationId === 'string' ? dataOrganizationId : null),
       environment_id: payload.environment_id ?? null,
       ...(payload.context ? { context: payload.context } : {}),
     });

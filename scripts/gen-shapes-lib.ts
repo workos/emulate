@@ -5,7 +5,7 @@
  * Extracts response *shapes* (property + required field sets) from a WorkOS
  * OpenAPI spec and generates src/workos/generated/response-shapes.ts.
  *
- * Two catalogs, because a response body has two layers that can drift apart:
+ * Three catalogs, because a response body has layers that can drift apart:
  *
  *   1. OBJECT_SCHEMA_MAP — the *resource* objects (`user`, `api_key`, ...),
  *      keyed by the emulator's `object` discriminator. Covers what the
@@ -16,6 +16,10 @@
  *      see them — and an envelope is assembled inline in the route handler,
  *      which is exactly where a plausible-looking invention like `{ valid }`
  *      slips past a spec that says `{ api_key }`.
+ *   3. The ID prefix catalog — the `id` *value* format per object. Field sets
+ *      say nothing about what goes in them, so `id: "ra_01…"` where the spec
+ *      documents `role_assignment_01…` passes both catalogs above. This one is
+ *      discovered structurally (see parseIdPrefixCatalog), not curated.
  *
  * Unlike the event catalog — discovered structurally via properties.event.const
  * — resource schemas are neither uniformly named nor uniformly shaped in the
@@ -374,7 +378,170 @@ export function parseEnvelopeCatalog(
   return map.map((entry) => extractEnvelope(entry, spec)).sort((a, b) => a.operation.localeCompare(b.operation));
 }
 
-export function generateShapesFile(shapes: ParsedShape[], envelopes: ParsedEnvelope[]): string {
+export interface ParsedIdPrefix {
+  /** The `object` discriminator the example's schema declares, e.g. "role_assignment". */
+  objectType: string;
+  /** The prefix the example's id carries, e.g. "role_assignment". */
+  prefix: string;
+  /** The example the prefix was read from, verbatim. */
+  example: string;
+  /** The top-level spec schema (or path) the example was found under. */
+  source: string;
+  /** Other prefixes the spec also uses for this object's id, where it contradicts itself. */
+  conflicts: string[];
+}
+
+/**
+ * A prefixed example id. Deliberately not a ULID pattern: the spec's examples are
+ * not all valid Crockford Base32 (`authorized_connect_app_01HXYZ123456789ABCDEFGHIJ`
+ * contains I and U), and some are short (`we_0123456789`). Greedy prefix matching is
+ * what resolves `authz_resource_01HXYZ…` to `authz_resource` rather than `authz`.
+ */
+const ID_EXAMPLE_RE = /^([a-z][a-z0-9_]*)_([0-9A-Za-z]{6,})$/;
+
+interface PrefixOccurrence extends Omit<ParsedIdPrefix, 'conflicts'> {
+  /** Nesting depth below the top-level schema — the tie-break for the canonical example. */
+  depth: number;
+}
+
+/**
+ * The named property as declared anywhere in a node's composition. `object` and `id` are
+ * routinely declared in different allOf/oneOf members (an `EventSchema` variant carries
+ * the discriminator; the member beside it carries the id), so neither can be read off the
+ * node's own `properties` alone. Branches are searched in declaration order; `seen` guards
+ * ref cycles.
+ */
+function compositionProperty(
+  node: EventSchemaNode,
+  spec: EventSchemaNode,
+  name: string,
+  seen = new Set<string>(),
+): EventSchemaNode | undefined {
+  if (node.$ref) {
+    const target = node.$ref.match(/^#\/components\/schemas\/(.+)$/)?.[1];
+    if (!target || seen.has(target)) return undefined;
+    seen.add(target);
+    const resolved = getSchemas(spec)[target];
+    return resolved ? compositionProperty(resolved, spec, name, seen) : undefined;
+  }
+
+  const own = node.properties?.[name];
+  if (own) return own;
+
+  for (const key of ['allOf', 'oneOf', 'anyOf'] as const) {
+    for (const member of (node[key] as EventSchemaNode[] | undefined) ?? []) {
+      const found = compositionProperty(member, spec, name, new Set(seen));
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+/** The `object` discriminator for a node, looked for across every branch of its composition. */
+function objectDiscriminator(node: EventSchemaNode, spec: EventSchemaNode): string | undefined {
+  const field = compositionProperty(node, spec, 'object');
+  if (!field) return undefined;
+  const resolved = field.$ref ? resolveSchema(field, spec) : field;
+  const value = resolved.const ?? (resolved.enum?.length === 1 ? resolved.enum[0] : undefined);
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** Every string example declared on a property, across `example` and `examples`. */
+function exampleStrings(node: EventSchemaNode): string[] {
+  const out: string[] = [];
+  if (typeof node.example === 'string') out.push(node.example);
+  const examples = node.examples;
+  if (Array.isArray(examples)) {
+    for (const value of examples) if (typeof value === 'string') out.push(value);
+  } else if (examples && typeof examples === 'object') {
+    for (const entry of Object.values(examples as Record<string, unknown>)) {
+      const value = entry && typeof entry === 'object' ? (entry as { value?: unknown }).value : entry;
+      if (typeof value === 'string') out.push(value);
+    }
+  }
+  return out;
+}
+
+/**
+ * Walk everything under `node`, recording each `id` example found on a schema that also
+ * declares an `object` discriminator. The walk is structural rather than $ref-following:
+ * an object's id example can sit in an inline schema nested inside a list wrapper
+ * (`AuthorizedConnectApplicationList.data.items`), which no curated schema map would reach.
+ */
+function collectIdPrefixes(
+  node: unknown,
+  spec: EventSchemaNode,
+  source: string,
+  depth: number,
+  out: PrefixOccurrence[],
+  seen: Set<object>,
+): void {
+  if (!node || typeof node !== 'object') return;
+  if (seen.has(node)) return;
+  seen.add(node);
+
+  if (Array.isArray(node)) {
+    for (const item of node) collectIdPrefixes(item, spec, source, depth + 1, out, seen);
+    return;
+  }
+
+  const schema = node as EventSchemaNode;
+  const idField = compositionProperty(schema, spec, 'id');
+  if (idField) {
+    const objectType = objectDiscriminator(schema, spec);
+    if (objectType) {
+      for (const example of exampleStrings(idField)) {
+        const match = ID_EXAMPLE_RE.exec(example);
+        if (match) out.push({ objectType, prefix: match[1], example, source, depth });
+      }
+    }
+  }
+
+  for (const value of Object.values(schema)) collectIdPrefixes(value, spec, source, depth + 1, out, seen);
+}
+
+/**
+ * The spec's documented id prefix per object, extracted from its own `id` examples.
+ *
+ * Nothing is curated here: every object the spec gives a prefixed `id` example for is
+ * catalogued. Where the spec contradicts itself the canonical example is the shallowest
+ * one — the resource schema rather than an event payload's nested copy — with the losing
+ * prefixes kept in `conflicts` so the disagreement stays visible rather than being picked
+ * silently. Ties break on source name, so the output is stable across runs.
+ */
+export function parseIdPrefixCatalog(spec: EventSchemaNode): ParsedIdPrefix[] {
+  const occurrences: PrefixOccurrence[] = [];
+  const seen = new Set<object>();
+  for (const [name, schema] of Object.entries(getSchemas(spec))) {
+    collectIdPrefixes(schema, spec, name, 0, occurrences, seen);
+  }
+  const paths = (spec as { paths?: Record<string, unknown> }).paths ?? {};
+  for (const [path, item] of Object.entries(paths)) {
+    collectIdPrefixes(item, spec, path, 0, occurrences, seen);
+  }
+
+  const byObject = new Map<string, PrefixOccurrence[]>();
+  for (const occurrence of occurrences) {
+    const list = byObject.get(occurrence.objectType);
+    if (list) list.push(occurrence);
+    else byObject.set(occurrence.objectType, [occurrence]);
+  }
+
+  return [...byObject.entries()]
+    .map(([objectType, list]) => {
+      const ranked = [...list].sort((a, b) => a.depth - b.depth || a.source.localeCompare(b.source));
+      const canonical = ranked[0];
+      const conflicts = [...new Set(ranked.map((o) => o.prefix))].filter((p) => p !== canonical.prefix).sort();
+      return { objectType, prefix: canonical.prefix, example: canonical.example, source: canonical.source, conflicts };
+    })
+    .sort((a, b) => a.objectType.localeCompare(b.objectType));
+}
+
+export function generateShapesFile(
+  shapes: ParsedShape[],
+  envelopes: ParsedEnvelope[],
+  idPrefixes: ParsedIdPrefix[],
+): string {
   const lines: string[] = [];
   lines.push('/**');
   lines.push(' * Generated by scripts/gen-shapes.ts — do not edit by hand.');
@@ -386,9 +553,12 @@ export function generateShapesFile(shapes: ParsedShape[], envelopes: ParsedEnvel
   lines.push(' *   - RESPONSE_SHAPE_REQUIREMENTS    per resource   (OBJECT_SCHEMA_MAP)');
   lines.push(' *   - RESPONSE_ENVELOPE_REQUIREMENTS per operation  (ENVELOPE_SCHEMA_MAP)');
   lines.push(' *');
-  lines.push(' * Consumed by src/workos/response-shapes.spec.ts and');
-  lines.push(' * src/workos/response-envelopes.spec.ts to assert the emulator matches the');
-  lines.push(' * spec and never leaks internal fields.');
+  lines.push(" * Plus ID_PREFIX_REQUIREMENTS, discovered structurally from the spec's own");
+  lines.push(' * `id` examples rather than from a curated map.');
+  lines.push(' *');
+  lines.push(' * Consumed by src/workos/response-shapes.spec.ts,');
+  lines.push(' * src/workos/response-envelopes.spec.ts and src/workos/id-prefixes.spec.ts to');
+  lines.push(' * assert the emulator matches the spec and never leaks internal fields.');
   lines.push(' */');
   lines.push('');
   lines.push('export interface ResponseShapeRequirement {');
@@ -425,6 +595,39 @@ export function generateShapesFile(shapes: ParsedShape[], envelopes: ParsedEnvel
     lines.push(`    schema: '${envelope.schemaName}',`);
     lines.push(`    properties: [${props}],`);
     lines.push(`    required: [${req}],`);
+    lines.push('  },');
+  }
+  lines.push('};');
+  lines.push('');
+  lines.push('export interface IdPrefixRequirement {');
+  lines.push("  /** The prefix the spec's canonical `id` example carries, without the trailing underscore. */");
+  lines.push('  prefix: string;');
+  lines.push('  /** The example it was read from, verbatim. */');
+  lines.push('  example: string;');
+  lines.push('  /** The top-level spec schema (or path) the example was found under. */');
+  lines.push('  source: string;');
+  lines.push('  /** Other prefixes the spec uses for this object elsewhere, where it contradicts itself. */');
+  lines.push('  conflicts: readonly string[];');
+  lines.push('}');
+  lines.push('');
+  lines.push('/**');
+  lines.push(' * The id prefix the spec documents for each object, keyed by `object` discriminator.');
+  lines.push(' * Covers every object the spec gives a prefixed `id` example for, including ones the');
+  lines.push(' * emulator does not model — src/workos/id-prefixes.spec.ts matches it against');
+  lines.push(' * ID_PREFIXES and ledgers what is left over.');
+  lines.push(' */');
+  lines.push('export const ID_PREFIX_REQUIREMENTS: Record<string, IdPrefixRequirement> = {');
+  // Every key and value here comes from the spec rather than a curated list, so each is
+  // emitted as a JSON string literal: a discriminator or schema name carrying a hyphen or a
+  // quote would otherwise produce TypeScript that does not parse, and the failure would be a
+  // generator that cannot regenerate. oxfmt drops the redundant quoting on the way out.
+  for (const entry of idPrefixes) {
+    const conflicts = entry.conflicts.map((c) => JSON.stringify(c)).join(', ');
+    lines.push(`  ${JSON.stringify(entry.objectType)}: {`);
+    lines.push(`    prefix: ${JSON.stringify(entry.prefix)},`);
+    lines.push(`    example: ${JSON.stringify(entry.example)},`);
+    lines.push(`    source: ${JSON.stringify(entry.source)},`);
+    lines.push(`    conflicts: [${conflicts}],`);
     lines.push('  },');
   }
   lines.push('};');

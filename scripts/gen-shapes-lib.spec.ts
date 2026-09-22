@@ -5,6 +5,7 @@ import {
   extractEnvelope,
   parseShapeCatalog,
   parseEnvelopeCatalog,
+  parseIdPrefixCatalog,
   generateShapesFile,
   type ShapeMapEntry,
   type EnvelopeMapEntry,
@@ -226,6 +227,82 @@ describe('parseEnvelopeCatalog', () => {
   });
 });
 
+describe('parseIdPrefixCatalog', () => {
+  /** A schema with an `object` discriminator and an example id. */
+  function resource(objectType: string, example: string): EventSchemaNode {
+    return {
+      type: 'object',
+      properties: { object: { type: 'string', const: objectType }, id: { type: 'string', example } },
+    } as unknown as EventSchemaNode;
+  }
+
+  it('extracts the prefix from each object id example', () => {
+    const s = spec({ Widget: resource('widget', 'widget_01HXYZ123456789ABCDEFGHIJ') });
+    expect(parseIdPrefixCatalog(s)).toEqual([
+      {
+        objectType: 'widget',
+        prefix: 'widget',
+        example: 'widget_01HXYZ123456789ABCDEFGHIJ',
+        source: 'Widget',
+        conflicts: [],
+      },
+    ]);
+  });
+
+  it("accepts examples that are not valid Crockford Base32 — the spec's contain I and U", () => {
+    const s = spec({ Widget: resource('widget', 'widget_01HXYZ123456789ABCDEFGHIJ') });
+    expect(parseIdPrefixCatalog(s)[0].prefix).toBe('widget');
+  });
+
+  it('resolves an `object` discriminator that sits in a different allOf member than `id`', () => {
+    const s = spec({
+      Base: { type: 'object', properties: { object: { type: 'string', const: 'widget' } } },
+      Widget: {
+        allOf: [
+          { $ref: '#/components/schemas/Base' },
+          { type: 'object', properties: { id: { type: 'string', example: 'wg_01HXYZ123456789ABCDEFGHIJ' } } },
+        ],
+      } as unknown as EventSchemaNode,
+    });
+    expect(parseIdPrefixCatalog(s)).toEqual([
+      { objectType: 'widget', prefix: 'wg', example: 'wg_01HXYZ123456789ABCDEFGHIJ', source: 'Widget', conflicts: [] },
+    ]);
+  });
+
+  it('finds an object whose only example is in an inline schema nested inside a list', () => {
+    const s = spec({
+      WidgetList: {
+        type: 'object',
+        properties: { data: { type: 'array', items: resource('widget', 'widget_01HXYZ123456789ABCDEFGHIJ') } },
+      } as unknown as EventSchemaNode,
+    });
+    expect(parseIdPrefixCatalog(s).map((e) => e.objectType)).toEqual(['widget']);
+  });
+
+  it('prefers the shallowest example where the spec contradicts itself, and keeps the loser visible', () => {
+    const s = spec({
+      Widget: resource('widget', 'widget_01HXYZ123456789ABCDEFGHIJ'),
+      EventSchema: {
+        type: 'object',
+        properties: {
+          data: { type: 'object', properties: { widget: resource('widget', 'wg_01HXYZ123456789ABCDEFGHIJ') } },
+        },
+      } as unknown as EventSchemaNode,
+    });
+    const [entry] = parseIdPrefixCatalog(s);
+    expect(entry.prefix).toBe('widget');
+    expect(entry.conflicts).toEqual(['wg']);
+  });
+
+  it('ignores an id example with no prefix, and a schema with no object discriminator', () => {
+    const s = spec({
+      Bare: { type: 'object', properties: { id: { type: 'string', example: '01HXYZ123456789ABCDEFGHIJ' } } },
+      Anonymous: { type: 'object', properties: { id: { type: 'string', example: 'wg_01HXYZ123456789ABCDEFGHIJ' } } },
+    });
+    expect(parseIdPrefixCatalog(s)).toEqual([]);
+  });
+});
+
 describe('generateShapesFile', () => {
   const out = generateShapesFile(
     [{ objectType: 'widget', schemaName: 'Widget', properties: ['id', 'object'], required: ['id'] }],
@@ -237,6 +314,7 @@ describe('generateShapesFile', () => {
         required: ['widget'],
       },
     ],
+    [{ objectType: 'widget', prefix: 'wg', example: 'wg_01HXYZ123', source: 'Widget', conflicts: ['widget'] }],
   );
 
   it('emits a RESPONSE_SHAPE_REQUIREMENTS record keyed by object type', () => {
@@ -250,5 +328,45 @@ describe('generateShapesFile', () => {
     expect(out).toContain('export const RESPONSE_ENVELOPE_REQUIREMENTS');
     expect(out).toContain("'POST /widgets/validations': {");
     expect(out).toContain("schema: 'WidgetValidation'");
+  });
+
+  // Spec-derived text is emitted as JSON string literals, so this catalog's raw output is
+  // double-quoted where the curated ones above are not; gen-shapes.ts runs oxfmt over the
+  // file afterwards, which normalizes the quoting that does not need to be there.
+  it('emits an ID_PREFIX_REQUIREMENTS record keyed by object type', () => {
+    expect(out).toContain('export const ID_PREFIX_REQUIREMENTS');
+    expect(out).toContain('"widget": {');
+    expect(out).toContain('prefix: "wg"');
+    expect(out).toContain('example: "wg_01HXYZ123"');
+    expect(out).toContain('conflicts: ["widget"]');
+  });
+
+  // The id-prefix catalog is discovered from the spec rather than curated, so a discriminator
+  // or schema name the spec invents has to survive being written into TypeScript. Unquoted, a
+  // hyphen produces an unparseable key and an apostrophe ends the literal early — either way
+  // `gen:shapes` emits a file it can no longer regenerate from.
+  it('quotes and escapes spec-derived keys and values that are not safe identifiers', () => {
+    const hostile = generateShapesFile(
+      [],
+      [],
+      [
+        {
+          objectType: 'odd-object.type',
+          prefix: "o'dd",
+          example: "o'dd_01HXYZ123",
+          source: 'Schema\\With\\Escapes',
+          conflicts: ["c'onflict"],
+        },
+      ],
+    );
+
+    const body = hostile.slice(hostile.indexOf('export const ID_PREFIX_REQUIREMENTS'));
+    const literal = body.slice(body.indexOf('{'), body.indexOf('\n};') + 2);
+    // The proof that matters: spec-derived text reaches TypeScript that still parses.
+    expect(() => new Function(`return (${literal})`)).not.toThrow();
+
+    const parsed = new Function(`return (${literal})`)() as Record<string, Record<string, string>>;
+    expect(parsed['odd-object.type'].prefix).toBe("o'dd");
+    expect(parsed['odd-object.type'].source).toBe('Schema\\With\\Escapes');
   });
 });

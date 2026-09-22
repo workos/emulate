@@ -115,7 +115,7 @@ const directory: WorkOSDirectory = {
 };
 
 const directoryGroup: WorkOSDirectoryGroup = {
-  id: 'directory_grp_01',
+  id: 'directory_group_01',
   object: 'directory_group',
   directory_id: 'directory_01',
   organization_id: 'org_01',

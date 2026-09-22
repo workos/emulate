@@ -93,7 +93,7 @@ describe('Audit Logs routes', () => {
   });
 
   it('returns 404 for nonexistent export', async () => {
-    const res = await req('/audit_logs/exports/audit_export_nonexistent');
+    const res = await req('/audit_logs/exports/audit_log_export_nonexistent');
     expect(res.status).toBe(404);
   });
 
