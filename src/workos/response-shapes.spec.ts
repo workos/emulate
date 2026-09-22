@@ -32,6 +32,7 @@ import {
   formatFeatureFlag,
   formatAuthFactor,
   formatAuthChallenge,
+  formatClientSecret,
 } from './helpers.js';
 import { RESPONSE_SHAPE_REQUIREMENTS } from './generated/response-shapes.js';
 import type {
@@ -48,6 +49,7 @@ import type {
   WorkOSFeatureFlag,
   WorkOSAuthenticationFactor,
   WorkOSAuthenticationChallenge,
+  WorkOSClientSecret,
 } from './entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -238,6 +240,17 @@ const authChallenge: WorkOSAuthenticationChallenge = {
 const store = new Store();
 const ws = getWorkOSStore(store);
 
+const clientSecret: WorkOSClientSecret = {
+  id: 'secret_01',
+  object: 'connect_application_secret',
+  application_id: 'conn_app_01',
+  value: 'secret_supersecretplaintext',
+  secret_hint: 'text',
+  last_used_at: null,
+  created_at: TS,
+  updated_at: TS,
+};
+
 const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown> }> = [
   { objectType: 'user', output: formatUser(user) },
   { objectType: 'organization', output: formatOrganization(organization, ws, { domains: [] }) },
@@ -252,6 +265,7 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'feature_flag', output: formatFeatureFlag(featureFlag) },
   { objectType: 'authentication_factor', output: formatAuthFactor(authFactor) },
   { objectType: 'authentication_challenge', output: formatAuthChallenge(authChallenge) },
+  { objectType: 'connect_application_secret', output: formatClientSecret(clientSecret) },
 ];
 
 /**
@@ -262,6 +276,11 @@ const KNOWN_MISSING_REQUIRED: Record<string, readonly string[]> = {
   // Spec models a connection `status` distinct from `state`; the emulator's
   // WorkOSConnection carries only `state`.
   connection: ['status'],
+  // `NewConnectApplicationSecret` is the creation shape, and the plaintext it requires is
+  // returned exactly once — the create route appends it to this formatter's output. Every
+  // later read serves the secretless inline shape the spec gives the list route, which is
+  // this formatter alone, so the gap is the whole point of it.
+  connect_application_secret: ['secret'],
 };
 
 /**
@@ -281,11 +300,16 @@ const KNOWN_EXTRA_FIELDS: Record<string, readonly string[]> = {
  *
  * Scope note: this set deliberately omits auth-code/token field names
  * (`code`, `token`, ...). Those belong to flow resources — email verification,
- * magic auth, client secrets — whose formatters intentionally surface the
- * value so a test harness can complete the flow without an out-of-band
- * channel. The real API hides them; an emulator must not, which is exactly
- * why those formatters are not in this catalog. Listing those names here
- * would imply a coverage this loop does not provide.
+ * magic auth — whose formatters intentionally surface the value so a test
+ * harness can complete the flow without an out-of-band channel. The real API
+ * hides them; an emulator must not, which is exactly why those formatters are
+ * not in this catalog. Listing those names here would imply a coverage this
+ * loop does not provide.
+ *
+ * A client secret is not one of them: production returns its plaintext once at
+ * creation and never again, so `formatClientSecret` strips `value` and the
+ * create route appends the plaintext itself. `value` therefore belongs here —
+ * it is the field whose escape this guard exists to catch.
  *
  * A password reset is the flow resource that *is* in the catalog: its spec
  * schema documents `password_reset_token` — the endpoint exists so an app can
@@ -296,7 +320,7 @@ const KNOWN_EXTRA_FIELDS: Record<string, readonly string[]> = {
  * returns its raw value only once, at creation, so `formatApiKeyRecord` emits
  * `obfuscated_value` and never `key` — hence `key` belongs here.
  */
-const SECRET_FIELDS = new Set<string>(['password_hash', 'code_challenge', 'code_challenge_method', 'key']);
+const SECRET_FIELDS = new Set<string>(['password_hash', 'code_challenge', 'code_challenge_method', 'key', 'value']);
 
 describe('response shape conformance (format* helpers vs OpenAPI spec)', () => {
   it('covers exactly the resources in the generated requirements catalog', () => {

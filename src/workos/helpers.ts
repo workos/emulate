@@ -1140,16 +1140,29 @@ export function formatConnectApplication(a: WorkOSConnectApplication): Record<st
     return { ...base, application_type: 'm2m', organization_id: a.organization_id, audience: a.audience };
   }
 
-  return {
+  const oauth = {
     ...base,
     application_type: 'oauth',
     redirect_uris: a.redirect_uris.map((uri) => ({ uri, default: false })),
-    uses_pkce: false,
-    is_first_party: true,
+    uses_pkce: a.uses_pkce,
+  };
+
+  // The spec's oauth branch is a three-way oneOf on how the application came to exist, and each
+  // arm carries a different field set: a first-party app names nothing else, a dynamically
+  // registered one says so, and a third-party one must name its owning organization.
+  if (a.is_first_party) return { ...oauth, is_first_party: true };
+  if (a.was_dynamically_registered) return { ...oauth, is_first_party: false, was_dynamically_registered: true };
+  return {
+    ...oauth,
+    is_first_party: false,
+    was_dynamically_registered: false,
+    organization_id: a.organization_id,
   };
 }
 
-const CLIENT_SECRET_EXCLUDE = new Set([...INTERNAL_FIELDS, 'value']);
+// `application_id` is the emulator's foreign key, not a spec field: the secret is always
+// addressed through its application, so the spec's shape never restates the owner.
+const CLIENT_SECRET_EXCLUDE = new Set([...INTERNAL_FIELDS, 'value', 'application_id']);
 
 export function formatClientSecret(s: WorkOSClientSecret): Record<string, unknown> {
   return formatEntity(s, { exclude: CLIENT_SECRET_EXCLUDE });

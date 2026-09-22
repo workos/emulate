@@ -192,6 +192,44 @@ describe('Seeding M2M applications and API keys', () => {
     ).rejects.toThrow(/organization not found/i);
   });
 
+  it('throws when a seeded third-party oauth application has no organization', async () => {
+    await expect(
+      createEmulator({
+        port: 0,
+        seed: {
+          organizations: [{ name: 'Acme Corp' }],
+          connectApplications: [{ name: 'Third Party', type: 'oauth', is_first_party: false }],
+        },
+      }),
+      // Caught by config validation, before seeding runs.
+    ).rejects.toThrow(/organization is required when is_first_party is false/i);
+  });
+
+  it('seeds a third-party oauth application with its owning organization', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [{ name: 'Acme Corp' }],
+        connectApplications: [
+          { name: 'Third Party', type: 'oauth', is_first_party: false, organization: 'Acme Corp' },
+          { name: 'First Party', type: 'oauth' },
+        ],
+        apiKeys: [{ name: 'Key', organization: 'Acme Corp', value: 'sk_test_third_party' }],
+      },
+    });
+
+    const res = await fetch(`${emulator.url}/connect/applications`, { headers: auth('sk_test_third_party') });
+    const body = (await res.json()) as any;
+    const third = body.data.find((a: any) => a.name === 'Third Party');
+    const first = body.data.find((a: any) => a.name === 'First Party');
+    expect(third.is_first_party).toBe(false);
+    expect(third.was_dynamically_registered).toBe(false);
+    expect(third.organization_id).toMatch(/^org_/);
+    // The first-party arm of the spec's oneOf carries neither field.
+    expect(first.is_first_party).toBe(true);
+    expect(first.organization_id).toBeUndefined();
+  });
+
   it('throws when a seeded api key references an unknown organization', async () => {
     await expect(
       createEmulator({
@@ -298,6 +336,37 @@ describe('Seed config validation for M2M apps and API keys', () => {
   it('rejects an m2m application without an organization', () => {
     expect(
       findError({ connectApplications: [{ name: 'No Org' }] }, 'connectApplications[0].organization'),
+    ).toBeDefined();
+  });
+
+  it('rejects a third-party oauth application without an organization', () => {
+    expect(
+      findError(
+        { connectApplications: [{ name: 'Third Party', type: 'oauth', is_first_party: false }] },
+        'connectApplications[0].organization',
+      )?.message,
+    ).toContain('is_first_party');
+  });
+
+  it('accepts a first-party oauth application without an organization', () => {
+    expect(validateSeedConfig({ connectApplications: [{ name: 'First Party', type: 'oauth' }] })).toEqual({
+      valid: true,
+      errors: [],
+    });
+  });
+
+  it('rejects non-boolean is_first_party and uses_pkce', () => {
+    expect(
+      findError(
+        { connectApplications: [{ name: 'Bad', type: 'oauth', is_first_party: 'yes' as never }] },
+        'connectApplications[0].is_first_party',
+      ),
+    ).toBeDefined();
+    expect(
+      findError(
+        { connectApplications: [{ name: 'Bad', type: 'oauth', uses_pkce: 1 as never }] },
+        'connectApplications[0].uses_pkce',
+      ),
     ).toBeDefined();
   });
 
