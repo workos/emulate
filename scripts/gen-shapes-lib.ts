@@ -599,12 +599,16 @@ export function generateShapesFile(
   lines.push(' * ID_PREFIXES and ledgers what is left over.');
   lines.push(' */');
   lines.push('export const ID_PREFIX_REQUIREMENTS: Record<string, IdPrefixRequirement> = {');
+  // Every key and value here comes from the spec rather than a curated list, so each is
+  // emitted as a JSON string literal: a discriminator or schema name carrying a hyphen or a
+  // quote would otherwise produce TypeScript that does not parse, and the failure would be a
+  // generator that cannot regenerate. oxfmt drops the redundant quoting on the way out.
   for (const entry of idPrefixes) {
-    const conflicts = entry.conflicts.map((c) => `'${c}'`).join(', ');
-    lines.push(`  ${entry.objectType}: {`);
-    lines.push(`    prefix: '${entry.prefix}',`);
-    lines.push(`    example: '${entry.example}',`);
-    lines.push(`    source: '${entry.source}',`);
+    const conflicts = entry.conflicts.map((c) => JSON.stringify(c)).join(', ');
+    lines.push(`  ${JSON.stringify(entry.objectType)}: {`);
+    lines.push(`    prefix: ${JSON.stringify(entry.prefix)},`);
+    lines.push(`    example: ${JSON.stringify(entry.example)},`);
+    lines.push(`    source: ${JSON.stringify(entry.source)},`);
     lines.push(`    conflicts: [${conflicts}],`);
     lines.push('  },');
   }

@@ -330,10 +330,43 @@ describe('generateShapesFile', () => {
     expect(out).toContain("schema: 'WidgetValidation'");
   });
 
+  // Spec-derived text is emitted as JSON string literals, so this catalog's raw output is
+  // double-quoted where the curated ones above are not; gen-shapes.ts runs oxfmt over the
+  // file afterwards, which normalizes the quoting that does not need to be there.
   it('emits an ID_PREFIX_REQUIREMENTS record keyed by object type', () => {
     expect(out).toContain('export const ID_PREFIX_REQUIREMENTS');
-    expect(out).toContain("prefix: 'wg'");
-    expect(out).toContain("example: 'wg_01HXYZ123'");
-    expect(out).toContain("conflicts: ['widget']");
+    expect(out).toContain('"widget": {');
+    expect(out).toContain('prefix: "wg"');
+    expect(out).toContain('example: "wg_01HXYZ123"');
+    expect(out).toContain('conflicts: ["widget"]');
+  });
+
+  // The id-prefix catalog is discovered from the spec rather than curated, so a discriminator
+  // or schema name the spec invents has to survive being written into TypeScript. Unquoted, a
+  // hyphen produces an unparseable key and an apostrophe ends the literal early — either way
+  // `gen:shapes` emits a file it can no longer regenerate from.
+  it('quotes and escapes spec-derived keys and values that are not safe identifiers', () => {
+    const hostile = generateShapesFile(
+      [],
+      [],
+      [
+        {
+          objectType: 'odd-object.type',
+          prefix: "o'dd",
+          example: "o'dd_01HXYZ123",
+          source: 'Schema\\With\\Escapes',
+          conflicts: ["c'onflict"],
+        },
+      ],
+    );
+
+    const body = hostile.slice(hostile.indexOf('export const ID_PREFIX_REQUIREMENTS'));
+    const literal = body.slice(body.indexOf('{'), body.indexOf('\n};') + 2);
+    // The proof that matters: spec-derived text reaches TypeScript that still parses.
+    expect(() => new Function(`return (${literal})`)).not.toThrow();
+
+    const parsed = new Function(`return (${literal})`)() as Record<string, Record<string, string>>;
+    expect(parsed['odd-object.type'].prefix).toBe("o'dd");
+    expect(parsed['odd-object.type'].source).toBe('Schema\\With\\Escapes');
   });
 });
