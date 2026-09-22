@@ -110,7 +110,12 @@ describe('normalizeRedirectHost', () => {
       '[:::]', // IPv6-shaped characters, not an address
       '[....]',
       '[fd00::1', // never closed
-      'møller.test/path', // punycoding must not smuggle a path through
+      'møller.test/path', // punycoding must not smuggle URL syntax through
+      '*.møller.test/path',
+      'møller.test\\path',
+      'møller.test?query',
+      'møller.test#fragment',
+      'møl\tler.test',
       '*..', // stripping the trailing dot must not quietly leave `*.`
       '.', // nor turn a lone dot into an empty pattern that matches by accident
     ]) {

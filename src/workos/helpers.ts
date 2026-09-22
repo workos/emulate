@@ -844,6 +844,8 @@ function stripTrailingDot(host: string): string {
  * which the shape check then rejects.
  */
 function toAsciiHost(host: string): string {
+  // IDNA conversion may strip URL syntax instead of rejecting it.
+  if (/[/\\?#\s]/.test(host)) return '';
   // Everything a hostname may legally contain is printable ASCII; anything else needs IDNA.
   if (!/[^ -~]/.test(host)) return host;
   const wildcard = host.startsWith('*.');
