@@ -48,6 +48,7 @@ interface Fixtures {
   userId: string;
   membershipId: string;
   clientId: string;
+  connectApplicationId: string;
   passwordResetToken: string;
   passwordResetId: string;
   factorId: string;
@@ -128,6 +129,14 @@ const CASES: readonly EnvelopeCase[] = [
   {
     operation: 'POST /auth/challenges/{id}/verify',
     request: (app, f) => post(`/auth/challenges/${f.challengeId}/verify`, { code: '123456' })(app),
+  },
+  {
+    operation: 'POST /client/token',
+    request: (app, f) => post('/client/token', { organization_id: f.organizationId, user_id: f.userId })(app),
+  },
+  {
+    operation: 'POST /connect/applications/{id}/client_secrets',
+    request: (app, f) => post(`/connect/applications/${f.connectApplicationId}/client_secrets`)(app),
   },
   { operation: 'GET /organizations', request: get('/organizations') },
   { operation: 'GET /user_management/users', request: get('/user_management/users') },
@@ -246,6 +255,7 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       userId,
       membershipId,
       clientId: 'client_billing',
+      connectApplicationId: ws.connectApplications.findOneBy('client_id', 'client_billing')!.id,
       passwordResetToken,
       passwordResetId,
       factorId,

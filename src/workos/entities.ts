@@ -495,6 +495,11 @@ export interface WorkOSConnectApplication extends Entity {
   /** The `aud` claim minted into m2m tokens. Falls back to client_id when null. */
   audience: string | null;
   redirect_uris: string[];
+  /** oauth only. A third-party application (`false`) names the organization it belongs to. */
+  is_first_party: boolean;
+  /** oauth third-party only: registered through dynamic client registration rather than the dashboard. */
+  was_dynamically_registered: boolean;
+  uses_pkce: boolean;
   /** Emulator-only Standalone Connect login page; never serialized on the API application. */
   login_url: string | null;
   client_id: string;
@@ -502,10 +507,12 @@ export interface WorkOSConnectApplication extends Entity {
 }
 
 export interface WorkOSClientSecret extends Entity {
-  object: 'client_secret';
+  object: 'connect_application_secret';
   application_id: string;
+  /** The plaintext secret. Returned once at creation and never serialized again. */
   value: string;
-  last_four: string;
+  secret_hint: string;
+  last_used_at: string | null;
 }
 
 export interface WorkOSDataIntegrationAuth extends Entity {

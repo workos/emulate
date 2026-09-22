@@ -33,6 +33,7 @@ import { apiKeyRoutes } from './routes/api-keys.js';
 import { vaultRoutes } from './routes/vault.js';
 import { radarRoutes } from './routes/radar.js';
 import { connectRoutes } from './routes/connect.js';
+import { clientApiRoutes } from './routes/client-api.js';
 import { oauthRoutes } from './routes/oauth.js';
 import { standaloneConnectRoutes } from './routes/standalone-connect.js';
 import { directoryRoutes } from './routes/directories.js';
@@ -318,6 +319,13 @@ export interface WorkOSSeedConnectApplication {
   client_secret?: string;
   /** OAuth redirect URIs. Ignored for `m2m` applications. */
   redirect_uris?: string[];
+  /**
+   * `oauth` only. A third-party application (`false`) is reported with the organization it
+   * belongs to, so `organization` is required for one. Defaults to `true`.
+   */
+  is_first_party?: boolean;
+  /** `oauth` only. Reported on the application; the emulator does not enforce PKCE from it. */
+  uses_pkce?: boolean;
   /** Emulator-only Standalone Connect login page, receiving an external_auth_id. */
   login_url?: string | null;
 }
@@ -886,6 +894,11 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         scopes: appConfig.scopes ?? [],
         audience: appConfig.audience ?? null,
         redirect_uris: appConfig.redirect_uris ?? [],
+        is_first_party: appConfig.is_first_party ?? true,
+        // Seeding is the dashboard's stand-in, and dynamic client registration is a runtime
+        // act no seed file performs.
+        was_dynamically_registered: false,
+        uses_pkce: appConfig.uses_pkce ?? false,
         login_url: appConfig.login_url ?? null,
         client_id: appConfig.client_id ?? generateClientId(),
         logo_url: null,
@@ -894,10 +907,11 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       // Always provision a client secret so the seeded app has usable credentials.
       const secretValue = appConfig.client_secret ?? `secret_${generateVerificationToken()}`;
       ws.clientSecrets.insert({
-        object: 'client_secret',
+        object: 'connect_application_secret',
         application_id: application.id,
         value: secretValue,
-        last_four: secretValue.slice(-4),
+        secret_hint: secretValue.slice(-4),
+        last_used_at: null,
       });
     }
   }
@@ -1081,6 +1095,7 @@ export const workosPlugin: ServicePlugin = {
     vaultRoutes(ctx);
     radarRoutes(ctx);
     connectRoutes(ctx);
+    clientApiRoutes(ctx);
     oauthRoutes(ctx);
     standaloneConnectRoutes(ctx);
     directoryRoutes(ctx);

@@ -155,9 +155,9 @@ export function oauthRoutes(ctx: RouteContext): void {
     }
 
     const application = ws.connectApplications.findOneBy('client_id', clientId);
-    const secretMatches =
-      application && ws.clientSecrets.findBy('application_id', application.id).some((s) => s.value === clientSecret);
-    if (!application || !secretMatches) {
+    const matchedSecret =
+      application && ws.clientSecrets.findBy('application_id', application.id).find((s) => s.value === clientSecret);
+    if (!application || !matchedSecret) {
       throw new OauthApiError(401, 'invalid_client', 'Invalid client ID or secret.');
     }
     const expectedType = grantType === 'client_credentials' ? 'm2m' : 'oauth';
@@ -223,6 +223,11 @@ export function oauthRoutes(ctx: RouteContext): void {
     );
 
     if (authCode) ws.authCodes.delete(authCode.id);
+
+    // Stamped only once the exchange has actually produced a token — a secret presented on a
+    // request that then fails on grant type, code or scope was never used to get one. Silent,
+    // because presenting a secret is not an edit to it, so `updated_at` stays put.
+    ws.clientSecrets.updateSilent(matchedSecret.id, { last_used_at: new Date().toISOString() });
 
     return c.json({
       access_token: accessToken,

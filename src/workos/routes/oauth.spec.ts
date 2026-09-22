@@ -247,12 +247,16 @@ describe('OAuth M2M token routes', () => {
       client_id: 'client_aud',
       logo_url: null,
       login_url: null,
+      is_first_party: true,
+      was_dynamically_registered: false,
+      uses_pkce: false,
     });
     ws.clientSecrets.insert({
-      object: 'client_secret',
+      object: 'connect_application_secret',
       application_id: appRec.id,
       value: 'secret_aud',
-      last_four: 'aud',
+      secret_hint: '_aud',
+      last_used_at: null,
     });
 
     const res = await form({ grant_type: 'client_credentials', client_id: 'client_aud', client_secret: 'secret_aud' });
@@ -275,12 +279,16 @@ describe('OAuth M2M token routes', () => {
       client_id: 'client_percent',
       logo_url: null,
       login_url: null,
+      is_first_party: true,
+      was_dynamically_registered: false,
+      uses_pkce: false,
     });
     ws.clientSecrets.insert({
-      object: 'client_secret',
+      object: 'connect_application_secret',
       application_id: appRec.id,
       value: 'secret_%_local',
-      last_four: 'ocal',
+      secret_hint: 'ocal',
+      last_used_at: null,
     });
 
     const basic = Buffer.from('client_percent:secret_%_local').toString('base64');
@@ -310,12 +318,16 @@ describe('OAuth M2M token routes', () => {
       client_id: 'client_malformed',
       logo_url: null,
       login_url: null,
+      is_first_party: true,
+      was_dynamically_registered: false,
+      uses_pkce: false,
     });
     ws.clientSecrets.insert({
-      object: 'client_secret',
+      object: 'connect_application_secret',
       application_id: appRec.id,
       value: 'secret_malformed',
-      last_four: 'med',
+      secret_hint: 'rmed',
+      last_used_at: null,
     });
 
     // No scope requested: must not throw on a non-array (no .join on a string).
