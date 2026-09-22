@@ -61,8 +61,6 @@ const TRACKED_DIVERGENCES: Record<string, string> = {
     'The spec contradicts itself: Connection.domains[] examples an `org_domain_…` id, while the ' +
     'connection.* event payloads example `conn_domain_…` for the same object. The emulator follows the ' +
     'events, which is what production emits.',
-  connect_application: 'Spec examples `conn_app_…`; being corrected separately — delete this entry with that change.',
-  client_secret: 'Spec examples `secret_…`; being corrected separately — delete this entry with that change.',
 };
 
 const prefixes: Record<string, string> = { ...ID_PREFIXES };
