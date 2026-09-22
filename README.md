@@ -1103,13 +1103,13 @@ Authentication events carry the spec payload `{ type, status, user_id, email, ip
 
 The full catalog (including names the emulator never emits, like `authentication.passkey_*` and `vault.*`) lives in `src/workos/generated/events.ts`, generated from the [`@workos/openapi-spec`](https://www.npmjs.com/package/@workos/openapi-spec) package.
 
-All events are also queryable at `GET /events` (filter with `?events[]=user.created`).
+All events are also queryable at `GET /events` (filter with `?events[]=user.created`, or repeated `?events=`, which is what the Go SDK sends).
 
 ### Caveats
 
 - Delivery is fire-and-forget with a 5-second timeout and no retries — poll your receiver in tests rather than asserting immediately.
 - Resources defined in a seed file record events (visible at `GET /events`) but are not delivered to webhook endpoints from the same seed file — endpoints are registered last, mirroring real WorkOS, where pre-existing data never replays. Register endpoints via the API if you want deliveries for setup data.
-- `dsync.group.user_added` / `dsync.group.user_removed` are catalogued but never emitted: the emulator has no directory group membership mutation surface.
+- Seeding a directory user into a group emits `dsync.group.user_added`. Removing that membership emits `dsync.group.user_removed`. There is still no HTTP route to mutate a directory; production connects one in the dashboard.
 
 ## JWT Templates (custom claims)
 

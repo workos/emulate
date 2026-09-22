@@ -34,6 +34,7 @@ interface SSOAuthorizeParams {
   connectionId: string | null;
   organizationId: string | null;
   domainHint: string | null;
+  provider: string | null;
   email: string | null;
 }
 
@@ -41,8 +42,42 @@ export function ssoRoutes(ctx: RouteContext): void {
   const { app, store, jwt } = ctx;
   const ws = getWorkOSStore(store);
 
+  /** Domains are case-insensitive; connections keep theirs as written. */
+  const claimsDomain = (cn: WorkOSConnection, domain: string) =>
+    cn.domains.some((d) => d.domain.trim().toLowerCase() === domain.trim().toLowerCase());
+
+  /**
+   * The one active connection a selector names, or a refusal. The chosen connection supplies
+   * the organization the profile and code are minted under, so picking whichever organization
+   * was created first would authenticate the user into the wrong tenant.
+   */
+  function theOnly(candidates: WorkOSConnection[], selector: string): WorkOSConnection | undefined {
+    if (candidates.length > 1) {
+      throw new WorkOSApiError(
+        400,
+        `Multiple active connections match ${selector}; select one with connection or organization`,
+        'invalid_request',
+      );
+    }
+    return candidates[0];
+  }
+
+  /**
+   * workos-go sends social login as `provider=GoogleOAuth|MicrosoftOAuth`: the connection type,
+   * not a connection id. Production holds one OAuth connection of each type per environment,
+   * so the type alone names it. The emulator lets every organization hold one, so the spec's
+   * `domain_hint` — Microsoft's tenant pre-fill — narrows the candidates when one of them
+   * claims the domain, and is otherwise the hint the spec says it is rather than a selector
+   * that 404s a provider it does not name.
+   */
+  function findProviderConnection(provider: string, domainHint: string | null): WorkOSConnection | undefined {
+    const ofType = ws.connections.all().filter((cn) => cn.state === 'active' && cn.connection_type === provider);
+    const hinted = domainHint ? ofType.filter((cn) => claimsDomain(cn, domainHint)) : [];
+    return theOnly(hinted.length > 0 ? hinted : ofType, `provider ${provider}`);
+  }
+
   function resolveAndRedirect(c: any, params: SSOAuthorizeParams) {
-    const { redirectUri, state, connectionId, organizationId, domainHint, email: loginHint } = params;
+    const { redirectUri, state, connectionId, organizationId, domainHint, provider, email: loginHint } = params;
 
     assertAllowedRedirectUri(redirectUri, store);
 
@@ -52,10 +87,13 @@ export function ssoRoutes(ctx: RouteContext): void {
       connection = ws.connections.get(connectionId);
     } else if (organizationId) {
       connection = ws.connections.findBy('organization_id', organizationId).find((cn) => cn.state === 'active');
+    } else if (provider) {
+      connection = findProviderConnection(provider, domainHint);
     } else if (domainHint) {
-      connection = ws.connections
-        .all()
-        .find((cn) => cn.state === 'active' && cn.domains.some((d) => d.domain === domainHint));
+      connection = theOnly(
+        ws.connections.all().filter((cn) => cn.state === 'active' && claimsDomain(cn, domainHint)),
+        `domain_hint ${domainHint}`,
+      );
     }
 
     if (!connection || connection.state !== 'active') {
@@ -107,6 +145,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     const connectionId = url.searchParams.get('connection');
     const organizationId = url.searchParams.get('organization');
     const domainHint = url.searchParams.get('domain_hint');
+    const provider = url.searchParams.get('provider');
     const loginHint = url.searchParams.get('login_hint');
 
     if (!redirectUri) {
@@ -125,6 +164,7 @@ export function ssoRoutes(ctx: RouteContext): void {
       if (connectionId) hiddenFields.connection = connectionId;
       if (organizationId) hiddenFields.organization = organizationId;
       if (domainHint) hiddenFields.domain_hint = domainHint;
+      if (provider) hiddenFields.provider = provider;
 
       return c.html(
         renderLoginPage({
@@ -143,6 +183,7 @@ export function ssoRoutes(ctx: RouteContext): void {
       connectionId,
       organizationId,
       domainHint,
+      provider,
       email: loginHint,
     });
   });
@@ -160,6 +201,7 @@ export function ssoRoutes(ctx: RouteContext): void {
       connectionId: (form.connection as string) ?? null,
       organizationId: (form.organization as string) ?? null,
       domainHint: (form.domain_hint as string) ?? null,
+      provider: (form.provider as string) ?? null,
       email: (form.email as string) ?? null,
     });
   });

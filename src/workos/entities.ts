@@ -573,6 +573,14 @@ export interface WorkOSEvent extends Entity {
   object: 'event';
   event: string;
   data: Record<string, unknown>;
+  /**
+   * The organization the event occurred within, which is what the list endpoint's
+   * `organization_id` filter selects on. Internal — the spec's Event has no such field — and
+   * kept apart from `data`, which cannot stand in for it: `group.member_added` carries only
+   * ids, and `organization.created` carries the organization itself. Resolved when the event
+   * is recorded, so it outlives the rows it refers to.
+   */
+  organization_id: string | null;
   environment_id: string | null;
   /**
    * The spec's per-event `context` envelope. Only flag events populate it so far — the

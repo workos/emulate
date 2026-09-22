@@ -192,4 +192,18 @@ describe('Directory Sync routes', () => {
     expect(res.status).toBe(200);
     expect((await json(res)).name).toBe('Engineering');
   });
+
+  it('emits group membership events when a directory user joins and leaves a group', async () => {
+    const { user } = seedDirectory();
+    const added = await json(await req('/events?events=dsync.group.user_added'));
+    expect(added.data).toHaveLength(1);
+    expect(added.data[0].data.user.email).toBe('jane@acme.com');
+    expect(added.data[0].data.group.name).toBe('Engineering');
+    expect(added.data[0].data.directory_id).toBe(user.directory_id);
+
+    getWorkOSStore(store).directoryUsers.update(user.id, { groups: [] });
+    const removed = await json(await req('/events?events=dsync.group.user_removed'));
+    expect(removed.data).toHaveLength(1);
+    expect(removed.data[0].data.group.name).toBe('Engineering');
+  });
 });

@@ -1296,7 +1296,7 @@ export function formatApiKeyRecord(k: WorkOSApiKey): Record<string, unknown> {
   };
 }
 
-const EVENT_EXCLUDE = new Set([...INTERNAL_FIELDS, 'updated_at']);
+const EVENT_EXCLUDE = new Set([...INTERNAL_FIELDS, 'updated_at', 'organization_id']);
 
 export function formatEvent(e: WorkOSEvent): Record<string, unknown> {
   return formatEntity(e, { exclude: EVENT_EXCLUDE });
