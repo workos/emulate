@@ -934,10 +934,30 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           });
         }
         const type = appConfig.type ?? 'm2m';
-        if (type === 'm2m' && (!appConfig.organization || typeof appConfig.organization !== 'string')) {
+        if (appConfig.is_first_party !== undefined && typeof appConfig.is_first_party !== 'boolean') {
+          errors.push({
+            path: `connectApplications[${index}].is_first_party`,
+            message: 'is_first_party must be a boolean if provided',
+            value: appConfig.is_first_party,
+          });
+        }
+        if (appConfig.uses_pkce !== undefined && typeof appConfig.uses_pkce !== 'boolean') {
+          errors.push({
+            path: `connectApplications[${index}].uses_pkce`,
+            message: 'uses_pkce must be a boolean if provided',
+            value: appConfig.uses_pkce,
+          });
+        }
+        // A third-party oauth application is reported with its owning organization, so it
+        // needs one for the same reason an m2m application does.
+        const needsOrganization = type === 'm2m' || appConfig.is_first_party === false;
+        if (needsOrganization && (!appConfig.organization || typeof appConfig.organization !== 'string')) {
           errors.push({
             path: `connectApplications[${index}].organization`,
-            message: 'organization is required for m2m applications',
+            message:
+              type === 'm2m'
+                ? 'organization is required for m2m applications'
+                : 'organization is required when is_first_party is false',
             value: appConfig.organization,
           });
         }

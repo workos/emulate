@@ -876,10 +876,12 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
   if (config.connectApplications) {
     for (const appConfig of config.connectApplications) {
       const type = appConfig.type ?? 'm2m';
+      const isFirstParty = appConfig.is_first_party ?? true;
       const org = appConfig.organization ? ws.organizations.findOneBy('name', appConfig.organization) : undefined;
-      // An m2m application must be tied to a real organization; a name that does not
-      // resolve would otherwise produce an app with a null owner (invalid m2m shape).
-      if (type === 'm2m' && !org) {
+      // An m2m application must be tied to a real organization, and so must a third-party
+      // oauth one — the spec requires `organization_id` on both. A name that does not resolve
+      // would otherwise seed an app with a null owner, the shape the create route rejects.
+      if ((type === 'm2m' || !isFirstParty) && !org) {
         throw new Error(
           `workos seed config: connectApplications[].organization not found: ${JSON.stringify(appConfig.organization)}`,
         );
@@ -894,7 +896,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         scopes: appConfig.scopes ?? [],
         audience: appConfig.audience ?? null,
         redirect_uris: appConfig.redirect_uris ?? [],
-        is_first_party: appConfig.is_first_party ?? true,
+        is_first_party: isFirstParty,
         // Seeding is the dashboard's stand-in, and dynamic client registration is a runtime
         // act no seed file performs.
         was_dynamically_registered: false,

@@ -415,6 +415,12 @@ connectApplications:
     client_id: client_local_backend # optional; generated if omitted
     client_secret: secret_local_backend # optional; generated if omitted
     audience: https://api.acme.example # optional; the token `aud` claim, defaults to client_id
+
+  - name: Partner App
+    type: oauth
+    is_first_party: false # optional, oauth only; a third-party app needs `organization`
+    organization: Acme Corp
+    uses_pkce: true # optional, oauth only; reported on the app, not enforced
 ```
 
 Each seeded application is provisioned with a client secret. Pin `client_secret` to bake a known
