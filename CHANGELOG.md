@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.14.0](https://github.com/workos/emulate/compare/v0.13.1...v0.14.0) (2026-09-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ids:** mint the id prefixes the spec documents ([#122](https://github.com/workos/emulate/issues/122))
+* complete the Connect Applications contract ([#121](https://github.com/workos/emulate/issues/121))
+
+### Features
+
+* complete the Connect Applications contract ([#121](https://github.com/workos/emulate/issues/121)) ([b59f904](https://github.com/workos/emulate/commit/b59f904f5b33596539ea40929ca096aca8e6bdff))
+* **seed:** create directories, groups and users from config ([#116](https://github.com/workos/emulate/issues/116)) ([7f32b7a](https://github.com/workos/emulate/commit/7f32b7aa8afcec327a3cca4bc58f0c11e5524765))
+
+
+### Bug Fixes
+
+* accept the event and SSO queries workos-go v10 sends ([#119](https://github.com/workos/emulate/issues/119)) ([99db049](https://github.com/workos/emulate/commit/99db0495b18ca192b93c69873f6e17808b8a9e98))
+* **ids:** mint the id prefixes the spec documents ([#122](https://github.com/workos/emulate/issues/122)) ([ad7aa1c](https://github.com/workos/emulate/commit/ad7aa1cee9a7ce2fcc8e0b138cbed9db0869a600))
+* return imported connected-account tokens through Pipes ([#117](https://github.com/workos/emulate/issues/117)) ([de4ccdc](https://github.com/workos/emulate/commit/de4ccdcde0339abf416834794aec47cd6e30aa36))
+
 ## [0.13.1](https://github.com/workos/emulate/compare/v0.13.0...v0.13.1) (2026-09-15)
 
 
