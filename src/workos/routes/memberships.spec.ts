@@ -118,6 +118,41 @@ describe('Membership routes', () => {
     expect(list.data).toHaveLength(2);
   });
 
+  describe('list statuses filter', () => {
+    async function seedActiveAndInactive() {
+      const org = await createOrg('Statuses Org');
+      const ids: Record<string, string> = {};
+      for (const name of ['active', 'inactive']) {
+        const user = await createUser(`${name}@statuses.test`);
+        const m = await json(
+          await req('/user_management/organization_memberships', {
+            method: 'POST',
+            body: JSON.stringify({ organization_id: org.id, user_id: user.id }),
+          }),
+        );
+        ids[name] = m.id;
+      }
+      await req(`/user_management/organization_memberships/${ids.inactive}/deactivate`, { method: 'PUT' });
+      return org.id as string;
+    }
+
+    // Each row was checked against the real WorkOS API.
+    it.each([
+      ['', ['active']],
+      ['statuses=active', ['active']],
+      ['statuses[]=active', ['active']],
+      ['statuses%5B%5D=active', ['active']],
+      ['statuses=inactive', ['inactive']],
+      ['statuses=active&statuses=inactive', ['active', 'inactive']],
+      ['statuses[]=active&statuses[]=inactive', ['active', 'inactive']],
+      ['statuses=active,inactive', ['active', 'inactive']],
+    ])('?%s returns %p', async (query, expected) => {
+      const orgId = await seedActiveAndInactive();
+      const list = await json(await req(`/user_management/organization_memberships?organization_id=${orgId}&${query}`));
+      expect(list.data.map((m: { status: string }) => m.status).sort()).toEqual(expected);
+    });
+  });
+
   it('deactivates and reactivates a membership', async () => {
     const org = await createOrg('Toggle Org');
     const user = await createUser('toggle@test.com');

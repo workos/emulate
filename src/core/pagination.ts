@@ -29,6 +29,17 @@ export function parseListParams(url: URL) {
   return { limit, order, before, after };
 }
 
+/**
+ * Reads an array query parameter the way production does. Production parses the query with `qs`
+ * and splits a scalar on commas, so it takes `name=a,b`, repeated `name=` (workos-go, -node,
+ * -ruby), `name[]=` (workos-dotnet) and indexed `name[0]=` (workos-php).
+ */
+export function parseArrayParam(url: URL, name: string): string[] {
+  return [...url.searchParams]
+    .filter(([key]) => key === name || (key.startsWith(`${name}[`) && /^\[\d*\]$/.test(key.slice(name.length))))
+    .flatMap(([, value]) => value.split(','));
+}
+
 export function cursorPaginate<T extends Entity>(
   items: T[],
   options: CursorPaginationOptions<T> = {},
