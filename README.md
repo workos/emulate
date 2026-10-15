@@ -914,7 +914,7 @@ agentBlueprints:
 - **`agent_delegated`** exchanges an agent access token for a new session on the same instance.
   Chains are self-only (a token from another blueprint is `invalid_agent_access_token`), at most 32
   deep, and anchored at the root: no hop may outlive the root session's `created_at +
-max_age_seconds`.
+  max_age_seconds`.
 - **`refresh`** rotates the refresh token. Each is single-use, and a refresh never extends the
   session past its chain root's max-age window.
 
