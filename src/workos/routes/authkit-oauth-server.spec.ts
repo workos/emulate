@@ -158,18 +158,46 @@ describe('AuthKit OAuth server', () => {
       expect(await page.text()).toContain('Application not found');
     });
 
-    it('keeps the plain errors for what it cannot report on a callback', async () => {
+    it('sends failures to the error page until the callback is trusted, then to the callback, as production does', async () => {
       const { client_id } = await register();
-      const invalid: Record<string, string>[] = [
-        { client_id: '' },
-        { client_id, redirect_uri: '' },
-        { client_id, response_type: 'token' },
-        { client_id, redirect_uri: 'http://localhost:33418/other' },
-      ];
-      for (const params of invalid) {
-        const res = await request(authorizeUrl(params));
-        expect(res.status).toBe(400);
-      }
+      // Production's authorize handler never answers with an API error body. Before the client and
+      // its callback are known, the browser goes to the AuthKit domain's error page.
+      const errorPage = async (params: Record<string, string>, error: string) => {
+        const res = await request(`/oauth2/authorize?${new URLSearchParams(params)}`);
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toBe(`${baseUrl}/oauth2/error?error=${error}`);
+      };
+      // A query without the two shallow parameters at all.
+      await errorPage({ response_type: 'code', redirect_uri: callback }, 'invalid_query_params');
+      await errorPage({ response_type: 'code', client_id }, 'invalid_query_params');
+      // An empty client_id is a string that names no application.
+      await errorPage({ response_type: 'code', client_id: '', redirect_uri: callback }, 'application_not_found');
+      // A callback the client did not register, the empty one included.
+      await errorPage({ response_type: 'code', client_id, redirect_uri: '' }, 'invalid_redirect_uri');
+      await errorPage(
+        { response_type: 'code', client_id, redirect_uri: 'http://localhost:33418/other' },
+        'invalid_redirect_uri',
+      );
+
+      // From then on, the callback carries the error and the state, with no description.
+      const onCallback = async (params: Record<string, string>, error: string) => {
+        const res = await request(
+          `/oauth2/authorize?${new URLSearchParams({ client_id, redirect_uri: callback, state: 'kept', ...params })}`,
+        );
+        expect(res.status).toBe(302);
+        const url = new URL(res.headers.get('location')!);
+        expect(`${url.origin}${url.pathname}`).toBe(callback);
+        expect(url.searchParams.get('error')).toBe(error);
+        expect(url.searchParams.get('state')).toBe('kept');
+        return url;
+      };
+      expect(
+        (await onCallback({ response_type: 'token' }, 'unsupported_response_type')).searchParams.has(
+          'error_description',
+        ),
+      ).toBe(false);
+      expect((await onCallback({}, 'invalid_request')).searchParams.has('error_description')).toBe(false);
+
       const m2m = ws.connectApplications.insert({
         object: 'connect_application',
         name: 'svc',
@@ -187,33 +215,71 @@ describe('AuthKit OAuth server', () => {
         logo_url: null,
       });
       expect(m2m.application_type).toBe('m2m');
-      expect((await request(authorizeUrl({ client_id: 'client_m2m' }))).status).toBe(400);
-    });
-
-    it('requires PKCE of a public client, reporting it on the callback with the state', async () => {
-      const { client_id } = await register();
-      const { callback: url } = await signIn({ client_id, state: 'keep' });
+      // An application the authorization-code grant is not enabled for: production's
+      // `authorization_code_grant_disabled`, as unauthorized_client with this description.
+      const res = await request(authorizeUrl({ client_id: 'client_m2m', state: 'kept' }));
+      expect(res.status).toBe(302);
+      const url = new URL(res.headers.get('location')!);
       expect(`${url.origin}${url.pathname}`).toBe(callback);
-      expect(url.searchParams.get('error')).toBe('invalid_request');
-      expect(url.searchParams.get('error_description')).toContain('code_challenge is required');
-      expect(url.searchParams.get('state')).toBe('keep');
+      expect(url.searchParams.get('error')).toBe('unauthorized_client');
+      expect(url.searchParams.get('error_description')).toBe(
+        'The client is not authorized to request an authorization code using this method',
+      );
+      expect(url.searchParams.get('state')).toBe('kept');
     });
 
-    it('does not require PKCE of a confidential client, but validates it when sent', async () => {
-      const { client_id } = await register({ token_endpoint_auth_method: 'client_secret_basic' });
+    it('lets a public client through authorize without PKCE; the token endpoint is where it is refused', async () => {
+      // Production's authorize handler requires nothing of a public client; its token endpoint
+      // then finds no challenge to verify against and answers the bare invalid_grant.
+      const { client_id } = await register();
+      const { callback: url } = await signIn({ client_id, state: 'keep', login_hint: 'alice@acme.test' });
+      expect(`${url.origin}${url.pathname}`).toBe(callback);
+      const code = url.searchParams.get('code')!;
+      expect(code).toMatch(/^auth_code_/);
+      expect(url.searchParams.get('state')).toBe('keep');
+      const res = await token({ grant_type: 'authorization_code', client_id, code, redirect_uri: callback });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({ error: 'invalid_grant' });
+      // Refused before the code is exchanged, so it is not spent.
+      expect(ws.authCodes.findOneBy('code', code)).toBeDefined();
+    });
+
+    it('takes any challenge string at authorize and holds the verifier to it at the token endpoint', async () => {
+      const { client_id, client_secret } = await register({ token_endpoint_auth_method: 'client_secret_basic' });
       const { callback: ok } = await signIn({ client_id, login_hint: 'alice@acme.test' });
       expect(ok.searchParams.get('code')).toMatch(/^auth_code_/);
-      const bad = await signIn({ client_id, code_challenge: 'short', code_challenge_method: 'S256' });
-      expect(bad.callback.searchParams.get('error')).toBe('invalid_request');
+      // Production does not validate the shape of a challenge; nothing can hash to this one, so
+      // the code it produces can never be redeemed.
+      const { callback: short } = await signIn({
+        client_id,
+        code_challenge: 'short',
+        code_challenge_method: 'S256',
+        login_hint: 'alice@acme.test',
+      });
+      const code = short.searchParams.get('code')!;
+      expect(code).toMatch(/^auth_code_/);
+      const res = await token({
+        grant_type: 'authorization_code',
+        client_id,
+        client_secret: client_secret!,
+        code,
+        redirect_uri: callback,
+        code_verifier: 'short',
+      });
+      expect(await json(res)).toEqual({ error: 'invalid_grant' });
     });
 
-    it('supports only S256, and refuses a challenge that names no method as production does', async () => {
+    it('supports only S256, ignores a method without a challenge, and refuses a challenge without a method', async () => {
       const { client_id } = await register();
       const { challenge } = pkce();
-      const plain = await signIn({ client_id, code_challenge: challenge, code_challenge_method: 'plain' });
+      // A method production's query schema does not know fails the parse: invalid_request, no description.
+      const plain = await signIn({ client_id, code_challenge: challenge, code_challenge_method: 'plain', state: 'st' });
       expect(plain.callback.searchParams.get('error')).toBe('invalid_request');
-      const orphan = await signIn({ client_id, code_challenge_method: 'S256' });
-      expect(orphan.callback.searchParams.get('error')).toBe('invalid_request');
+      expect(plain.callback.searchParams.has('error_description')).toBe(false);
+      expect(plain.callback.searchParams.get('state')).toBe('st');
+      // A method with no challenge is simply a request without PKCE.
+      const orphan = await signIn({ client_id, code_challenge_method: 'S256', login_hint: 'alice@acme.test' });
+      expect(orphan.callback.searchParams.get('code')).toMatch(/^auth_code_/);
       // Production's `missing_code_challenge_method`, mapped to invalid_request with this description.
       const noMethod = await signIn({ client_id, code_challenge: challenge, state: 'kept' });
       expect(noMethod.callback.searchParams.get('error')).toBe('invalid_request');
@@ -227,8 +293,14 @@ describe('AuthKit OAuth server', () => {
       const { client_id } = await register({ scope: 'openid profile' });
       const { challenge } = pkce();
       const base = { client_id, code_challenge: challenge, code_challenge_method: 'S256', state: 'st' };
-      const scope = await signIn({ ...base, scope: 'openid email' });
+      // The standard scopes are open to every client whatever it registered; a custom scope the
+      // application was not assigned is production's invalid_scope, with no description.
+      const standard = await signIn({ ...base, scope: 'openid email', login_hint: 'alice@acme.test' });
+      expect(standard.callback.searchParams.get('code')).toMatch(/^auth_code_/);
+      const scope = await signIn({ ...base, scope: 'openid mcp:tools' });
       expect(scope.callback.searchParams.get('error')).toBe('invalid_scope');
+      expect(scope.callback.searchParams.has('error_description')).toBe(false);
+      expect(scope.callback.searchParams.get('state')).toBe('st');
       // Production's descriptions for a value its resource URI parser refuses, and none for one
       // that parses but matches no registered resource.
       const target = await signIn({ ...base, resource: 'https://mcp.example.test/#frag' });
@@ -329,7 +401,8 @@ describe('AuthKit OAuth server', () => {
       ]);
       expect(body).toMatchObject({ token_type: 'bearer', expires_in: 3600 });
       expect(body.access_token.split('.')).toHaveLength(3);
-      expect(server.jwt.verify(body.access_token).scope).toBe('openid profile offline_access');
+      // Sorted, as production's formatScope sorts it.
+      expect(server.jwt.verify(body.access_token).scope).toBe('offline_access openid profile');
       expect(body.refresh_token).toMatch(/^ref_/);
     });
 
@@ -344,10 +417,14 @@ describe('AuthKit OAuth server', () => {
       expect(claims.sub).toBe(alice.id);
       expect(claims.client_id).toBe(client_id);
       expect(claims.org_id).toBe(acme.id);
-      expect(claims.scope).toBe('openid email');
+      expect(claims.scope).toBe('email openid');
       expect(claims.sid).toMatch(/^session_/);
       expect(claims.jti).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
       expect(claims.exp - claims.iat).toBe(3600);
+      // OIDC auth_time, which production emits on every code exchange: when the sign-in happened.
+      expect(claims.auth_time).toBe(
+        Math.floor(new Date(ws.sessions.get(claims.sid as string)!.created_at).getTime() / 1000),
+      );
       expect(claims.aud).toBe(client_id);
       for (const absent of ['email', 'role', 'permissions', 'entitlements']) expect(claims).not.toHaveProperty(absent);
 
@@ -371,48 +448,52 @@ describe('AuthKit OAuth server', () => {
       expect(server.jwt.verify(body.access_token)).not.toHaveProperty('org_id');
     });
 
-    it('defaults the scope to the application scopes', async () => {
+    it('grants nothing when scope is omitted, as production parses an absent scope', async () => {
+      // No standard scope reaches the consent, so the token has no `scope` claim, the response no
+      // `scope` field, and the client (dynamically registered, not in OIDC mode) a refresh token.
       const { client_id } = await register({ scope: 'openid profile' });
       const body = await json(await exchange(client_id));
-      expect(server.jwt.verify(body.access_token).scope).toBe('openid profile');
+      expect(server.jwt.verify(body.access_token)).not.toHaveProperty('scope');
+      expect(body).not.toHaveProperty('scope');
+      expect(body.id_token.split('.')).toHaveLength(3);
+      expect(body.refresh_token).toMatch(/^ref_/);
+      const refreshed = await json(
+        await token({ grant_type: 'refresh_token', client_id, refresh_token: body.refresh_token }),
+      );
+      expect(refreshed).not.toHaveProperty('scope');
+      expect(server.jwt.verify(refreshed.access_token)).not.toHaveProperty('scope');
     });
 
-    it('leaves the code for a retry when no verifier is sent, but spends it on a wrong one', async () => {
+    it('never spends the code on a PKCE failure, and answers the bare invalid_grant production does', async () => {
+      // Production verifies the code_verifier before it exchanges the code, so a missing or wrong
+      // verifier leaves the code for a retry; and the body is `{ error }` alone, since the
+      // handler's "Invalid code verifier." is a log message, not an error_description.
       const { client_id } = await register();
-      const first = await authorizeCode(client_id);
-      const grant = { grant_type: 'authorization_code', client_id, code: first.code, redirect_uri: callback };
+      const { code, verifier } = await authorizeCode(client_id);
+      const grant = { grant_type: 'authorization_code', client_id, code, redirect_uri: callback };
 
       const missing = await token(grant);
       expect(missing.status).toBe(400);
-      expect((await json(missing)).error).toBe('invalid_request');
-      expect((await token({ ...grant, code_verifier: first.verifier })).status).toBe(200);
-
-      // A wrong verifier is a failed attempt, and the code is gone even for the right one afterwards.
-      const second = await authorizeCode(client_id);
-      const attempt = { ...grant, code: second.code };
-      const wrong = await token({ ...attempt, code_verifier: pkce().verifier });
-      expect(wrong.status).toBe(400);
-      expect((await json(wrong)).error).toBe('invalid_grant');
-      expect((await json(await token({ ...attempt, code_verifier: second.verifier }))).error).toBe('invalid_grant');
+      expect(await json(missing)).toEqual({ error: 'invalid_grant' });
+      expect(ws.authCodes.findOneBy('code', code)).toBeDefined();
+      const wrong = await token({ ...grant, code_verifier: pkce().verifier });
+      expect(await json(wrong)).toEqual({ error: 'invalid_grant' });
+      expect(ws.authCodes.findOneBy('code', code)).toBeDefined();
+      expect((await token({ ...grant, code_verifier: verifier })).status).toBe(200);
+      expect(ws.authCodes.findOneBy('code', code)).toBeUndefined();
     });
 
-    it('enforces the RFC 7636 §4.1 verifier shape, spending the code when it is malformed', async () => {
+    it('holds the verifier to the challenge alone, with no shape check, as production does', async () => {
       const { client_id } = await register();
-      for (const bad of ['short', 'a'.repeat(129), `${'a'.repeat(42)}!`, `${'a'.repeat(42)} `]) {
-        const { code } = await authorizeCode(client_id);
-        const res = await token({
-          grant_type: 'authorization_code',
-          client_id,
-          code,
-          redirect_uri: callback,
-          code_verifier: bad,
-        });
-        expect(res.status).toBe(400);
-        expect((await json(res)).error).toBe('invalid_grant');
-        expect(ws.authCodes.findOneBy('code', code)).toBeUndefined();
-      }
-      // The boundaries are valid: 43 and 128 characters of the unreserved set.
-      for (const verifier of ['A'.repeat(43), 'a-._~9'.repeat(21) + 'ab']) {
+      // Production hashes whatever verifier it is sent; RFC 7636 §4.1's 43-128 unreserved
+      // characters are not enforced, so a verifier outside them redeems the code it hashes to.
+      for (const verifier of [
+        'short',
+        'a'.repeat(129),
+        `${'a'.repeat(42)}!`,
+        'A'.repeat(43),
+        'a-._~9'.repeat(21) + 'ab',
+      ]) {
         const challenge = createHash('sha256').update(verifier).digest('base64url');
         const { callback: url } = await signIn({
           client_id,
@@ -529,10 +610,11 @@ describe('AuthKit OAuth server', () => {
     });
 
     it('accepts the secret in the body or as Basic whatever method the client registered', async () => {
-      // Production stores only public/confidential and reads credentials from either transport.
+      // Production stores only public/confidential and reads credentials from either transport:
+      // a client registered for client_secret_basic may post its secret, and the reverse.
       for (const method of ['client_secret_post', 'client_secret_basic']) {
         const { client_id, client_secret } = await register({ token_endpoint_auth_method: method });
-        const grant = { grant_type: 'authorization_code', client_id, redirect_uri: callback };
+        const grant = { grant_type: 'authorization_code', redirect_uri: callback };
         const basic = Buffer.from(`${client_id}:${client_secret}`).toString('base64');
         const first = await authorizeCode(client_id);
         const viaBasic = await token(
@@ -543,12 +625,33 @@ describe('AuthKit OAuth server', () => {
         const second = await authorizeCode(client_id);
         const viaPost = await token({
           ...grant,
+          client_id,
           code: second.code,
           code_verifier: second.verifier,
           client_secret: client_secret!,
         });
         expect(viaPost.status).toBe(200);
       }
+    });
+
+    it("reads the credentials from the body alone when it names a client_id, as production's parseAuthorization does", async () => {
+      // With a client_id in the body, the Authorization header is never consulted, so a secret
+      // sent only there is a missing secret.
+      const { client_id, client_secret } = await register({ token_endpoint_auth_method: 'client_secret_basic' });
+      const { code, verifier } = await authorizeCode(client_id);
+      const basic = Buffer.from(`${client_id}:${client_secret}`).toString('base64');
+      const res = await token(
+        { grant_type: 'authorization_code', client_id, code, redirect_uri: callback, code_verifier: verifier },
+        { Authorization: `Basic ${basic}` },
+      );
+      expect(res.status).toBe(401);
+      expect(await json(res)).toEqual({ error: 'invalid_client', error_description: 'Missing client_secret.' });
+      // A Basic header that decodes to no client id at all is its own failure.
+      const empty = await token(
+        { grant_type: 'authorization_code', code, redirect_uri: callback },
+        { Authorization: `Basic ${Buffer.from(`:${client_secret}`).toString('base64')}` },
+      );
+      expect(await json(empty)).toEqual({ error: 'invalid_client', error_description: 'Missing client_id.' });
     });
 
     it('refuses a public client that presents a secret, with the production message', async () => {
@@ -686,13 +789,26 @@ describe('AuthKit OAuth server', () => {
       });
     });
 
-    it('narrows scope at exchange but never widens it', async () => {
+    it("ignores a scope parameter on the code exchange, as production's grant body carries none", async () => {
       const { client_id } = await register();
       const narrowed = await json(await exchange(client_id, { scope: 'openid' }, { scope: 'openid profile' }));
-      expect(server.jwt.verify(narrowed.access_token).scope).toBe('openid');
-      const widened = await exchange(client_id, { scope: 'openid email' }, { scope: 'openid profile' });
-      expect(widened.status).toBe(400);
-      expect((await json(widened)).error).toBe('invalid_scope');
+      expect(server.jwt.verify(narrowed.access_token).scope).toBe('openid profile');
+      const widened = await json(await exchange(client_id, { scope: 'openid email' }, { scope: 'openid profile' }));
+      expect(server.jwt.verify(widened.access_token).scope).toBe('openid profile');
+    });
+
+    it('answers a body missing the grant type or its fields as production validates it', async () => {
+      const { client_id } = await register();
+      const invalidBody = { error: 'invalid_request', error_description: 'Invalid token request body.' };
+      expect(await json(await token({ client_id }))).toEqual(invalidBody);
+      expect(await json(await token({ grant_type: 'authorization_code', client_id, code: 'x' }))).toEqual(invalidBody);
+      expect(await json(await token({ grant_type: 'refresh_token', client_id }))).toEqual(invalidBody);
+      const unsupported = await token({ grant_type: 'password', client_id });
+      expect(unsupported.status).toBe(400);
+      expect(await json(unsupported)).toEqual({
+        error: 'unsupported_grant_type',
+        error_description: "Unsupported grant_type: 'password'.",
+      });
     });
   });
 
@@ -772,6 +888,18 @@ describe('AuthKit OAuth server', () => {
       expect(server.jwt.verify(ignored.access_token).aud).toBe(client_id);
     });
 
+    it('matches a resource by normalized URL, as production compares resource URIs', async () => {
+      // `https://mcp.example.test/` and `https://mcp.example.test` are one resource to production's
+      // OauthResourceUri; the token carries the URI as registered.
+      const { client_id } = await register();
+      const { code } = await authorizeCode(client_id, { resource: 'https://mcp.example.test/' });
+      expect(ws.authCodes.findOneBy('code', code)!.connect!.resource).toBe('https://mcp.example.test');
+      const body = await json(
+        await exchange(client_id, { resource: 'https://mcp.example.test/' }, { resource: 'https://mcp.example.test' }),
+      );
+      expect(server.jwt.verify(body.access_token).aud).toBe('https://mcp.example.test');
+    });
+
     it('restates the authorized resource harmlessly at the token endpoint', async () => {
       const { client_id } = await register();
       const res = await exchange(
@@ -808,7 +936,7 @@ describe('AuthKit OAuth server', () => {
       expect(second.token_type).toBe('bearer');
       expect(second.refresh_token).toMatch(/^ref_/);
       expect(second.refresh_token).not.toBe(first.refresh_token);
-      expect(second.scope).toBe('openid profile offline_access');
+      expect(second.scope).toBe('offline_access openid profile');
 
       const before = server.jwt.verify(first.access_token);
       const after = server.jwt.verify(second.access_token);
@@ -828,14 +956,38 @@ describe('AuthKit OAuth server', () => {
       expect((await refresh(client_id, second.refresh_token)).status).toBe(200);
     });
 
-    it('narrows scope on refresh, and the narrowing sticks', async () => {
+    it("keeps a confidential client's refresh token in place of rotating it, as OAuth 2.1 §6.1 lets production", async () => {
+      const { client_id, client_secret } = await register({ token_endpoint_auth_method: 'client_secret_post' });
+      const first = await json(
+        await exchange(client_id, { client_secret: client_secret! }, { scope: 'offline_access' }),
+      );
+      const again = await json(await refresh(client_id, first.refresh_token, { client_secret: client_secret! }));
+      expect(again.refresh_token).toBe(first.refresh_token);
+      expect((await refresh(client_id, first.refresh_token, { client_secret: client_secret! })).status).toBe(200);
+      expect(ws.refreshTokens.all().filter((t) => t.client_id === client_id)).toHaveLength(1);
+    });
+
+    it('narrows scope on refresh for that token alone; the grant itself is unchanged', async () => {
+      // Production's RFC 6749 §6 narrowing filters the consent's scopes to the ones requested
+      // and never alters the consent, so a later refresh may issue the full grant again; a
+      // requested scope outside the grant is dropped, and only an empty result is invalid_scope,
+      // with production's description.
       const { client_id } = await register();
       const first = await json(await exchange(client_id, {}, { scope: 'openid profile email offline_access' }));
       const narrowed = await json(await refresh(client_id, first.refresh_token, { scope: 'openid' }));
       expect(narrowed.scope).toBe('openid');
-      const widened = await refresh(client_id, narrowed.refresh_token, { scope: 'openid profile' });
-      expect(widened.status).toBe(400);
-      expect((await json(widened)).error).toBe('invalid_scope');
+      expect(server.jwt.verify(narrowed.access_token).scope).toBe('openid');
+      const full = await json(await refresh(client_id, narrowed.refresh_token, { scope: 'openid profile' }));
+      expect(full.scope).toBe('openid profile');
+      const partial = await json(await refresh(client_id, full.refresh_token, { scope: 'openid admin' }));
+      expect(partial.scope).toBe('openid');
+      const none = await refresh(client_id, partial.refresh_token, { scope: 'admin other' });
+      expect(none.status).toBe(400);
+      expect(await json(none)).toEqual({
+        error: 'invalid_scope',
+        error_description:
+          "The following scopes are invalid, unknown, or not granted to this application: 'admin', 'other'.",
+      });
     });
 
     it('does not spend the token on a request it refuses', async () => {
@@ -885,7 +1037,8 @@ describe('AuthKit OAuth server', () => {
       const stored = ws.refreshTokens.findOneBy('token', first.refresh_token)!;
       ws.refreshTokens.update(stored.id, { expires_at: new Date(Date.now() - 1000).toISOString() });
       const expired = await refresh(client_id, first.refresh_token);
-      expect((await json(expired)).error_description).toBe('Refresh token has expired.');
+      // Every refresh failure is production's bare invalid_grant: its messages are log-only.
+      expect(await json(expired)).toEqual({ error: 'invalid_grant' });
 
       const second = await json(await exchange(client_id));
       const sid = server.jwt.verify(second.access_token).sid as string;
@@ -915,7 +1068,13 @@ describe('AuthKit OAuth server', () => {
         client_id,
       });
       expect(stray.connect).toBeUndefined();
-      expect((await json(await refresh(client_id, 'ref_authkit'))).error).toBe('invalid_grant');
+      // Production's `UnsupportedRefreshToken`: an unauthorized_client pointed at the right endpoint.
+      const res = await refresh(client_id, 'ref_authkit');
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        error: 'unauthorized_client',
+        error_description: `This refresh token should be exchanged at ${baseUrl}/user_management/authenticate`,
+      });
     });
   });
 
@@ -1216,46 +1375,57 @@ describe('AuthKit OAuth server, registered grant types and revoked grants', () =
     }
   });
 
-  it('does not re-issue a scope removed from the application, at exchange or at refresh', async () => {
-    const { client_id } = await register({ grant_types: both, scope: 'openid profile email offline_access' });
-    const first = await codeFor(client_id, 'alice@acme.test', { scope: 'openid profile email offline_access' });
-    const tokens = await json(await redeem(client_id, first.code, first.verifier));
-    expect(server.jwt.verify(tokens.access_token).scope).toBe('openid profile email offline_access');
+  /** A seeded (not dynamically registered) public OAuth application with custom scopes of its own. */
+  const seedCustomScopes = (scopes: string[]) =>
+    seedFromConfig(server.store, baseUrl, {
+      organizations: [{ name: 'Seeded' }],
+      connectApplications: [
+        { name: 'Seeded', type: 'oauth', organization: 'Seeded', client_id: 'client_custom', uses_pkce: true, scopes },
+      ],
+    });
 
-    await setScopes(client_id, ['openid', 'email', 'offline_access']);
-    const refreshed = await json(await refresh(client_id, tokens.refresh_token));
-    expect(refreshed.scope).toBe('openid email offline_access');
-    expect(server.jwt.verify(refreshed.access_token).scope).toBe('openid email offline_access');
+  it('drops a custom scope removed from the application at exchange and at refresh, and keeps the standard ones', async () => {
+    // Production reads a consent's scopes back as its standard scopes plus whichever of its
+    // permission scopes still exist, so only a custom scope can disappear from a grant.
+    seedCustomScopes(['mcp:tools', 'mcp:files']);
+    const scope = 'offline_access openid mcp:tools mcp:files';
+    const first = await codeFor('client_custom', 'alice@acme.test', { scope });
+    const tokens = await json(await redeem('client_custom', first.code, first.verifier));
+    expect(server.jwt.verify(tokens.access_token).scope).toBe('mcp:files mcp:tools offline_access openid');
+
+    await setScopes('client_custom', ['mcp:files']);
+    const refreshed = await json(await refresh('client_custom', tokens.refresh_token));
+    expect(refreshed.scope).toBe('mcp:files offline_access openid');
+    expect(server.jwt.verify(refreshed.access_token).scope).toBe('mcp:files offline_access openid');
 
     // At exchange: a code authorized before the removal.
-    await setScopes(client_id, ['openid', 'profile', 'email', 'offline_access']);
-    const second = await codeFor(client_id, 'alice@acme.test', { scope: 'openid profile email' });
-    await setScopes(client_id, ['email']);
-    const narrowed = await json(await redeem(client_id, second.code, second.verifier));
-    expect(server.jwt.verify(narrowed.access_token).scope).toBe('email');
+    await setScopes('client_custom', ['mcp:tools', 'mcp:files']);
+    const second = await codeFor('client_custom', 'alice@acme.test', { scope: 'openid mcp:tools mcp:files' });
+    await setScopes('client_custom', []);
+    const narrowed = await json(await redeem('client_custom', second.code, second.verifier));
+    expect(server.jwt.verify(narrowed.access_token).scope).toBe('openid');
   });
 
-  it('answers invalid_scope when no granted scope remains, at exchange and at refresh', async () => {
-    const { client_id } = await register({ grant_types: both, scope: 'openid profile offline_access' });
-    const first = await codeFor(client_id, 'alice@acme.test', { scope: 'openid offline_access' });
-    const tokens = await json(await redeem(client_id, first.code, first.verifier));
-    const pending = await codeFor(client_id, 'alice@acme.test', { scope: 'openid offline_access' });
-
-    await setScopes(client_id, ['profile']);
-    const atRefresh = await refresh(client_id, tokens.refresh_token);
-    expect(atRefresh.status).toBe(400);
-    expect((await json(atRefresh)).error).toBe('invalid_scope');
-    const atExchange = await redeem(client_id, pending.code, pending.verifier);
-    expect(atExchange.status).toBe(400);
-    expect((await json(atExchange)).error).toBe('invalid_scope');
+  it('issues a token with no scope when every custom scope of a grant is gone, rather than refusing', async () => {
+    seedCustomScopes(['mcp:tools']);
+    const pending = await codeFor('client_custom', 'alice@acme.test', { scope: 'mcp:tools' });
+    await setScopes('client_custom', []);
+    const res = await redeem('client_custom', pending.code, pending.verifier);
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(server.jwt.verify(body.access_token)).not.toHaveProperty('scope');
+    // Not dynamically registered and no offline_access: no refresh token either.
+    expect(body).not.toHaveProperty('refresh_token');
   });
 
-  it('clearing a dynamic client’s scopes revokes pending and refresh grants without restoring standard scopes', async () => {
-    const { client_id } = await register({ grant_types: both });
-    const first = await codeFor(client_id);
+  it("standard scopes are not the application's scopes: clearing a dynamic client's scopes changes nothing", async () => {
+    // Production serves an application's `scopes` from its assigned permissions; a dynamically
+    // registered client has none, and the standard set is open to it regardless.
+    const { client_id } = await register({ grant_types: both, scope: 'openid profile' });
+    expect(ws.connectApplications.findOneBy('client_id', client_id)!.scopes).toEqual([]);
+    const first = await codeFor(client_id, 'alice@acme.test', { scope: 'email offline_access openid profile' });
     const tokens = await json(await redeem(client_id, first.code, first.verifier));
     expect(server.jwt.verify(tokens.access_token).scope).toBe('email offline_access openid profile');
-    const pending = await codeFor(client_id);
 
     const cleared = await server.app.request(`/connect/applications/${client_id}`, {
       method: 'PUT',
@@ -1265,45 +1435,15 @@ describe('AuthKit OAuth server, registered grant types and revoked grants', () =
     expect(cleared.status).toBe(200);
     expect((await json(cleared)).scopes).toEqual([]);
 
-    const atExchange = await redeem(client_id, pending.code, pending.verifier);
-    const atRefresh = await refresh(client_id, tokens.refresh_token);
-    const { challenge } = pkce();
-    const authorize = await server.app.request(
-      `/oauth2/authorize?${new URLSearchParams({
-        response_type: 'code',
-        client_id,
-        redirect_uri: callback,
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
-        scope: 'email offline_access openid profile',
-      })}`,
-    );
-    expect(authorize.status).toBe(302);
-    const redirect = new URL(authorize.headers.get('location')!);
-
-    // Omitting scope must fail before hosted sign-in rather than produce a code that cannot be exchanged.
-    const omittedScope = await server.app.request(
-      `/oauth2/authorize?${new URLSearchParams({
-        response_type: 'code',
-        client_id,
-        redirect_uri: callback,
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
-      })}`,
-    );
-    expect(omittedScope.status).toBe(302);
-    const omittedScopeRedirect = new URL(omittedScope.headers.get('location')!);
-    expect({
-      exchange: { status: atExchange.status, error: (await json(atExchange)).error },
-      refresh: { status: atRefresh.status, error: (await json(atRefresh)).error },
-      authorize: redirect.searchParams.get('error'),
-      omittedScope: omittedScopeRedirect.searchParams.get('error'),
-    }).toEqual({
-      exchange: { status: 400, error: 'invalid_scope' },
-      refresh: { status: 400, error: 'invalid_scope' },
-      authorize: 'invalid_scope',
-      omittedScope: 'invalid_scope',
-    });
+    const refreshed = await json(await refresh(client_id, tokens.refresh_token));
+    expect(refreshed.scope).toBe('email offline_access openid profile');
+    const again = await codeFor(client_id, 'alice@acme.test', { scope: 'openid' });
+    expect(
+      server.jwt.verify((await json(await redeem(client_id, again.code, again.verifier))).access_token).scope,
+    ).toBe('openid');
+    // And an omitted scope is a grant of nothing, not a refusal.
+    const none = await codeFor(client_id);
+    expect(none.code).toMatch(/^auth_code_/);
   });
 
   it('refuses a refresh once the session has expired', async () => {
@@ -1405,7 +1545,8 @@ describe('AuthKit OAuth server, registered grant types and revoked grants', () =
       expect(claims).toMatchObject({ iss: baseUrl, sub: alice.id, aud: client_id, nonce: 'n-0S6_WzA2Mj' });
       expect(typeof claims.exp).toBe('number');
       expect(typeof claims.iat).toBe('number');
-      expect(typeof claims.auth_time).toBe('number');
+      // auth_time rides the access token, not the ID token, as production mints them.
+      expect(claims).not.toHaveProperty('auth_time');
       // Only `openid` was granted: no email and no profile claims.
       for (const absent of ['email', 'email_verified', 'name', 'given_name', 'family_name']) {
         expect(claims).not.toHaveProperty(absent);
@@ -1425,10 +1566,12 @@ describe('AuthKit OAuth server, registered grant types and revoked grants', () =
       expect(withProfile).not.toHaveProperty('email');
       expect(withProfile).not.toHaveProperty('nonce');
 
-      // Profile values that do not exist are omitted, not sent empty.
+      // Production composes `name` from the two parts, so it is an empty string for a user with
+      // neither, while the parts themselves are omitted.
       const bob = await codeFor(client_id, 'bob@other.test', { scope: 'openid profile' });
       const bobClaims = claimsOf((await json(await redeem(client_id, bob.code, bob.verifier))).id_token);
-      for (const absent of ['name', 'given_name', 'family_name']) expect(bobClaims).not.toHaveProperty(absent);
+      expect(bobClaims.name).toBe('');
+      for (const absent of ['given_name', 'family_name']) expect(bobClaims).not.toHaveProperty(absent);
     });
 
     it('is issued without openid too, and on refresh, as production mints it unconditionally', async () => {

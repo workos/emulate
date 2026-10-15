@@ -141,8 +141,10 @@ describe('MCP client against the AuthKit OAuth server', () => {
       aud: RESOURCE,
       sub: alice.id,
       client_id: client.client_id,
-      scope: 'openid profile offline_access',
+      // Sorted, as production formats the claim.
+      scope: 'offline_access openid profile',
     });
+    expect(typeof first.claims.auth_time).toBe('number');
     expect(first.claims.org_id).toBe(ws.organizations.findOneBy('name', 'Acme')!.id);
     expect(first.claims.sid).toBeTruthy();
     expect(first.claims.jti).toBeTruthy();

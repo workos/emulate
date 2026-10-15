@@ -334,8 +334,10 @@ export interface WorkOSSeedConnectApplication {
    */
   is_first_party?: boolean;
   /**
-   * `oauth` only. Marks a public client: `/oauth2/authorize` requires a `code_challenge` of it,
-   * `/oauth2/token` redeems its codes by `code_verifier` alone and refuses it a client secret.
+   * `oauth` only. Marks a public client, as production's `clientConfidentiality: public` does:
+   * `/oauth2/token` redeems its codes by `code_verifier` alone (a code minted without a challenge
+   * cannot be redeemed), refuses it a client secret, and rotates its refresh tokens.
+   * `/oauth2/authorize` requires nothing of it.
    */
   uses_pkce?: boolean;
   /**

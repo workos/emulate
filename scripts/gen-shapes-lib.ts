@@ -75,6 +75,7 @@ export const OBJECT_SCHEMA_MAP: readonly ShapeMapEntry[] = [
   // The spec names only the secret-bearing creation shape; the list route's secretless
   // variant is an inline schema, so `secret` is carried as a tracked gap on this entry.
   { objectType: 'connect_application_secret', schemaName: 'NewConnectApplicationSecret' },
+  { objectType: 'authkit_oauth_resource', schemaName: 'AuthkitOauthResource' },
   // `connect_application` is deliberately absent: `ConnectApplication` is an allOf over a
   // four-way oneOf (first-party / dynamically registered / third-party oauth, and m2m), and
   // this catalog models one flat shape per object. Flattening it would drop the discriminated
@@ -121,6 +122,15 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
   // one that drifted to a bare `token` (issue #98). The resource catalog only sees the formatter.
   { method: 'POST', path: '/user_management/password_reset', status: '201', schemaName: 'PasswordReset' },
   { method: 'GET', path: '/user_management/password_reset/{id}', status: '200', schemaName: 'PasswordReset' },
+  // The create route's body is the resource itself. Its list route is not here: the spec gives
+  // that envelope inline (an allOf over the paginated list with `AuthkitOauthResource` items)
+  // rather than by name, and this catalog asserts a named schema per operation.
+  {
+    method: 'POST',
+    path: '/user_management/authkit_oauth_resources',
+    status: '201',
+    schemaName: 'AuthkitOauthResource',
+  },
   {
     method: 'POST',
     path: '/user_management/users/{id}/email_verification/send',

@@ -208,7 +208,7 @@ export const FEATURES: FeatureDef[] = [
     ],
     seedKeys: ['connectApplications'],
     notes:
-      'A redirect URI is stored as a bare string, so `default` is accepted on create and update but always reported as `false`. `uses_pkce` and `is_first_party` are stored and reported; `uses_pkce` makes a public client, which must use PKCE at `/oauth2/authorize`. `POST /oauth2/register` (RFC 7591, outside the spec) creates `was_dynamically_registered` applications, which `registration_types` filters. `POST /client/token` mints a signed, short-lived token, but the spec documents only the `{ token }` envelope — the claims inside are an emulator convention, and no Client GraphQL API is served for it to authenticate against.',
+      'A redirect URI is stored as a bare string, so `default` is accepted on create and update but always reported as `false`. `uses_pkce` and `is_first_party` are stored and reported; `uses_pkce` makes a public client, whose codes `/oauth2/token` redeems by PKCE verifier alone and which may present no client secret. `POST /oauth2/register` (RFC 7591, outside the spec) creates `was_dynamically_registered` applications, which `registration_types` filters. `POST /client/token` mints a signed, short-lived token, but the spec documents only the `{ token }` envelope — the claims inside are an emulator convention, and no Client GraphQL API is served for it to authenticate against.',
   },
   {
     name: 'JWT Templates',
@@ -235,7 +235,7 @@ export const FEATURES: FeatureDef[] = [
     tags: ['user-management.redirect-uris', 'user-management.cors-origins', 'user-management.authkit-oauth-resources'],
     seedKeys: ['resourceIndicators'],
     notes:
-      'Redirect URIs are accepted but not enforced against authorize requests. MCP resource indicators (RFC 8707) are stored and, when a request names a registered one, become the `aud` of tokens from `/oauth2/token`; once any is registered, a dynamically registered client naming an unregistered one at `/oauth2/authorize` is answered `invalid_target`, and one naming none is bound to the resource flagged `default`. Wildcard patterns are refused.',
+      'Redirect URIs are accepted but not enforced against authorize requests. MCP resource indicators (RFC 8707) are stored and, when a request names a registered one, become the `aud` of tokens from `/oauth2/token`; once any is registered, a dynamically registered client naming an unregistered one at `/oauth2/authorize` is answered `invalid_target`, and one naming none is bound to the resource flagged `default`. Resources are matched by normalized URL; wildcard patterns are refused.',
   },
   {
     name: 'Admin Portal',

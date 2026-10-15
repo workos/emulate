@@ -63,6 +63,11 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
     properties: ['created_at', 'id', 'object', 'sms', 'totp', 'type', 'updated_at', 'user_id'],
     required: ['created_at', 'id', 'object', 'type', 'updated_at'],
   },
+  authkit_oauth_resource: {
+    schema: 'AuthkitOauthResource',
+    properties: ['created_at', 'default', 'id', 'object', 'updated_at', 'uri'],
+    required: ['created_at', 'default', 'id', 'object', 'updated_at', 'uri'],
+  },
   connect_application_secret: {
     schema: 'NewConnectApplicationSecret',
     properties: ['created_at', 'id', 'last_used_at', 'object', 'secret', 'secret_hint', 'updated_at'],
@@ -490,6 +495,11 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
     schema: 'SsoTokenResponse',
     properties: ['access_token', 'expires_in', 'oauth_tokens', 'profile', 'token_type'],
     required: ['access_token', 'expires_in', 'profile', 'token_type'],
+  },
+  'POST /user_management/authkit_oauth_resources': {
+    schema: 'AuthkitOauthResource',
+    properties: ['created_at', 'default', 'id', 'object', 'updated_at', 'uri'],
+    required: ['created_at', 'default', 'id', 'object', 'updated_at', 'uri'],
   },
   'POST /user_management/password_reset': {
     schema: 'PasswordReset',

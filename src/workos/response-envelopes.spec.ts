@@ -148,6 +148,12 @@ const CASES: readonly EnvelopeCase[] = [
     request: (app, f) => post('/client/token', { organization_id: f.organizationId, user_id: f.userId })(app),
   },
   {
+    // The create route's body is the resource itself; its list route is served inline by the
+    // spec and so has no catalog entry (see ENVELOPE_SCHEMA_MAP).
+    operation: 'POST /user_management/authkit_oauth_resources',
+    request: post('/user_management/authkit_oauth_resources', { uri: 'https://mcp.example.test/envelope' }),
+  },
+  {
     operation: 'POST /connect/applications/{id}/client_secrets',
     request: (app, f) => post(`/connect/applications/${f.connectApplicationId}/client_secrets`)(app),
   },

@@ -20,6 +20,8 @@ import {
   AUTHKIT_CODE_CHALLENGE_METHODS,
   AUTHKIT_OAUTH_SCOPES,
   AUTHKIT_TOKEN_ENDPOINT_AUTH_METHODS,
+  findRegisteredResource,
+  isStandardScope,
   isValidResourceUri,
 } from '../authkit-oauth.js';
 
@@ -104,9 +106,16 @@ export function authkitOauthRoutes(ctx: RouteContext): void {
    * else a confidential one with a generated secret. Omitted, it defaults as production defaults
    * it: `none` for a `native` application (a public client, SEP-837), else `client_secret_basic`
    * as RFC 7591 §2 says. `client_name` is required, as it is of production's registration DTO.
-   * Scopes are limited to the standard set: a dynamically registered client cannot be given a
-   * custom scope. Errors are RFC 7591 §3.2.2's `invalid_redirect_uri` and
-   * `invalid_client_metadata`, not the API's `{message, code}`.
+   * Errors are RFC 7591 §3.2.2's `invalid_redirect_uri` and `invalid_client_metadata`, not the
+   * API's `{message, code}`.
+   *
+   * Scopes follow production's registration: a requested scope the client could not be granted
+   * is dropped rather than failing the registration, and the effective set is reported back so
+   * the client learns it here and not at `/oauth2/authorize`. A dynamically registered client's
+   * grantable scopes are the standard set plus the environment's dynamic-registration
+   * permissions, which the emulator does not model, so here they are the standard set. Nothing is
+   * stored on the application's own `scopes`: production serves those from an application's
+   * assigned permissions, and a dynamically registered application has none of its own.
    *
    * The response carries production's field set: the resolved values of every field it defaults
    * (`application_type`, `grant_types`, `response_types`, `token_endpoint_auth_method`), and
@@ -196,24 +205,16 @@ export function authkitOauthRoutes(ctx: RouteContext): void {
       );
     }
 
-    let scopes: string[] = [...AUTHKIT_OAUTH_SCOPES];
-    // Echoed only when asked for, as production echoes the scopes it could grant of those requested.
-    const scopeRequested = typeof metadata.scope === 'string' && metadata.scope.length > 0;
-    if (metadata.scope !== undefined) {
-      if (typeof metadata.scope !== 'string') {
-        throw new OauthApiError(400, 'invalid_client_metadata', 'scope must be a space-delimited string.');
-      }
-      const requested = metadata.scope.trim().split(/\s+/).filter(Boolean);
-      const custom = requested.filter((s) => !(AUTHKIT_OAUTH_SCOPES as readonly string[]).includes(s));
-      if (custom.length > 0) {
-        throw new OauthApiError(
-          400,
-          'invalid_client_metadata',
-          `A dynamically registered client cannot be given custom scopes: ${custom.join(', ')}.`,
-        );
-      }
-      if (requested.length > 0) scopes = requested;
+    // Production's `grantableForDynamicRegistration`: of the scopes requested (de-duplicated, in
+    // the order given), keep the ones the client may ask for and report them; the rest are dropped
+    // silently. Echoed only when a scope was asked for.
+    if (metadata.scope !== undefined && metadata.scope !== null && typeof metadata.scope !== 'string') {
+      throw new OauthApiError(400, 'invalid_client_metadata', 'scope must be a space-delimited string.');
     }
+    const scopeRequested = typeof metadata.scope === 'string' && metadata.scope.length > 0;
+    const grantableScope = scopeRequested
+      ? [...new Set((metadata.scope as string).split(/\s+/).filter(Boolean))].filter(isStandardScope)
+      : [];
 
     // RFC 7591 §2 URL-valued metadata. It is only ever displayed, but a `javascript:` or `data:` value
     // there is exactly what a consent screen must not render, so only http(s) is accepted.
@@ -238,7 +239,8 @@ export function authkitOauthRoutes(ctx: RouteContext): void {
       description: null,
       application_type: 'oauth',
       organization_id: null,
-      scopes,
+      // No custom scopes: see the note on scopes above. The standard set is open to it regardless.
+      scopes: [],
       audience: null,
       redirect_uris: redirectUris as string[],
       is_first_party: false,
@@ -280,7 +282,7 @@ export function authkitOauthRoutes(ctx: RouteContext): void {
         redirect_uris: application.redirect_uris,
         response_types: responseTypes,
         token_endpoint_auth_method: method,
-        ...(scopeRequested ? { scope: scopes.join(' ') } : {}),
+        ...(scopeRequested ? { scope: grantableScope.join(' ') } : {}),
         ...(clientSecret !== undefined ? { client_secret: clientSecret, client_secret_expires_at: 0 } : {}),
       },
       201,
@@ -305,7 +307,9 @@ export function authkitOauthRoutes(ctx: RouteContext): void {
         { field: 'uri', code: 'invalid' },
       ]);
     }
-    if (ws.authkitOauthResources.findOneBy('uri', uri)) {
+    // Compared the way every matcher downstream compares, by normalized URL, as production's
+    // duplicate check does: 'https://a.test' and 'https://a.test/' are one resource.
+    if (findRegisteredResource(ws, uri)) {
       throw new WorkOSApiError(422, `AuthKit OAuth resource '${uri}' already exists.`, 'unprocessable_entity');
     }
 

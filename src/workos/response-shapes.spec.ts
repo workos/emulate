@@ -36,6 +36,7 @@ import {
   formatClientSecret,
   formatItContact,
   formatSSOProfile,
+  formatAuthkitOauthResource,
 } from './helpers.js';
 import { RESPONSE_SHAPE_REQUIREMENTS } from './generated/response-shapes.js';
 import type {
@@ -56,6 +57,7 @@ import type {
   WorkOSClientSecret,
   WorkOSItContact,
   WorkOSSSOProfile,
+  WorkOSAuthkitOauthResource,
 } from './entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -301,6 +303,15 @@ const ssoProfile: WorkOSSSOProfile = {
   updated_at: TS,
 };
 
+const authkitOauthResource: WorkOSAuthkitOauthResource = {
+  id: 'authkit_oauth_resource_01',
+  object: 'authkit_oauth_resource',
+  uri: 'https://mcp.example.test',
+  default: false,
+  created_at: TS,
+  updated_at: TS,
+};
+
 const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown> }> = [
   { objectType: 'user', output: formatUser(user) },
   { objectType: 'organization', output: formatOrganization(organization, ws, { domains: [] }) },
@@ -319,6 +330,7 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'connect_application_secret', output: formatClientSecret(clientSecret) },
   { objectType: 'it_contact', output: formatItContact(itContact) },
   { objectType: 'profile', output: formatSSOProfile(ssoProfile) },
+  { objectType: 'authkit_oauth_resource', output: formatAuthkitOauthResource(authkitOauthResource) },
 ];
 
 /**

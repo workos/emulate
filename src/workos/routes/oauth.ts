@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { type RouteContext, OauthApiError, generateId, generateUlid } from '../../core/index.js';
+import { type RouteContext, OauthApiError, WorkOSApiError, generateId, generateUlid } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   activeOrganizationsFor,
@@ -10,13 +10,17 @@ import {
   startLoginSession,
 } from '../helpers.js';
 import {
-  availableScopes,
+  allowedScopes,
+  findRegisteredResource,
+  formatScope,
+  grantableScopes,
   isPublicClient,
-  isValidCodeVerifier,
   isValidResourceUri,
+  parseScopeParam,
   pkceMatches,
   resolveAudience,
   resolveAuthorizeResource,
+  resourceUrisEqual,
   shouldIssueRefreshToken,
 } from '../authkit-oauth.js';
 import { createConnectAuthorizeRequest } from '../connect-authorize-request.js';
@@ -47,9 +51,10 @@ import type { WorkOSConnectApplication, WorkOSSession, WorkOSUser } from '../ent
  * scopes *array*, or an omitted `jti`, would pass locally and fail in production.
  *
  * Failures throw `OauthApiError`, the same RFC 6749 §5.2 renderer `/sso/token` and the
- * OAuth-shaped authenticate grants use. This endpoint had a local `oauthError()` helper that
- * built the identical body by hand, which meant the OAuth envelope was defined in two places
- * and only one of them was reachable from anywhere else.
+ * OAuth-shaped authenticate grants use. Production's token endpoint renders a description only
+ * where it gives one: client-authentication and scope failures carry one, while every code and
+ * refresh-token failure is the bare `{"error": "invalid_grant"}` (the strings its handlers attach
+ * to those are log messages, not `error_description`), which is what this endpoint answers too.
  *
  * The same endpoints are the AuthKit domain's OAuth 2.1 authorization server for MCP clients:
  * an application with no `login_url` signs its users in on AuthKit's hosted page (the one
@@ -59,21 +64,23 @@ import type { WorkOSConnectApplication, WorkOSSession, WorkOSUser } from '../ent
  * `/user_management/authenticate` tokens carry (a requirement taken from an observed production
  * AuthKit domain's Connect tokens).
  *
- * Client failures at the token endpoint follow what was observed against a production AuthKit
- * domain, 2026-09-30: `401 invalid_client` with `WWW-Authenticate: Basic realm="AuthKit"`, "Missing
- * authorization header." when no client is named and "Application not found." for an unknown
- * `client_id` under every grant type, with the client lookup running before grant-type validation.
- * That deliberately replaces this endpoint's earlier 400s for a missing or unknown client. The rest
- * of client authentication mirrors production's token-endpoint guards: a client is only ever public
- * or confidential, and either kind may send its credentials in the body or as HTTP Basic, whatever
- * `token_endpoint_auth_method` it registered.
+ * Client authentication is production's two token-endpoint guards (`ApplicationCredentialsGuard`
+ * and `ApplicationCredentialsOrPublicClientGuard`, with `parseAuthorization` reading the
+ * credentials): the body's `client_id` wins outright when present, else the Basic header is
+ * decoded; a client is only ever public or confidential, whatever `token_endpoint_auth_method` it
+ * registered; and the failures are `401 invalid_client` with `WWW-Authenticate: Basic
+ * realm="AuthKit"` and the guards' own descriptions. The guards run before the body is validated,
+ * so an unknown client is refused the same way whatever grant it names.
  */
 
 const TOKEN_TTL_SECONDS = 3600;
 
+/** The grant types this endpoint serves. Production also serves device_code and jwt-bearer, which the emulator does not. */
+const SUPPORTED_GRANT_TYPES = ['authorization_code', 'client_credentials', 'refresh_token'];
+
 interface TokenParams {
   grantType?: string;
-  clientId?: string;
+  clientId: string;
   clientSecret?: string;
   scope?: string;
   code?: string;
@@ -84,25 +91,18 @@ interface TokenParams {
   resource?: string;
 }
 
-/**
- * Decode a Basic-auth credential component. RFC 6749 §2.3.1 form-urlencodes the
- * client_id/secret before base64, but many clients send them literally; a literal `%`
- * makes decodeURIComponent throw. Decode when valid, otherwise use the raw value so a
- * pinned secret containing `%` yields invalid_client rather than a 500.
- */
-function formDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
+const invalidClient = (description: string) =>
+  new OauthApiError(401, 'invalid_client', description, { 'WWW-Authenticate': 'Basic realm="AuthKit"' });
 
 /**
- * Read client credentials and grant params from the request. Supports both the
- * form-encoded body services typically send and a JSON body, plus HTTP Basic auth
- * for the client credentials (RFC 6749 §2.3.1) as a fallback when they are not in
- * the body. Body params take precedence over the Basic header.
+ * Read the grant params and the client credentials from the request. Supports both the
+ * form-encoded body services typically send and a JSON body.
+ *
+ * Credentials are read the way production's `parseAuthorization` reads them: when the body
+ * carries a `client_id`, the body is the whole story (a `client_secret` is read from it or not at
+ * all, and the Authorization header is never consulted); otherwise the Basic header is required,
+ * decoded as base64 and split on the first `:` with no further decoding, and an empty client id
+ * there is its own failure.
  */
 async function readTokenParams(c: Context): Promise<TokenParams> {
   const contentType = c.req.header('content-type') ?? '';
@@ -113,7 +113,7 @@ async function readTokenParams(c: Context): Promise<TokenParams> {
       const body = await c.req.json();
       if (body && typeof body === 'object' && !Array.isArray(body)) raw = body as Record<string, unknown>;
     } catch {
-      // fall through to empty params; missing grant_type yields a clear error below
+      // fall through to empty params; the missing grant_type yields a clear error below
     }
   } else {
     const form = await c.req.parseBody();
@@ -122,17 +122,19 @@ async function readTokenParams(c: Context): Promise<TokenParams> {
 
   const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 
-  let clientId = str(raw.client_id);
-  let clientSecret = str(raw.client_secret);
-
-  const authHeader = c.req.header('authorization');
-  if ((!clientId || !clientSecret) && authHeader && /^basic\s/i.test(authHeader)) {
-    const decoded = Buffer.from(authHeader.replace(/^basic\s+/i, '').trim(), 'base64').toString('utf-8');
-    const sep = decoded.indexOf(':');
-    if (sep >= 0) {
-      clientId = clientId || formDecode(decoded.slice(0, sep));
-      clientSecret = clientSecret || formDecode(decoded.slice(sep + 1));
-    }
+  let clientId: string;
+  let clientSecret: string | undefined;
+  if (typeof raw.client_id === 'string') {
+    clientId = raw.client_id;
+    clientSecret = str(raw.client_secret);
+  } else {
+    const authHeader = c.req.header('authorization');
+    if (!authHeader) throw invalidClient('Missing authorization header.');
+    const decoded = Buffer.from(authHeader.match(/basic (.*)/i)?.[1] ?? '', 'base64').toString('utf-8');
+    const [id, secret] = decoded.split(':');
+    if (!id) throw invalidClient('Missing client_id.');
+    clientId = id;
+    clientSecret = secret;
   }
 
   return {
@@ -153,53 +155,75 @@ export function oauthRoutes(ctx: RouteContext): void {
   const ws = getWorkOSStore(store);
 
   /**
-   * Answer an authorize failure the way RFC 6749 §4.1.2.1 has it once the callback is trusted: as
-   * an error on the redirect_uri, with the caller's `state` echoed back. Before that point there
-   * is nowhere safe to send the browser, which is why the earlier failures stay plain responses.
+   * An authorize failure on the client's callback, RFC 6749 §4.1.2.1: `error`, `error_description`
+   * only when production gives one, and the caller's `state` echoed back. Used once the callback
+   * is trusted; before that point the failure goes to the AuthKit domain's own error page.
    */
   const redirectError = (
     c: Context,
     redirectUri: string,
     state: string | undefined,
     error: string,
-    message: string,
+    description?: string,
   ) => {
     const redirect = new URL(redirectUri);
     redirect.searchParams.set('error', error);
-    redirect.searchParams.set('error_description', message);
+    if (description) redirect.searchParams.set('error_description', description);
     if (state !== undefined) redirect.searchParams.set('state', state);
     return c.redirect(redirect.toString(), 302);
   };
+
+  /**
+   * An authorize failure production shows on the AuthKit domain's `/oauth2/error` page, because
+   * the `client_id` or `redirect_uri` has not been validated and there is nowhere safe to send the
+   * browser. Built from baseUrl, like every other link the emulator mints.
+   */
+  const errorPage = (c: Context, error: string) => c.redirect(`${ctx.baseUrl}/oauth2/error?error=${error}`, 302);
 
   // The OAuth browser entry point. Standalone Connect (an application with a `login_url`) and the
   // AuthKit-domain authorization server share it, and the application decides which one runs.
   // Like /oauth2/token, this route is hand-authored because the public spec only describes the
   // server-side completion of the first and none of the second.
+  //
+  // Failures follow production's authorize handler, which never answers with an API error body.
+  // Until the client and its callback are known they go to the error page: a query missing either
+  // parameter is `invalid_query_params`, an unknown client `application_not_found`, and a callback
+  // the client did not register `invalid_redirect_uri`. From then on they go to the callback.
   app.get('/oauth2/authorize', (c) => {
     const { client_id: clientId, redirect_uri: redirectUri, response_type: responseType, state } = c.req.query();
-    if (!clientId) {
-      throw new OauthApiError(400, 'invalid_request', 'client_id and redirect_uri are required.');
-    }
+    if (clientId === undefined || redirectUri === undefined) return errorPage(c, 'invalid_query_params');
     const application = ws.connectApplications.findOneBy('client_id', clientId);
-    // An unknown client is a redirect to the error page, not an API error (observed against a
-    // production AuthKit domain, 2026-09-30): the caller is a browser with no callback to trust yet.
-    if (!application) {
-      // Built from baseUrl, like every other link the emulator mints, not from the request origin.
-      return c.redirect(`${ctx.baseUrl}/oauth2/error?error=application_not_found`, 302);
+    if (!application) return errorPage(c, 'application_not_found');
+    // Registered callbacks are matched exactly; a seeded application that registered none accepts
+    // any callback the redirect-host policy allows. Either way a refused callback is the error
+    // page's `invalid_redirect_uri`, as production's redirect URI locator answers.
+    if (application.redirect_uris.length > 0 && !application.redirect_uris.includes(redirectUri)) {
+      return errorPage(c, 'invalid_redirect_uri');
     }
-    if (!redirectUri) {
-      throw new OauthApiError(400, 'invalid_request', 'client_id and redirect_uri are required.');
+    try {
+      assertAllowedRedirectUri(redirectUri, store);
+    } catch (error) {
+      if (error instanceof WorkOSApiError) return errorPage(c, 'invalid_redirect_uri');
+      throw error;
     }
-    if (responseType !== 'code') {
-      throw new OauthApiError(400, 'unsupported_response_type', 'response_type must be code.');
+
+    const fail = (error: string, description?: string) => redirectError(c, redirectUri, state, error, description);
+
+    // Production parses the full query once the callback is trusted: a `response_type` other than
+    // `code` is unsupported_response_type, and any other shape failure (no response_type, or a
+    // code_challenge_method it does not know) is invalid_request, neither with a description.
+    if (responseType !== undefined && responseType !== 'code') return fail('unsupported_response_type');
+    const codeChallenge = c.req.query('code_challenge');
+    const codeChallengeMethod = c.req.query('code_challenge_method');
+    if (responseType === undefined || (codeChallengeMethod !== undefined && codeChallengeMethod !== 'S256')) {
+      return fail('invalid_request');
     }
     if (application.application_type !== 'oauth') {
-      throw new OauthApiError(400, 'unauthorized_client', 'The client must be an OAuth application.');
+      return fail(
+        'unauthorized_client',
+        'The client is not authorized to request an authorization code using this method',
+      );
     }
-    if (application.redirect_uris.length > 0 && !application.redirect_uris.includes(redirectUri)) {
-      throw new OauthApiError(400, 'invalid_request', 'redirect_uri is not registered for this application.');
-    }
-    assertAllowedRedirectUri(redirectUri, store);
 
     if (application.login_url) {
       assertAllowedRedirectUri(application.login_url, store);
@@ -220,57 +244,28 @@ export function oauthRoutes(ctx: RouteContext): void {
     // No login_url: the user signs in on AuthKit's hosted page. Validate everything a client could
     // get wrong now, while a redirect_uri exists to report it on, then park the request and send
     // the browser to the sign-in page `/user_management/authorize` serves, which finishes it.
-    const fail = (error: string, message: string) => redirectError(c, redirectUri, state, error, message);
 
-    // PKCE (RFC 7636). S256 only — production advertises no other method — and required of a
-    // public client, whose challenge is the only thing that later proves the code is its own.
-    const codeChallenge = c.req.query('code_challenge');
-    const codeChallengeMethod = c.req.query('code_challenge_method');
-    // Production refuses a challenge with no method rather than assuming S256 (its
-    // `missing_code_challenge_method`, reported as `invalid_request`, with this description).
+    // PKCE (RFC 7636), as production's authorize handler takes it: a challenge must name its
+    // method (S256 is the only one it knows, so a method without a challenge is simply ignored),
+    // and nothing else is checked here. Whether a public client sent one at all is the token
+    // endpoint's question, where the verifier is checked.
     if (codeChallenge !== undefined && codeChallengeMethod === undefined) {
       return fail('invalid_request', 'code_challenge_method is required when code_challenge is provided.');
     }
-    if (codeChallengeMethod !== undefined && codeChallengeMethod !== 'S256') {
-      return fail('invalid_request', 'code_challenge_method must be S256.');
-    }
-    if (codeChallenge === undefined && codeChallengeMethod !== undefined) {
-      return fail('invalid_request', 'code_challenge is required when code_challenge_method is set.');
-    }
-    if (codeChallenge !== undefined && !/^[A-Za-z0-9_-]{43,128}$/.test(codeChallenge)) {
-      return fail('invalid_request', 'code_challenge must be 43 to 128 base64url characters.');
-    }
-    if (codeChallenge === undefined && isPublicClient(application)) {
-      return fail('invalid_request', 'code_challenge is required for public clients.');
-    }
 
-    // An application configured with scopes is limited to them; one with none (a seeded app that
-    // never listed any) is offered the standard set an AuthKit domain advertises.
-    const allowedScopes = availableScopes(application);
-    const scopeParam = c.req.query('scope');
-    const scopes = scopeParam?.trim() ? scopeParam.trim().split(/\s+/) : allowedScopes;
-    if (scopes.length === 0) {
-      return fail('invalid_scope', 'This application has no scopes available.');
-    }
-    const unknownScopes = scopes.filter((s) => !allowedScopes.includes(s));
-    if (unknownScopes.length > 0) {
-      return fail(
-        'invalid_scope',
-        `The requested scope(s) are not available to this application: ${unknownScopes.join(', ')}.`,
-      );
-    }
+    // Scopes, as production's scope parser takes them: the standard set is open to every OAuth
+    // application and a custom scope must be one of the application's own; anything else is
+    // invalid_scope, with no description. An omitted `scope` grants nothing, rather than
+    // everything the application could have been asked for.
+    const scopes = parseScopeParam(c.req.query('scope'));
+    const allowed = allowedScopes(application);
+    if (scopes.some((s) => !allowed.includes(s))) return fail('invalid_scope');
 
     // RFC 8707. Validated against the environment's registered resources, and defaulted, the way
     // production does it; see resolveAuthorizeResource. What is stored is what the grant is bound
     // to, and what its tokens carry as `aud`.
     const resource = resolveAuthorizeResource(ws, application, c.req.query('resource') ?? null);
-    if (!resource.ok) {
-      const redirect = new URL(redirectUri);
-      redirect.searchParams.set('error', 'invalid_target');
-      if (resource.description !== undefined) redirect.searchParams.set('error_description', resource.description);
-      if (state !== undefined) redirect.searchParams.set('state', state);
-      return c.redirect(redirect.toString(), 302);
-    }
+    if (!resource.ok) return fail('invalid_target', resource.description);
 
     const requestId = createConnectAuthorizeRequest(store, {
       client_id: clientId,
@@ -340,17 +335,20 @@ export function oauthRoutes(ctx: RouteContext): void {
   /** The earlier of two ISO timestamps. */
   const cappedAt = (a: string, b: string) => (a < b ? a : b);
 
+  /** OIDC `auth_time`: when the user authenticated interactively, which for a hosted sign-in is when its session began. */
+  const authTime = (session: WorkOSSession) => Math.floor(new Date(session.created_at).getTime() / 1000);
+
   /**
-   * The Connect access token for a user signed in through the hosted page. Known requirements of a
-   * Connect token: `iss` is the bare AuthKit domain, and it carries `aud`, `sub` (the user id),
-   * `client_id` and `exp`. The rest of the claim set (`sid`, `jti`, `org_id`, a space-delimited
-   * `scope`, and the absence of email, role, permissions and JWT-template claims) is an emulator
-   * choice: production's full set was not captured.
+   * The Connect access token for a user signed in through the hosted page, with the claims
+   * production's consent token service mints: `iss` the bare AuthKit domain, `aud` the bound
+   * resource (see resolveAudience for the fallback), `sub`, `sid`, `jti`, `client_id`, `org_id`
+   * when the session has one, `auth_time`, and a sorted `scope` that is absent rather than empty.
+   * Production can add the environment's JWT template claims on top; the emulator does not.
    */
   const mintAccessToken = (
     application: WorkOSConnectApplication,
     session: WorkOSSession,
-    scope: string[],
+    scope: readonly string[],
     resource: string | null,
   ): string =>
     jwt.sign(
@@ -360,18 +358,22 @@ export function oauthRoutes(ctx: RouteContext): void {
         jti: generateUlid(),
         org_id: session.organization_id ?? undefined,
         client_id: application.client_id,
-        scope: scope.join(' '),
+        auth_time: authTime(session),
+        scope: formatScope(scope),
         aud: resolveAudience(application, resource),
       },
       { expiresIn: TOKEN_TTL_SECONDS },
     );
 
-  /** A refresh token on the session. The resource and scope ride on it so they survive every rotation. */
+  /**
+   * A refresh token on the session. It carries the grant as consented (its scopes and the resource
+   * it was bound to at authorize), not what one token request narrowed it to, because production's
+   * refresh token points at the consent and a narrowing never alters the consent.
+   */
   const mintRefreshToken = (
     application: WorkOSConnectApplication,
     session: WorkOSSession,
-    scope: string[],
-    resource: string | null,
+    grant: { scope: string[]; resource: string | null },
   ): string =>
     ws.refreshTokens.insert({
       token: generateId('ref'),
@@ -381,132 +383,100 @@ export function oauthRoutes(ctx: RouteContext): void {
       // Never outlives the session it belongs to, so rotation cannot extend a sign-in.
       expires_at: cappedAt(expiresIn(30 * 24 * 60), session.expires_at),
       client_id: application.client_id,
-      connect: { scope, resource },
+      connect: { scope: grant.scope, resource: grant.resource },
     }).token;
-
-  /**
-   * The grant's stored scopes that the application can still issue. A scope removed from the
-   * application after the grant was made is dropped rather than re-issued; if nothing is left the
-   * request is `invalid_scope`, because a token with an empty scope would be a grant the user never
-   * made to a client that cannot use it.
-   */
-  const currentGrant = (application: WorkOSConnectApplication, stored: string[]): string[] => {
-    const available = availableScopes(application);
-    const remaining = stored.filter((s) => available.includes(s));
-    if (remaining.length === 0) {
-      throw new OauthApiError(400, 'invalid_scope', 'None of the granted scopes are available to this application.');
-    }
-    return remaining;
-  };
 
   /**
    * The `id_token` production mints with every code exchange and every refresh, whatever the scope
    * (its token service mints one unconditionally; only the claims inside follow the scopes). RS256
-   * under the key at `/oauth2/jwks`; `iss` is the bare issuer and `aud` the client_id, as OIDC Core
-   * §2 requires. Which claims ride along is an emulator choice, following the OIDC scope rules
-   * (Core §5.4): `email` and `email_verified` only with the `email` scope, and
-   * `name`/`given_name`/`family_name` only with `profile` and only where the user has a value.
-   * `nonce` is echoed when the authorize request carried one; a refresh carries none.
+   * under the key at `/oauth2/jwks`; `iss` is the bare issuer and `aud` the client_id. The claims
+   * are production's: with `profile`, `name` composed from the user's first and last names (so an
+   * empty string when there are none) and `given_name`/`family_name` where each exists; with
+   * `email`, `email` and `email_verified`; and `nonce` when the authorize request carried one,
+   * which a refresh never does.
    */
   const issueIdToken = (
     application: WorkOSConnectApplication,
     user: WorkOSUser,
-    session: WorkOSSession,
-    scope: string[],
+    scope: readonly string[],
     nonce: string | null,
   ): string => {
     const claims: Record<string, unknown> = {};
-    if (nonce !== null) claims.nonce = nonce;
+    if (scope.includes('profile')) {
+      const given = user.first_name ?? undefined;
+      const family = user.last_name ?? undefined;
+      claims.name = [given, family].filter(Boolean).join(' ');
+      if (given) claims.given_name = given;
+      if (family) claims.family_name = family;
+    }
     if (scope.includes('email')) {
       claims.email = user.email;
       claims.email_verified = user.email_verified;
     }
-    if (scope.includes('profile')) {
-      if (user.name) claims.name = user.name;
-      if (user.first_name) claims.given_name = user.first_name;
-      if (user.last_name) claims.family_name = user.last_name;
-    }
-    return jwt.sign(
-      {
-        sub: user.id,
-        aud: application.client_id,
-        auth_time: Math.floor(new Date(session.created_at).getTime() / 1000),
-      },
-      { expiresIn: TOKEN_TTL_SECONDS, claims },
-    );
+    if (nonce) claims.nonce = nonce;
+    return jwt.sign({ sub: user.id, aud: application.client_id }, { expiresIn: TOKEN_TTL_SECONDS, claims });
   };
 
-  /** RFC 6749 §3.3 narrowing: a request may ask for fewer scopes than were granted, never more. */
-  const narrowScope = (granted: string[], requested: string | undefined): string[] => {
-    if (!requested || requested.trim().length === 0) return granted;
-    const scopes = requested.trim().split(/\s+/);
-    const unknown = scopes.filter((s) => !granted.includes(s));
-    if (unknown.length > 0) {
-      throw new OauthApiError(
-        400,
-        'invalid_scope',
-        `The application is not granted the requested scope(s): ${unknown.join(', ')}.`,
-      );
-    }
+  /**
+   * RFC 6749 §3.3 narrowing on the `client_credentials` grant: a request may ask for a subset of
+   * the application's scopes, and naming one it does not have is invalid_scope with production's
+   * description.
+   */
+  const narrowM2mScope = (application: WorkOSConnectApplication, requested: string | undefined): string[] => {
+    const available = Array.isArray(application.scopes) ? application.scopes : [];
+    const scopes = parseScopeParam(requested);
+    if (scopes.length === 0) return available;
+    const unknown = scopes.filter((s) => !available.includes(s));
+    if (unknown.length > 0) throw invalidScope(unknown);
     return scopes;
   };
+
+  const invalidScope = (scopes: readonly string[]) =>
+    new OauthApiError(
+      400,
+      'invalid_scope',
+      `The following scopes are invalid, unknown, or not granted to this application: ${scopes.map((s) => `'${s}'`).join(', ')}.`,
+    );
 
   /**
    * RFC 8707 `resource` on the token request, resolved as production's resource locator does it
    * (`forRequestedResource`). A grant bound to a resource stays bound to it: the request may
    * restate or omit it, anything else is `invalid_target`, and so is a bound resource that has since
-   * been deleted. A grant bound to none may name a registered resource here and be bound to it; an
-   * unregistered or malformed one is `invalid_target`, unless the environment has registered no
-   * resources at all, in which case the parameter is ignored for backwards compatibility.
+   * been deleted. A grant bound to none may name a registered resource here and have the token
+   * minted for it; an unregistered or malformed one is `invalid_target`, unless the environment has
+   * registered no resources at all, in which case the parameter is ignored for backwards
+   * compatibility. Production's `invalid_target` carries no description.
    */
   const bindResource = (bound: string | null, requested: string | undefined): string | null => {
-    const invalidTarget = (message: string) => new OauthApiError(400, 'invalid_target', message);
+    const invalidTarget = () => new OauthApiError(400, 'invalid_target');
     if (bound !== null) {
-      if (!ws.authkitOauthResources.findOneBy('uri', bound)) {
-        throw invalidTarget('The resource the grant was issued for is no longer registered.');
-      }
-      if (requested === undefined) return bound;
-      if (!isValidResourceUri(requested) || requested !== bound) {
-        throw invalidTarget('resource does not match the resource the grant was issued for.');
-      }
-      return bound;
+      const registered = findRegisteredResource(ws, bound);
+      if (!registered) throw invalidTarget();
+      if (requested === undefined) return registered.uri;
+      if (!isValidResourceUri(requested) || !resourceUrisEqual(requested, registered.uri)) throw invalidTarget();
+      return registered.uri;
     }
     if (requested === undefined || ws.authkitOauthResources.all().length === 0) return null;
-    if (!isValidResourceUri(requested)) {
-      throw invalidTarget('resource must be an absolute URI without a fragment.');
-    }
-    const match = ws.authkitOauthResources.findOneBy('uri', requested);
-    if (!match) throw invalidTarget('resource is not registered for this environment.');
+    if (!isValidResourceUri(requested)) throw invalidTarget();
+    const match = findRegisteredResource(ws, requested);
+    if (!match) throw invalidTarget();
     return match.uri;
   };
-
-  const invalidClient = (description: string) =>
-    new OauthApiError(401, 'invalid_client', description, { 'WWW-Authenticate': 'Basic realm="AuthKit"' });
 
   app.post('/oauth2/token', async (c) => {
     const { grantType, clientId, clientSecret, scope, code, redirectUri, codeVerifier, refreshToken, resource } =
       await readTokenParams(c);
 
-    // Client first, grant type second: an unknown client is refused the same way whatever grant it
-    // names, including an unsupported one (observed against a production AuthKit domain, 2026-09-30).
-    if (!clientId) throw invalidClient('Missing authorization header.');
+    // Client authentication first, the body second, as production's guards run before its body
+    // validation: an unknown client is refused the same way whatever grant it names.
     const application = ws.connectApplications.findOneBy('client_id', clientId);
     if (!application) throw invalidClient('Application not found.');
 
-    if (grantType !== 'client_credentials' && grantType !== 'authorization_code' && grantType !== 'refresh_token') {
-      throw new OauthApiError(
-        400,
-        'unsupported_grant_type',
-        `The grant type is not supported: ${grantType ?? '(none)'}`,
-      );
-    }
-
-    // Production's two token-endpoint guards, which know a client only as public or confidential
-    // and accept its credentials from the body or the Basic header alike. With a secret: the
-    // client_id/secret pair must exist, and a public client may not present one at all (an
-    // admin-added secret does not turn a public registration into a confidential one). Without
-    // one: a confidential client is refused, and a public client, which proves itself by PKCE,
-    // may use only the grants a user sign-in produces.
+    // With a secret, the client_id/secret pair must exist (production looks the application up by
+    // both, so a wrong secret reads as no application) and the client must be confidential: an
+    // admin-added secret does not turn a public registration into one. Without a secret, the
+    // client must be public, and a public client, which proves itself by PKCE, may use only the
+    // grants a user sign-in produces.
     let matchedSecret: { id: string } | undefined;
     if (clientSecret) {
       matchedSecret = ws.clientSecrets.findBy('application_id', application.id).find((s) => s.value === clientSecret);
@@ -522,76 +492,100 @@ export function oauthRoutes(ctx: RouteContext): void {
         );
       }
     }
-    const expectedType = grantType === 'client_credentials' ? 'm2m' : 'oauth';
-    if (application.application_type !== expectedType) {
-      throw new OauthApiError(
-        400,
-        'unauthorized_client',
-        `The client is not authorized to use the ${grantType} grant type.`,
-      );
+
+    // Production's body validation: a grant type it knows but this surface does not serve, or one
+    // nobody knows, is unsupported_grant_type; a body missing the grant type or the grant's own
+    // required fields is invalid_request.
+    const invalidBody = () => new OauthApiError(400, 'invalid_request', 'Invalid token request body.');
+    if (grantType !== undefined && !SUPPORTED_GRANT_TYPES.includes(grantType)) {
+      throw new OauthApiError(400, 'unsupported_grant_type', `Unsupported grant_type: '${grantType}'.`);
     }
+    if (grantType === undefined) throw invalidBody();
 
     let response: Record<string, unknown>;
 
     if (grantType === 'refresh_token') {
-      if (!refreshToken) throw new OauthApiError(400, 'invalid_request', 'refresh_token is required.');
-      // Rotation as /user_management/authenticate does it: the presented token is spent for a
-      // fresh one on the same session, so a token that has been used once answers invalid_grant.
-      // Bound to the client it was issued to, so one application cannot redeem another's.
+      if (!refreshToken) throw invalidBody();
+      // Every refresh failure is production's bare invalid_grant, except a token this endpoint did
+      // not issue: an AuthKit session's refresh token is an `unauthorized_client` pointed at the
+      // endpoint that did.
+      const invalidGrant = () => new OauthApiError(400, 'invalid_grant');
       const stored = ws.refreshTokens.findOneBy('token', refreshToken);
-      if (!stored || !stored.connect || stored.client_id !== clientId) {
-        throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
+      if (!stored) throw invalidGrant();
+      if (!stored.connect) {
+        throw new OauthApiError(
+          400,
+          'unauthorized_client',
+          `This refresh token should be exchanged at ${ctx.baseUrl}/user_management/authenticate`,
+        );
       }
+      // Bound to the client it was issued to, so one application cannot redeem another's.
+      if (stored.client_id !== clientId) throw invalidGrant();
       if (isExpired(stored.expires_at)) {
         ws.refreshTokens.delete(stored.id);
-        throw new OauthApiError(400, 'invalid_grant', 'Refresh token has expired.');
+        throw invalidGrant();
       }
       // Unlike authenticate, a revoked session ends its refresh tokens too: signing a person out
       // of an MCP client has to stop that client minting tokens for them.
       const session = ws.sessions.get(stored.session_id);
-      if (!ws.users.get(stored.user_id) || !session || session.status !== 'active' || isExpired(session.expires_at)) {
-        throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
-      }
+      const user = ws.users.get(stored.user_id);
+      if (!user || !session || session.status !== 'active' || isExpired(session.expires_at)) throw invalidGrant();
       // The organization the token was scoped to must still be one the user belongs to. Minting
       // with the stale `org_id` would hand a removed member access to a tenant they have left.
       if (
         stored.organization_id &&
         !activeOrganizationsFor(ws, stored.user_id).some((o) => o.id === stored.organization_id)
       ) {
-        throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
+        throw invalidGrant();
       }
-      // Validated before the token is spent, so a bad `scope` or `resource` costs nothing.
-      const granted = narrowScope(currentGrant(application, stored.connect.scope), scope);
+
+      // Validated before the token is spent, so a bad `scope` or `resource` costs nothing. The
+      // scope is production's RFC 6749 §6 narrowing: the consent's scopes that still exist,
+      // filtered to the ones requested, and invalid_scope only when that leaves nothing. The
+      // narrowing is for this token alone; the grant itself is unchanged.
+      const granted = grantableScopes(application, stored.connect.scope);
+      const requested = parseScopeParam(scope);
+      const issued = requested.length > 0 ? granted.filter((s) => requested.includes(s)) : granted;
+      if (requested.length > 0 && issued.length === 0) throw invalidScope(requested);
       const bound = bindResource(stored.connect.resource, resource);
-      ws.refreshTokens.delete(stored.id);
-      // The field set production's refresh grant answers with: a rotated refresh token on every
-      // refresh, an `id_token`, and the issued `scope`. The narrowed scope and the bound resource
-      // carry forward; a narrowing is not undone by the next refresh.
+
+      // OAuth 2.1 §6.1 as production applies it: a public client's refresh token is rotated, the
+      // presented one spent for a fresh one on the same session; a confidential client keeps the
+      // token it presented.
+      let refreshTokenOut = stored.token;
+      if (isPublicClient(application)) {
+        ws.refreshTokens.delete(stored.id);
+        refreshTokenOut = mintRefreshToken(application, session, stored.connect);
+      }
       response = {
-        access_token: mintAccessToken(application, session, granted, bound),
+        access_token: mintAccessToken(application, session, issued, bound),
         expires_in: TOKEN_TTL_SECONDS,
-        id_token: issueIdToken(application, ws.users.get(stored.user_id)!, session, granted, null),
-        refresh_token: mintRefreshToken(application, session, granted, bound),
-        scope: granted.join(' '),
+        id_token: issueIdToken(application, user, granted, null),
+        refresh_token: refreshTokenOut,
+        scope: formatScope(issued),
         token_type: 'bearer',
       };
     } else if (grantType === 'authorization_code') {
-      if (!code || !redirectUri) {
-        throw new OauthApiError(400, 'invalid_request', 'code and redirect_uri are required.');
-      }
-      // Bind the code to this flow, client, and exact callback before consuming it. Codes from
-      // Standalone Connect (external_auth) and from the hosted sign-in (connect) are redeemable
-      // here; an AuthKit code from /user_management/authorize is /authenticate's, not this endpoint's.
+      if (!code || !redirectUri) throw invalidBody();
+      // Production's authorization-code grant is enabled only for OAuth applications; an M2M
+      // application asking for it is refused as a client, without the Basic challenge.
+      if (application.application_type !== 'oauth') throw new OauthApiError(401, 'invalid_client');
+
+      // Every failure of the code itself is production's bare invalid_grant, and none of them
+      // spends the code: the verifier is checked before the code is exchanged, so a wrong one
+      // leaves the code for a retry.
+      const invalidGrant = () => new OauthApiError(400, 'invalid_grant');
+
+      // Bind the code to this flow and client before anything else. Codes from Standalone Connect
+      // (external_auth) and from the hosted sign-in (connect) are redeemable here; an AuthKit code
+      // from /user_management/authorize is /authenticate's, not this endpoint's.
       const authCode = ws.authCodes.findOneBy('code', code);
       if (
         !authCode ||
-        isExpired(authCode.expires_at) ||
         (authCode.auth_method !== 'external_auth' && !authCode.connect) ||
-        authCode.client_id !== clientId ||
-        authCode.redirect_uri !== redirectUri ||
-        !ws.users.get(authCode.user_id)
+        authCode.client_id !== clientId
       ) {
-        throw new OauthApiError(400, 'invalid_grant', 'The authorization code has expired or is invalid.');
+        throw invalidGrant();
       }
 
       if (!authCode.connect && !matchedSecret) {
@@ -600,22 +594,25 @@ export function oauthRoutes(ctx: RouteContext): void {
       }
 
       if (authCode.connect) {
-        // PKCE (RFC 7636 §4.6). A code that carries a challenge is redeemed only with its
-        // verifier, whoever the client is; a public client's code must carry one, because for it
-        // the verifier is the whole proof (authorize already refuses to mint one without).
+        // PKCE (RFC 7636 §4.6), as production's `verifyApplication` runs it before the exchange: a
+        // code that carries a challenge is redeemed only with its verifier, whoever the client is;
+        // a code without one is fine for a client that authenticated with a secret, and the end
+        // of the road for a public client, whose verifier would have been its whole proof.
         if (authCode.code_challenge) {
-          if (!codeVerifier) throw new OauthApiError(400, 'invalid_request', 'code_verifier is required.');
-          // RFC 7636 §4.1 shape, then the match. A wrong verifier spends the code, so a code cannot
-          // be ground against; a request that names no verifier at all leaves it for a retry.
-          if (!isValidCodeVerifier(codeVerifier) || !pkceMatches(codeVerifier, authCode.code_challenge)) {
-            ws.authCodes.delete(authCode.id);
-            throw new OauthApiError(400, 'invalid_grant', 'The authorization code has expired or is invalid.');
-          }
-        } else if (isPublicClient(application)) {
-          throw new OauthApiError(400, 'invalid_grant', 'The authorization code has expired or is invalid.');
+          if (!pkceMatches(codeVerifier, authCode.code_challenge)) throw invalidGrant();
+        } else if (!matchedSecret) {
+          throw invalidGrant();
         }
+      }
 
-        const granted = narrowScope(currentGrant(application, authCode.connect.scope), scope);
+      if (isExpired(authCode.expires_at) || authCode.redirect_uri !== redirectUri || !ws.users.get(authCode.user_id)) {
+        throw invalidGrant();
+      }
+
+      if (authCode.connect) {
+        // What the grant still covers: production's authorization-code request carries no `scope`,
+        // so there is no narrowing here, only the consent's scopes that still exist.
+        const granted = grantableScopes(application, authCode.connect.scope);
         const bound = bindResource(authCode.connect.resource, resource);
         const user = ws.users.get(authCode.user_id)!;
 
@@ -624,9 +621,7 @@ export function oauthRoutes(ctx: RouteContext): void {
         // several who chose none gets an unscoped token — there is no page to ask on this hop.
         let organizationId = authCode.organization_id;
         const organizations = activeOrganizationsFor(ws, user.id);
-        if (organizationId && !organizations.some((o) => o.id === organizationId)) {
-          throw new OauthApiError(400, 'invalid_grant', 'The authorization code has expired or is invalid.');
-        }
+        if (organizationId && !organizations.some((o) => o.id === organizationId)) throw invalidGrant();
         if (!organizationId && organizations.length === 1) organizationId = organizations[0].id;
 
         ws.authCodes.delete(authCode.id);
@@ -637,15 +632,15 @@ export function oauthRoutes(ctx: RouteContext): void {
         response = {
           access_token: mintAccessToken(application, session, granted, bound),
           expires_in: TOKEN_TTL_SECONDS,
-          id_token: issueIdToken(application, user, session, granted, authCode.connect.nonce ?? null),
+          id_token: issueIdToken(application, user, granted, authCode.connect.nonce ?? null),
           token_type: 'bearer',
         };
         if (shouldIssueRefreshToken(application, authCode.connect.scope)) {
-          response.refresh_token = mintRefreshToken(application, session, granted, bound);
+          response.refresh_token = mintRefreshToken(application, session, authCode.connect);
         }
       } else {
         // Minimal Standalone Connect exchange: no refresh token, id_token, or PKCE.
-        const granted = narrowScope(Array.isArray(application.scopes) ? application.scopes : [], scope);
+        const granted = narrowM2mScope(application, scope);
         response = {
           access_token: jwt.sign(
             {
@@ -664,12 +659,17 @@ export function oauthRoutes(ctx: RouteContext): void {
         ws.authCodes.delete(authCode.id);
       }
     } else {
+      // Production's client_credentials grant is enabled only for M2M applications; an OAuth
+      // application asking for it is refused as a client, without the Basic challenge.
+      if (application.application_type !== 'm2m') throw new OauthApiError(401, 'invalid_client');
+
       // Grant the requested scopes, defaulting to all of the application's scopes. A
       // request may narrow to a subset (space-delimited, per RFC 6749 §3.3); requesting
       // a scope the application does not have is rejected so authz logic can be tested.
       // Guard against a malformed (non-array) stored scopes value so a request never
       // substring-matches a scope string or hits a .join on a non-array.
-      const granted = narrowScope(Array.isArray(application.scopes) ? application.scopes : [], scope);
+      const granted = narrowM2mScope(application, scope);
+      const scopeClaim = formatScope(granted);
 
       // Both the audience and tenant come from the stored application, never the caller,
       // so a client can't mint a token for an arbitrary aud or an org it isn't tied to.
@@ -682,13 +682,13 @@ export function oauthRoutes(ctx: RouteContext): void {
             aud: application.audience ?? application.client_id,
             jti: generateUlid(),
             org_id: application.organization_id ?? undefined,
-            scope: granted.join(' '),
+            scope: scopeClaim,
           },
           { expiresIn: TOKEN_TTL_SECONDS },
         ),
         expires_in: TOKEN_TTL_SECONDS,
         token_type: 'bearer',
-        ...(granted.length > 0 ? { scope: granted.join(' ') } : {}),
+        ...(scopeClaim !== undefined ? { scope: scopeClaim } : {}),
       };
     }
 

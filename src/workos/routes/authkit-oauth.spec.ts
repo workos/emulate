@@ -196,14 +196,11 @@ describe('Dynamic client registration', () => {
     expect(body.client_secret).toMatch(/^secret_/);
     expect(body.grant_types).toEqual(['authorization_code']);
     expect(body.response_types).toEqual(['code']);
-    // No scope asked for: none echoed, though the whole standard set is available to the client.
+    // No scope asked for: none echoed. The standard set is open to the client regardless, and
+    // none of it is an application scope: production serves those from assigned permissions,
+    // which a dynamically registered application has none of.
     expect(body).not.toHaveProperty('scope');
-    expect(ws.connectApplications.findOneBy('client_id', body.client_id)!.scopes).toEqual([
-      'email',
-      'offline_access',
-      'openid',
-      'profile',
-    ]);
+    expect(ws.connectApplications.findOneBy('client_id', body.client_id)!.scopes).toEqual([]);
     expect(Object.keys(body).sort()).toEqual([
       'application_type',
       'client_id',
@@ -291,7 +288,25 @@ describe('Dynamic client registration', () => {
     expect(ws.connectApplications.all()).toHaveLength(0);
   });
 
-  it('stores what the client registered for, so the token endpoint can hold it to it', async () => {
+  it('drops scopes a dynamically registered client cannot be granted and echoes the effective scope', async () => {
+    // Production's grantableForDynamicRegistration: a requested scope the client may not ask for
+    // is dropped rather than failing the registration, and the effective set is reported in the
+    // order requested, de-duplicated. The emulator has no environment-level permissions for
+    // dynamic registration, so the grantable set is the standard scopes.
+    const mixed = await register({ redirect_uris: [callback], scope: 'mcp:tools openid claudeai profile openid' });
+    expect(mixed.status).toBe(201);
+    expect((await json(mixed)).scope).toBe('openid profile');
+    // Nothing grantable: registered all the same, with an empty effective scope.
+    const none = await register({ redirect_uris: [callback], scope: 'claudeai' });
+    expect(none.status).toBe(201);
+    expect((await json(none)).scope).toBe('');
+    // An empty string is no request for a scope, and is not echoed.
+    const empty = await json(await register({ redirect_uris: [callback], scope: '' }));
+    expect(empty).not.toHaveProperty('scope');
+    expect(ws.connectApplications.all()).toHaveLength(3);
+  });
+
+  it('stores what the client registered for, as metadata the token endpoint does not enforce', async () => {
     const body = await json(
       await register({
         redirect_uris: [callback],
@@ -359,7 +374,6 @@ describe('Dynamic client registration', () => {
       { grant_types: ['client_credentials'] },
       { grant_types: ['urn:ietf:params:oauth:grant-type:device_code'] },
       { response_types: ['token'] },
-      { scope: 'openid admin:everything' },
       { scope: 42 },
     ]) {
       const res = await register({ redirect_uris: [callback], ...extra });
