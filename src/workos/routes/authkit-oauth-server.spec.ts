@@ -1066,6 +1066,8 @@ describe('AuthKit OAuth server', () => {
         session_id: 'session_x',
         expires_at: new Date(Date.now() + 60_000).toISOString(),
         client_id,
+        exchanged_at: null,
+        exchanged_for_id: null,
       });
       expect(stray.connect).toBeUndefined();
       // Production's `UnsupportedRefreshToken`: an unauthorized_client pointed at the right endpoint.
@@ -1509,6 +1511,8 @@ describe('AuthKit OAuth server, registered grant types and revoked grants', () =
       session_id: 'session_authkit',
       expires_at: new Date(Date.now() + 60_000).toISOString(),
       client_id,
+      exchanged_at: null,
+      exchanged_for_id: null,
     });
 
     const app = ws.connectApplications.findOneBy('client_id', client_id)!;

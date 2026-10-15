@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
 import { getWorkOSStore } from '../store.js';
@@ -23,8 +23,18 @@ describe('Auth routes', () => {
     store = server.store;
   });
 
+  afterEach(() => setSystemTime());
+
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
   const json = (res: Response) => res.json() as Promise<any>;
+
+  /** Exchange `refreshToken` the way a client keeping its session alive would. */
+  const refresh = (refreshToken: string, extra: Record<string, unknown> = {}) =>
+    app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refreshToken, ...extra }),
+    });
 
   // Verified by default: the password grant gates an unverified mailbox with
   // email_verification_required, so a fixture for anything other than that gate is a user who
@@ -432,7 +442,7 @@ describe('Auth routes', () => {
 
   // --- Refresh token tests ---
 
-  it('refresh_token grant returns new tokens and invalidates old', async () => {
+  it('refresh_token grant returns new tokens and invalidates the old one after the grace period', async () => {
     await req('/user_management/users', {
       method: 'POST',
       body: JSON.stringify({ email: 'refresh@test.com', password: 'pw', email_verified: true }),
@@ -464,16 +474,233 @@ describe('Auth routes', () => {
     // grant's internal 'OAuth' category — which would otherwise drop the field for this user.
     expect(refreshBody.authentication_method).toBe('Password');
 
-    // Old refresh token should be invalidated (rotation)
-    const retryRes = await app.request('/user_management/authenticate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: oldRefresh }),
-    });
+    // Using the rotated token proves the client received the rotation; 30 seconds after that the
+    // old token is terminally invalid.
+    await refresh(refreshBody.refresh_token);
+    setSystemTime(new Date(Date.now() + 31_000));
+    const retryRes = await refresh(oldRefresh);
     expect(retryRes.status).toBe(400);
     const retryBody = await json(retryRes);
     expect(retryBody.error).toBe('invalid_grant');
-    expect(retryBody.error_description).toBe('Invalid refresh token.');
+    expect(retryBody.error_description).toBe('Refresh token already exchanged.');
+  });
+
+  it('replaying a just-exchanged refresh token within the grace period converges on the same rotation', async () => {
+    const user = await createUser('replay@test.com');
+    const org = joinOrg(user.id, 'Replay Corp');
+    const signIn = await json(await signInWithMagicAuth('replay@test.com'));
+    const ws = getWorkOSStore(store);
+    const sessionsCreated = () => ws.events.all().filter((e) => e.event === 'session.created').length;
+    expect(sessionsCreated()).toBe(1);
+
+    // Two concurrent refreshes of the same token — a hot reload firing several requests at once —
+    // started before either is awaited. The handler has no await between looking the token up
+    // and rotating it today, so the overlap is exactly what this has to keep guarding.
+    const [firstRes, secondRes] = await Promise.all([refresh(signIn.refresh_token), refresh(signIn.refresh_token)]);
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+    const first = await json(firstRes);
+    const replay = await json(secondRes);
+
+    // The replay returns the same rotated refresh token as the first exchange...
+    expect(replay.refresh_token).toBe(first.refresh_token);
+    expect(replay.refresh_token).not.toBe(signIn.refresh_token);
+    // ...with the same user and organization context, reported like any refresh...
+    expect(replay.user.id).toBe(user.id);
+    expect(replay.organization_id).toBe(org.id);
+    expect(first.organization_id).toBe(org.id);
+    expect(replay.authentication_method).toBe('MagicAuth');
+    // ...and a freshly minted access token for the same session.
+    expect(replay.access_token).not.toBe(first.access_token);
+    expect(decodeJwt(replay.access_token).sid).toBe(decodeJwt(signIn.access_token).sid);
+    expect(decodeJwt(first.access_token).sid).toBe(decodeJwt(signIn.access_token).sid);
+
+    // Neither exchange is a fresh login: one session, one session.created, no extra tokens.
+    expect(ws.sessions.all()).toHaveLength(1);
+    expect(sessionsCreated()).toBe(1);
+    expect(ws.events.all().filter((e) => e.event.startsWith('authentication.'))).toHaveLength(1);
+    expect(ws.refreshTokens.all()).toHaveLength(2);
+  });
+
+  it('rejects a replay once its successor was used more than the grace period ago, while the live token still works', async () => {
+    await createUser('late-replay@test.com');
+    const signIn = await json(await signInWithMagicAuth('late-replay@test.com'));
+    const rotated = await json(await refresh(signIn.refresh_token));
+    // Using the rotated token is what starts the original token's window, as in production: a
+    // client that has refreshed with the new token has proved it received the rotation.
+    const next = await json(await refresh(rotated.refresh_token));
+
+    setSystemTime(new Date(Date.now() + 31_000));
+
+    const replay = await refresh(signIn.refresh_token);
+    expect(replay.status).toBe(400);
+    expect(await json(replay)).toEqual({
+      error: 'invalid_grant',
+      error_description: 'Refresh token already exchanged.',
+    });
+    // The row is kept rather than deleted on the failed replay, so a second replay fails the same
+    // way instead of as an unknown token.
+    const again = await refresh(signIn.refresh_token);
+    expect(again.status).toBe(400);
+    expect(await json(again)).toEqual({
+      error: 'invalid_grant',
+      error_description: 'Refresh token already exchanged.',
+    });
+    expect(getWorkOSStore(store).refreshTokens.findOneBy('token', signIn.refresh_token)).toBeDefined();
+
+    // The live token still rotates, and that rotation sweeps the original token (its successor
+    // was used more than 30 seconds ago) but not `rotated`, whose successor was used just now.
+    const live = await refresh(next.refresh_token);
+    expect(live.status).toBe(200);
+    expect((await json(live)).refresh_token).not.toBe(next.refresh_token);
+    const tokens = getWorkOSStore(store).refreshTokens;
+    expect(tokens.findOneBy('token', signIn.refresh_token)).toBeUndefined();
+    expect(tokens.findOneBy('token', rotated.refresh_token)).toBeDefined();
+  });
+
+  it('a retired token whose successor was never used still replays after the grace period', async () => {
+    await createUser('lost-response@test.com');
+    const signIn = await json(await signInWithMagicAuth('lost-response@test.com'));
+    const rotated = await json(await refresh(signIn.refresh_token));
+
+    // The rotation response never reached the client, so it comes back with the old token well
+    // past 30 seconds. Its successor has never been used, so nothing has started its window and
+    // production replays it however long ago it was exchanged.
+    setSystemTime(new Date(Date.now() + 10 * 60_000));
+
+    const replay = await refresh(signIn.refresh_token);
+    expect(replay.status).toBe(200);
+    const body = await json(replay);
+    expect(body.refresh_token).toBe(rotated.refresh_token);
+    expect(decodeJwt(body.access_token).sid).toBe(decodeJwt(signIn.access_token).sid);
+    expect(getWorkOSStore(store).refreshTokens.all()).toHaveLength(2);
+  });
+
+  it('refuses a retired token past its own expiry even while its successor is unused', async () => {
+    await createUser('expired-replay@test.com');
+    const signIn = await json(await signInWithMagicAuth('expired-replay@test.com'));
+    const rotated = await json(await refresh(signIn.refresh_token));
+    const tokens = getWorkOSStore(store).refreshTokens;
+    const retired = tokens.findOneBy('token', signIn.refresh_token)!;
+    tokens.update(retired.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    // Its successor is unused, which on its own would replay forever; its own lifetime still bounds it.
+    const replay = await refresh(signIn.refresh_token);
+    expect(replay.status).toBe(400);
+    expect(await json(replay)).toEqual({ error: 'invalid_grant', error_description: 'Refresh token has expired.' });
+    expect(tokens.findOneBy('token', signIn.refresh_token)).toBeUndefined();
+    // The successor is untouched and still rotates.
+    expect((await refresh(rotated.refresh_token)).status).toBe(200);
+  });
+
+  it('a replay several rotations behind converges on the newest token in the chain', async () => {
+    await createUser('chain@test.com');
+    const signIn = await json(await signInWithMagicAuth('chain@test.com'));
+    const tokenA = signIn.refresh_token;
+    const { refresh_token: tokenB } = await json(await refresh(tokenA));
+    const { refresh_token: tokenC } = await json(await refresh(tokenB));
+    expect(new Set([tokenA, tokenB, tokenC]).size).toBe(3);
+
+    const replayA = await refresh(tokenA);
+    expect(replayA.status).toBe(200);
+    expect((await json(replayA)).refresh_token).toBe(tokenC);
+
+    const replayB = await refresh(tokenB);
+    expect(replayB.status).toBe(200);
+    expect((await json(replayB)).refresh_token).toBe(tokenC);
+
+    // A rotation sweeps the retired links that can never be replayed again rather than leaving a
+    // row behind per refresh. A goes: its successor B was exchanged more than 30 seconds ago. B
+    // stays: its successor C is only being exchanged now, so a request still in flight carrying
+    // B converges on D.
+    setSystemTime(new Date(Date.now() + 31_000));
+    const { refresh_token: tokenD } = await json(await refresh(tokenC));
+    const remaining = getWorkOSStore(store)
+      .refreshTokens.all()
+      .map((t) => t.token)
+      .sort();
+    expect(remaining).toEqual([tokenB, tokenC, tokenD].sort());
+    expect((await json(await refresh(tokenB))).refresh_token).toBe(tokenD);
+  });
+
+  it('retires a token more than 50 rotations behind rather than walking the whole chain', async () => {
+    await createUser('deep-chain@test.com');
+    const signIn = await json(await signInWithMagicAuth('deep-chain@test.com'));
+    const tokens = [signIn.refresh_token];
+    for (let i = 0; i < 51; i++) {
+      tokens.push((await json(await refresh(tokens[tokens.length - 1]))).refresh_token);
+    }
+    const newest = tokens[tokens.length - 1];
+
+    // 51 links after the first token: too many generations behind to be a straggler.
+    const tooFar = await refresh(tokens[0]);
+    expect(tooFar.status).toBe(400);
+    expect(await json(tooFar)).toEqual({
+      error: 'invalid_grant',
+      error_description: 'Refresh token already exchanged.',
+    });
+
+    // 50 links after the second: the cap is inclusive, as in production.
+    const atCap = await refresh(tokens[1]);
+    expect(atCap.status).toBe(200);
+    expect((await json(atCap)).refresh_token).toBe(newest);
+  });
+
+  it('a replay for a revoked session fails like any refresh of that session', async () => {
+    await createUser('revoked-replay@test.com');
+    const signIn = await json(await signInWithMagicAuth('revoked-replay@test.com'));
+    const tokenA = signIn.refresh_token;
+    const { refresh_token: tokenB } = await json(await refresh(tokenA));
+    const { refresh_token: tokenC } = await json(await refresh(tokenB));
+    expect(getWorkOSStore(store).refreshTokens.all()).toHaveLength(3);
+
+    const revoke = await req('/user_management/sessions/revoke', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: decodeJwt(signIn.access_token).sid }),
+    });
+    expect(revoke.status).toBe(200);
+
+    const replay = await refresh(tokenA);
+    expect(replay.status).toBe(400);
+    expect(await json(replay)).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
+    // The whole chain goes with the session — including B, which was never presented — since
+    // no rotation will ever sweep a session that cannot refresh again.
+    expect(getWorkOSStore(store).refreshTokens.all()).toHaveLength(0);
+
+    const live = await refresh(tokenC);
+    expect(live.status).toBe(400);
+    expect(await json(live)).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
+  });
+
+  it('a replay that switches organization mints for it without moving the returned token', async () => {
+    const user = await createUser('replay-switch@test.com');
+    const orgX = joinOrg(user.id, 'Replay X');
+    const signIn = await json(await signInWithMagicAuth('replay-switch@test.com'));
+    expect(signIn.organization_id).toBe(orgX.id);
+    // Joined after sign-in so the session starts scoped to X; only an explicit organization_id
+    // moves it, as the unscoped-refresh test above establishes.
+    const orgY = joinOrg(user.id, 'Replay Y', { role: 'admin' });
+
+    const rotated = await json(await refresh(signIn.refresh_token));
+    expect(rotated.organization_id).toBe(orgX.id);
+
+    // A replay inside the grace period that also asks for a different organization.
+    const switched = await refresh(signIn.refresh_token, { organization_id: orgY.id });
+    expect(switched.status).toBe(200);
+    const switchedBody = await json(switched);
+    expect(switchedBody.refresh_token).toBe(rotated.refresh_token);
+    expect(switchedBody.organization_id).toBe(orgY.id);
+    const claims = decodeJwt(switchedBody.access_token);
+    expect(claims.org_id).toBe(orgY.id);
+    expect(claims.role).toBe('admin');
+    expect(claims.sid).toBe(decodeJwt(signIn.access_token).sid);
+
+    // The switch does not persist: production's replay returns before the exchange hook that
+    // records the session's organization, so a plain refresh of the token it handed back is back
+    // on X.
+    const next = await json(await refresh(rotated.refresh_token));
+    expect(next.organization_id).toBe(orgX.id);
+    expect(decodeJwt(next.access_token).org_id).toBe(orgX.id);
   });
 
   it('rejects invalid refresh token', async () => {

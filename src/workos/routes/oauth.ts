@@ -384,6 +384,8 @@ export function oauthRoutes(ctx: RouteContext): void {
       expires_at: cappedAt(expiresIn(30 * 24 * 60), session.expires_at),
       client_id: application.client_id,
       connect: { scope: grant.scope, resource: grant.resource },
+      exchanged_at: null,
+      exchanged_for_id: null,
     }).token;
 
   /**

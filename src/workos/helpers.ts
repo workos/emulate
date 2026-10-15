@@ -1180,6 +1180,44 @@ export function formatDirectory(d: WorkOSDirectory): Record<string, unknown> {
   return formatEntity(d);
 }
 
+/**
+ * The directory states the event catalog uses. `GET /directories` reports `linked` and
+ * `unlinked`, but `dsync.*` event payloads keep the older `active` / `inactive` names
+ * (the Node SDK maps between them for the REST shape and passes the event state through).
+ */
+const DIRECTORY_EVENT_STATES: Record<WorkOSDirectory['state'], string> = {
+  linked: 'active',
+  unlinked: 'inactive',
+  deleting: 'deleting',
+  invalid_credentials: 'invalid_credentials',
+};
+
+/**
+ * The `data` of a `dsync.activated` event. Production documents it as the Directory object
+ * with the singular `domain` replaced by a `domains` array of Organization Domains
+ * (`object`, `id`, `domain`), and requires a string `external_key`. Strict SDK
+ * deserializers (e.g. workos-python's `DsyncActivatedData.from_dict`) raise on a missing
+ * `domains`, which fails the whole `GET /events` page it appears on.
+ */
+export function formatDirectoryActivatedEvent(d: WorkOSDirectory, ws: WorkOSStore): Record<string, unknown> {
+  const { domain: _domain, ...rest } = formatEntity(d);
+  const domains = d.organization_id
+    ? ws.organizationDomains
+        .findBy('organization_id', d.organization_id)
+        .map((od) => ({ object: 'organization_domain', id: od.id, domain: od.domain }))
+    : [];
+  return { ...rest, state: DIRECTORY_EVENT_STATES[d.state] ?? d.state, domains };
+}
+
+/**
+ * The `data` of a `dsync.deleted` event: the Directory object without `domain`, `domains`
+ * or `external_key`, in the `deleting` state the directory is in when the event fires.
+ */
+export function formatDirectoryDeletedEvent(d: WorkOSDirectory): Record<string, unknown> {
+  const { domain: _domain, external_key: _externalKey, ...rest } = formatEntity(d);
+  return { ...rest, state: 'deleting' };
+}
+
 export function formatDirectoryUser(u: WorkOSDirectoryUser): Record<string, unknown> {
   return formatEntity(u);
 }

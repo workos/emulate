@@ -1286,9 +1286,9 @@ The session is scoped to the connection's organization. A profile with no user-m
 
 As with `/user_management/authorize`, `/sso/authorize` is public and signs in whoever `login_hint` names: there is no IdP here to prove an identity with, and inventing a profile for any address is what lets a test drive an SSO login at all. Both endpoints will therefore hand out a session for any account you ask them for. That is the emulator being a test double, not an authorization server — do not point anything at it that you would not also let sign in as your users.
 
-### Refresh tokens always rotate
+### Refresh tokens rotate, with a 30-second replay grace period
 
-The emulator issues a new refresh token on every refresh and invalidates the one you presented, so replaying it returns `{"error": "invalid_grant", "error_description": "Invalid refresh token."}`. WorkOS documents that refresh tokens _may_ be rotated after use, so production is free to hand back the same token and leave it valid. The emulator always takes the stricter path: a client that forgets to store the newly returned `refresh_token` fails locally instead of in production.
+The emulator issues a new refresh token on every refresh and retires the one you presented, the way [AuthKit documents](https://workos.com/docs/authkit/session-resilience). Replaying the retired token is safe and idempotent: it answers `200` with the _same_ rotated `refresh_token` as the first exchange, a freshly minted access token for the same session, and no new session or authentication event, so concurrent refreshes (a hot reload firing several requests at once, a retry after a slow network) converge on one result instead of signing the user out. A client that fell further behind still converges: a token two rotations old resolves to the newest token in its chain. The grace period is the documented 30 seconds (production reads the length from a feature flag, so the public docs are the figure the emulator matches), measured the way production measures it, from the moment the rotated token is itself used: a client whose rotation response was lost can come back with the old token at any point in the session's life, and once the new token has been used the old one stays good for 30 seconds more, then is terminally invalid. Replaying it after that returns `{"error": "invalid_grant", "error_description": "Refresh token already exchanged."}`.
 
 ### Authentication failure shapes
 
@@ -1298,7 +1298,7 @@ The emulator issues a new refresh token on every refresh and invalidates the one
 | ---------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
 | Malformed request — missing or unrecognized parameter, any grant | `{"error": "invalid_request", "error_description": "…"}`              | `OauthException`          |
 | `authorization_code` — unknown, expired, bad verifier, user gone | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
-| `refresh_token` — unknown, expired, rotated, or user deleted     | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
+| `refresh_token` — unknown, expired, already exchanged, user gone | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
 | Device code — pending, expired, unknown, or user deleted         | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}` | `OauthException`          |
 | `password` — wrong password                                      | `{"code": "invalid_credentials", "message": "…"}` (400)               | `GenericServerException`  |
 | Magic Auth — wrong or expired code                               | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`         | `GenericServerException`  |

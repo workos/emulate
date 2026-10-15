@@ -79,10 +79,12 @@ export function directoryRoutes(ctx: RouteContext): void {
       }
     }
 
+    // The directory row goes first, the way the role routes delete the role before its
+    // joins: the directories onDelete hook decides from the groups the directory still has
+    // whether production would announce this deletion, so they must outlive it.
+    ws.directories.delete(dir.id);
     ws.directoryUsers.deleteBy('directory_id', dir.id);
     ws.directoryGroups.deleteBy('directory_id', dir.id);
-
-    ws.directories.delete(dir.id);
     return c.body(null, 204);
   });
 
