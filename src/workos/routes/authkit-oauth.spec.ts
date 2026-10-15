@@ -530,6 +530,8 @@ describe('AuthKit OAuth resource indicators', () => {
         { uri: '' },
         { uri: 'https://d.example.test', default: 'yes' as unknown as boolean },
         null as unknown as { uri: string },
+        // The same resource as [0] once normalized, so a duplicate the API would also refuse.
+        { uri: 'https://A.example.test/' },
       ],
     });
     expect(valid).toBe(false);
@@ -542,6 +544,7 @@ describe('AuthKit OAuth resource indicators', () => {
     expect(byPath['resourceIndicators[6].uri']).toContain('required');
     expect(byPath['resourceIndicators[7].default']).toContain('boolean');
     expect(byPath['resourceIndicators[8]']).toContain('object');
+    expect(byPath['resourceIndicators[9].uri']).toContain('unique');
 
     expect(validateSeedConfig({ resourceIndicators: {} as never }).errors[0].path).toBe('resourceIndicators');
   });

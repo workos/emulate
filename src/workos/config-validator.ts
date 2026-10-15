@@ -6,7 +6,7 @@ import { validateJwtTemplateContent } from './jwt-template.js';
 import { isValidResourceTypeSlug } from './constants.js';
 import { AGENT_SESSION_SETTING_LIMITS } from './agent-sessions.js';
 import { normalizeEmail, type NormalizedEmail } from './helpers.js';
-import { isValidResourceUri } from './authkit-oauth.js';
+import { isValidResourceUri, resourceUrisEqual } from './authkit-oauth.js';
 
 /**
  * A seed is the one creation path that does not go through a route, so it is held to what the
@@ -949,6 +949,24 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: appConfig.uses_pkce,
           });
         }
+        // Production's token endpoint splits Basic credentials on every colon and keeps the first
+        // two parts (parseAuthorization), so a secret containing ':' is truncated there, and the
+        // emulator decodes the header the same way. A pinned secret has to be one it can accept.
+        if (appConfig.client_secret !== undefined) {
+          if (typeof appConfig.client_secret !== 'string' || !appConfig.client_secret) {
+            errors.push({
+              path: `connectApplications[${index}].client_secret`,
+              message: 'client_secret must be a non-empty string if provided',
+              value: appConfig.client_secret,
+            });
+          } else if (appConfig.client_secret.includes(':')) {
+            errors.push({
+              path: `connectApplications[${index}].client_secret`,
+              message: "client_secret cannot contain ':', which Basic credentials split on at the token endpoint",
+              value: appConfig.client_secret,
+            });
+          }
+        }
         // A third-party oauth application is reported with its owning organization, so it
         // needs one for the same reason an m2m application does.
         const needsOrganization = type === 'm2m' || appConfig.is_first_party === false;
@@ -1038,7 +1056,9 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             message: 'uri must be an absolute URI without a fragment or wildcard',
             value: entry.uri,
           });
-        } else if (seenUris.has(entry.uri)) {
+        } else if ([...seenUris].some((seen) => resourceUrisEqual(seen, entry.uri))) {
+          // Compared the way the API's duplicate check and every matcher compare, by normalized
+          // URL, so `https://a.test` and `https://a.test/` cannot both be seeded.
           errors.push({
             path: at('uri'),
             message: 'uri must be unique across resourceIndicators',

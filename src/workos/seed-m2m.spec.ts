@@ -388,6 +388,16 @@ describe('Seed config validation for M2M apps and API keys', () => {
     ).toBeDefined();
   });
 
+  it("rejects a pinned client_secret containing ':'", () => {
+    // Basic credentials split on the colon at the token endpoint, as production's do.
+    expect(
+      findError(
+        { connectApplications: [{ name: 'Bad', type: 'oauth', client_secret: 'secret_a:b' }] },
+        'connectApplications[0].client_secret',
+      )?.message,
+    ).toContain("':'");
+  });
+
   it('rejects two connect applications pinning the same client_id', () => {
     expect(
       findError(
