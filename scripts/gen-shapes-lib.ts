@@ -58,14 +58,20 @@ export const OBJECT_SCHEMA_MAP: readonly ShapeMapEntry[] = [
   { objectType: 'directory_user', schemaName: 'DirectoryUserWithGroups' },
   { objectType: 'role', schemaName: 'Role' },
   { objectType: 'permission', schemaName: 'AuthorizationPermission' },
+  { objectType: 'group_role_assignment', schemaName: 'GroupRoleAssignment' },
   { objectType: 'api_key', schemaName: 'ApiKey' },
   { objectType: 'password_reset', schemaName: 'PasswordReset' },
   { objectType: 'feature_flag', schemaName: 'Flag' },
+  // The SSO profile is pure data once minted: `/sso/token` and `/sso/profile` both serve it
+  // through one formatter, which is where `name` was composed from `first_name` and
+  // `last_name` for a release — a field production stores on its own and never derives.
+  { objectType: 'profile', schemaName: 'Profile' },
   // The secretless factor GET and LIST return. `AuthenticationFactorEnrolled` shares its
   // discriminator and top-level fields; the two differ only inside `totp`, below this loop's
   // depth — enrollment's secrets are pinned by the route tests instead.
   { objectType: 'authentication_factor', schemaName: 'AuthenticationFactor' },
   { objectType: 'authentication_challenge', schemaName: 'AuthenticationChallenge' },
+  { objectType: 'it_contact', schemaName: 'ItContact' },
   // The spec names only the secret-bearing creation shape; the list route's secretless
   // variant is an inline schema, so `secret` is carried as a tracked gap on this entry.
   { objectType: 'connect_application_secret', schemaName: 'NewConnectApplicationSecret' },
@@ -128,6 +134,11 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
     schemaName: 'AuthorizationCheck',
   },
   { method: 'GET', path: '/sso/jwks/{clientId}', status: '200', schemaName: 'JwksResponse' },
+  // Unlike the two token endpoints excluded above, the spec documents this body
+  // (`SsoTokenResponse`), and it is the envelope that went out as a bare `{ access_token,
+  // profile }` for several releases (issue #129): every SDK requires `token_type` and
+  // `expires_in`, and the Python SDK refused to parse the response without them.
+  { method: 'POST', path: '/sso/token', status: '200', schemaName: 'SsoTokenResponse' },
   { method: 'POST', path: '/client/token', status: '201', schemaName: 'ClientApiTokenResponse' },
   // The created secret is the one place the plaintext `secret` is ever returned, so the
   // envelope and the resource are the same body — listed here because no named spec schema
@@ -162,6 +173,12 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
   { method: 'GET', path: '/organizations', status: '200', schemaName: 'OrganizationList' },
   { method: 'GET', path: '/user_management/users', status: '200', schemaName: 'UserlandUserList' },
   { method: 'GET', path: '/connect/applications', status: '200', schemaName: 'ConnectApplicationList' },
+  {
+    method: 'GET',
+    path: '/organizations/{organization_id}/it_contacts',
+    status: '200',
+    schemaName: 'ItContactList',
+  },
   { method: 'GET', path: '/webhook_endpoints', status: '200', schemaName: 'WebhookEndpointList' },
   { method: 'GET', path: '/events', status: '200', schemaName: 'EventList' },
   {

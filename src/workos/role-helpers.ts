@@ -200,6 +200,7 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
     ws.roles.delete(role.id);
     ws.rolePermissions.deleteBy('role_id', role.id);
     ws.roleAssignments.deleteBy('role_id', role.id);
+    ws.groupRoleAssignments.deleteBy('role_id', role.id);
 
     return c.body(null, 204);
   });

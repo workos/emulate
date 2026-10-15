@@ -5,6 +5,7 @@ import {
   parseJsonBody,
   WorkOSApiError,
   parseListParams,
+  parseArrayParam,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatMembership, formatListResponse } from '../helpers.js';
@@ -61,14 +62,16 @@ export function membershipRoutes(ctx: RouteContext): void {
     const params = parseListParams(url);
     const orgFilter = url.searchParams.get('organization_id') ?? undefined;
     const userFilter = url.searchParams.get('user_id') ?? undefined;
-    const statusesParam = url.searchParams.getAll('statuses[]');
+    // Production returns only active memberships when the request names no status.
+    const requestedStatuses = parseArrayParam(url, 'statuses');
+    const statuses = requestedStatuses.length > 0 ? requestedStatuses : ['active'];
 
     const result = ws.organizationMemberships.list({
       ...params,
       filter: (m) => {
         if (orgFilter && m.organization_id !== orgFilter) return false;
         if (userFilter && m.user_id !== userFilter) return false;
-        if (statusesParam.length > 0 && !statusesParam.includes(m.status)) return false;
+        if (!statuses.includes(m.status)) return false;
         return true;
       },
     });

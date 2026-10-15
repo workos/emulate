@@ -96,6 +96,7 @@ export function groupRoutes(ctx: RouteContext): void {
     // `group.member_removed` event per member, but a group deletion is one event
     // (`group.deleted`). The dangling rows are harmless — every read resolves the
     // group or membership and skips a miss (see the list endpoints below).
+    ws.groupRoleAssignments.deleteBy('group_id', group.id);
     ws.groups.delete(group.id);
     return c.body(null, 204);
   });

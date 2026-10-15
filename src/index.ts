@@ -47,6 +47,8 @@ export interface EmulatorSeedConfig {
 
 export interface EmulatorOptions {
   port?: number;
+  /** Maximum requests per API key in each 60-second window; defaults to 1,000. */
+  requestsPerMinute?: number;
   /**
    * Network interface to bind to. Defaults to `localhost`, which keeps the
    * emulator's unauthenticated endpoints reachable only from the local
@@ -139,6 +141,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
 
   const { app, store, jwt, ctx } = createServer(workosPlugin, {
     port,
+    requestsPerMinute: options.requestsPerMinute,
     baseUrl,
     apiKeys,
     issuer: options.issuer,

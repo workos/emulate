@@ -123,6 +123,34 @@ describe('Implicit organization resources', () => {
     }
   });
 
+  it('keeps group grants on the root in step with the organization external ID', async () => {
+    seedFromConfig(server.store, 'http://localhost', {
+      roles: [{ slug: 'reader', name: 'Reader' }],
+    });
+    const org = await createOrg('before');
+    const group = await json(
+      await req(`/organizations/${org.id}/groups`, { method: 'POST', body: JSON.stringify({ name: 'Readers' }) }),
+    );
+    const path = `/authorization/groups/${group.id}/role_assignments`;
+    const assigned = await req(path, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'reader', resource_type_slug: 'organization', resource_external_id: 'before' }),
+    });
+    expect(assigned.status).toBe(201);
+    const grant = await json(assigned);
+    for (const externalId of ['after', null]) {
+      expect(
+        (await req(`/organizations/${org.id}`, { method: 'PUT', body: JSON.stringify({ external_id: externalId }) }))
+          .status,
+      ).toBe(200);
+      const listed = await json(await req(path));
+      expect(listed.data).toHaveLength(1);
+      expect(listed.data[0].id).toBe(grant.id);
+      expect(listed.data[0].resource.id).toBe(grant.resource.id);
+      expect(listed.data[0].resource.external_id).toBe(externalId ?? org.id);
+    }
+  });
+
   it('updates root and grant timestamps only when their fields change', async () => {
     setSystemTime(new Date('2026-01-01T00:00:00Z'));
     seedFromConfig(server.store, 'http://localhost', {

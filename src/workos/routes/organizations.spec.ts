@@ -112,12 +112,37 @@ describe('Organization routes', () => {
       }),
     });
     const org = await json(createRes);
+    const group = await json(
+      await req(`/organizations/${org.id}/groups`, { method: 'POST', body: JSON.stringify({ name: 'Readers' }) }),
+    );
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'reader', name: 'Reader' }) });
+    const resource = await json(
+      await req('/authorization/resources', {
+        method: 'POST',
+        body: JSON.stringify({
+          organization_id: org.id,
+          resource_type_slug: 'repository',
+          external_id: 'repo',
+          name: 'Repository',
+        }),
+      }),
+    );
+    const assignmentsPath = `/authorization/groups/${group.id}/role_assignments`;
+    for (const resource_id of [resource.id, null]) {
+      const assignmentRes = await req(assignmentsPath, {
+        method: 'POST',
+        body: JSON.stringify({ role_slug: 'reader', resource_id }),
+      });
+      expect(assignmentRes.status).toBe(201);
+    }
 
     const delRes = await req(`/organizations/${org.id}`, { method: 'DELETE' });
     expect(delRes.status).toBe(204);
 
     const getRes = await req(`/organizations/${org.id}`);
     expect(getRes.status).toBe(404);
+    expect((await req(assignmentsPath)).status).toBe(404);
+    expect(getWorkOSStore(store).groupRoleAssignments.findBy('group_id', group.id)).toEqual([]);
   });
 
   it('filters organizations by search', async () => {

@@ -6,6 +6,7 @@
  * that, so extra hosts are configurable — without the default ever becoming "anything goes".
  */
 import { describe, it, expect } from 'bun:test';
+import { runCli, withCli } from '../cli.test-utils.js';
 import { createServer, type ApiKeyMap } from '../core/index.js';
 import { createEmulator } from '../index.js';
 import { workosPlugin } from './index.js';
@@ -509,48 +510,6 @@ describe('createEmulator({ allowedRedirectHosts })', () => {
  * that the CLI is responsible for splitting, collecting and preferring over the environment.
  */
 describe('--redirect-hosts / WORKOS_EMULATE_REDIRECT_HOSTS', () => {
-  const CLI = new URL('../cli.ts', import.meta.url).pathname;
-
-  /**
-   * The startup line only, not the whole stream: a served emulator never closes stdout, so
-   * reading to EOF would wait for the process this function is about to make requests against.
-   */
-  async function readStartupLine(stream: ReadableStream<Uint8Array>): Promise<string> {
-    const reader = stream.getReader();
-    let buffered = '';
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (value) buffered += new TextDecoder().decode(value);
-        const line = buffered.split('\n').find((l) => l.startsWith('{'));
-        if (line && buffered.includes('\n')) return line;
-        if (done) throw new Error(`CLI printed no startup JSON: ${buffered}`);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-  }
-
-  /** Start the CLI, hand its `--json` URL to `body`, and make sure the process is reaped. */
-  async function withCli(
-    args: string[],
-    env: Record<string, string>,
-    body: (url: string) => Promise<void>,
-  ): Promise<void> {
-    const proc = Bun.spawn([process.execPath, CLI, '--port', '0', '--json', ...args], {
-      env: { ...process.env, NO_UPDATE_NOTIFIER: '1', WORKOS_EMULATE_REDIRECT_HOSTS: '', ...env },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    try {
-      const line = await readStartupLine(proc.stdout);
-      await body((JSON.parse(line) as { url: string }).url);
-    } finally {
-      proc.kill();
-      await proc.exited;
-    }
-  }
-
   const authorize = (url: string, host: string) =>
     fetch(`${url}/data-integrations/salesforce/authorize?redirect_uri=https://${host}/cb`, { redirect: 'manual' });
 
@@ -558,7 +517,7 @@ describe('--redirect-hosts / WORKOS_EMULATE_REDIRECT_HOSTS', () => {
     await withCli(
       ['--redirect-hosts', 'a.example.test,b.example.test', '--redirect-hosts=c.example.test'],
       {},
-      async (url) => {
+      async ({ url }) => {
         for (const host of ['a.example.test', 'b.example.test', 'c.example.test']) {
           expect((await authorize(url, host)).status).toBe(302);
         }
@@ -568,7 +527,7 @@ describe('--redirect-hosts / WORKOS_EMULATE_REDIRECT_HOSTS', () => {
   }, 20000);
 
   it('reads the environment variable', async () => {
-    await withCli([], { WORKOS_EMULATE_REDIRECT_HOSTS: 'env.example.test, *.env.example.test' }, async (url) => {
+    await withCli([], { WORKOS_EMULATE_REDIRECT_HOSTS: 'env.example.test, *.env.example.test' }, async ({ url }) => {
       expect((await authorize(url, 'env.example.test')).status).toBe(302);
       expect((await authorize(url, 'sub.env.example.test')).status).toBe(302);
       expect((await authorize(url, 'other.example.test')).status).toBe(400);
@@ -579,7 +538,7 @@ describe('--redirect-hosts / WORKOS_EMULATE_REDIRECT_HOSTS', () => {
     await withCli(
       ['--redirect-hosts', 'flag.example.test'],
       { WORKOS_EMULATE_REDIRECT_HOSTS: 'env.example.test' },
-      async (url) => {
+      async ({ url }) => {
         expect((await authorize(url, 'flag.example.test')).status).toBe(302);
         expect((await authorize(url, 'env.example.test')).status).toBe(400);
       },
@@ -589,24 +548,16 @@ describe('--redirect-hosts / WORKOS_EMULATE_REDIRECT_HOSTS', () => {
   // An occurrence that contributes nothing left an empty array behind, which is not nullish and
   // so also discarded the environment variable — a flag that configured nothing, twice over.
   it('exits rather than accept a flag that contributes no hosts', async () => {
-    const proc = Bun.spawn([process.execPath, CLI, '--port', '0', '--json', '--redirect-hosts', ','], {
-      env: { ...process.env, NO_UPDATE_NOTIFIER: '1', WORKOS_EMULATE_REDIRECT_HOSTS: 'env.example.test' },
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const { exitCode, stderr } = await runCli(['--redirect-hosts', ','], {
+      WORKOS_EMULATE_REDIRECT_HOSTS: 'env.example.test',
     });
-    const stderr = await Bun.readableStreamToText(proc.stderr);
-    expect(await proc.exited).toBe(1);
+    expect(exitCode).toBe(1);
     expect(stderr).toContain('--redirect-hosts requires at least one host');
   }, 20000);
 
   it('exits with the validation error rather than starting on an unmatchable host', async () => {
-    const proc = Bun.spawn([process.execPath, CLI, '--port', '0', '--json', '--redirect-hosts', 'https://'], {
-      env: { ...process.env, NO_UPDATE_NOTIFIER: '1' },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const stderr = await Bun.readableStreamToText(proc.stderr);
-    expect(await proc.exited).toBe(1);
+    const { exitCode, stderr } = await runCli(['--redirect-hosts', 'https://']);
+    expect(exitCode).toBe(1);
     expect(stderr).toContain('Invalid redirect host');
   }, 20000);
 });

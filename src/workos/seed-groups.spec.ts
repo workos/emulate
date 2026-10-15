@@ -293,4 +293,74 @@ describe('Seeding groups', () => {
       expect(errors).toEqual([]);
     });
   });
+  it('derives one assignment per group grant when a seeded member email is repeated', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        users: [{ email: 'dev@acme.com' }],
+        organizations: [
+          {
+            name: 'Acme Corp',
+            memberships: [{ email: 'dev@acme.com' }],
+            // The same membership named three times used to become three links. Each link
+            // expanded the group's grants again under the same derived id, which stalled
+            // cursor pagination, and removing the member deleted only one of them.
+            groups: [{ name: 'Readers', members: ['dev@acme.com', 'dev@acme.com', 'DEV@acme.com'] }],
+          },
+        ],
+      },
+    });
+    const base = emulator.url;
+    const headers = auth(emulator.apiKey);
+    const get = async (path: string) => (await fetch(`${base}${path}`, { headers })).json() as Promise<any>;
+    const post = async (path: string, body: unknown) => {
+      const response = await fetch(`${base}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+      expect(response.status).toBe(201);
+      return response.json() as Promise<any>;
+    };
+
+    const org = (await get('/organizations')).data[0];
+    const membership = (await get(`/user_management/organization_memberships?organization_id=${org.id}`)).data[0];
+    const group = (await get(`/organizations/${org.id}/groups`)).data[0];
+    await post('/authorization/permissions', {
+      slug: 'repository:read',
+      name: 'Read',
+      resource_type_slug: 'repository',
+    });
+    await post('/authorization/roles', { slug: 'repository-reader', name: 'Reader', resource_type_slug: 'repository' });
+    const resource = await post('/authorization/resources', {
+      organization_id: org.id,
+      resource_type_slug: 'repository',
+      external_id: 'repo',
+      name: 'Repository',
+    });
+    await post(`/authorization/groups/${group.id}/role_assignments`, {
+      role_slug: 'repository-reader',
+      resource_id: resource.id,
+    });
+
+    // Walk the membership's assignments one per page; the walk must end and never repeat an id.
+    const ids: string[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < 5; page++) {
+      const query = after ? `&after=${encodeURIComponent(after)}` : '';
+      const body = await get(
+        `/authorization/organization_memberships/${membership.id}/role_assignments?limit=1${query}`,
+      );
+      ids.push(...body.data.map((assignment: { id: string }) => assignment.id));
+      after = body.list_metadata.after;
+      if (!after) break;
+    }
+    expect(after).toBeNull();
+    expect(ids).toHaveLength(1);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    // One link, so one removal takes the derived grant with it.
+    const membersPath = `/organizations/${org.id}/groups/${group.id}/organization-memberships`;
+    expect((await get(membersPath)).data).toHaveLength(1);
+    const removal = await fetch(`${base}${membersPath}/${membership.id}`, { method: 'DELETE', headers });
+    expect(removal.status).toBe(204);
+    const afterRemoval = await get(`/authorization/organization_memberships/${membership.id}/role_assignments`);
+    expect(afterRemoval.data).toHaveLength(0);
+  });
 });

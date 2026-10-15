@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
-import { workosPlugin } from '../index.js';
+import { workosPlugin, seedFromConfig } from '../index.js';
 import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
 import type { Store } from '../../core/index.js';
+import { formatSSOProfile } from '../helpers.js';
+import type { WorkOSSSOProfile } from '../entities.js';
 
 const apiKeys: ApiKeyMap = { sk_test_sso: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_sso', 'Content-Type': 'application/json' };
@@ -325,6 +327,123 @@ describe('SSO routes', () => {
     expect(body.profile).toBeDefined();
     expect(body.profile.object).toBe('profile');
     expect(body.access_token).toBeDefined();
+    // The SDKs parse this as SSOTokenResponse, which requires both of these (#129). The lifetime
+    // is production's: its authorization-code exchanger mints the token with addMinutes(5).
+    expect(body.token_type).toBe('Bearer');
+    expect(body.expires_in).toBe(300);
+    // A profile the emulator mints has no stored name, and none is composed from the parts.
+    expect(body.profile.first_name).toBe('user');
+    expect(body.profile.name).toBeNull();
+    // The token's own lifetime matches what the response reports.
+    const [, payload] = (body.access_token as string).split('.');
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    expect(claims.exp - claims.iat).toBe(body.expires_in);
+    // Every field the spec's SsoTokenResponse and Profile require is present.
+    for (const key of ['token_type', 'access_token', 'expires_in', 'profile']) {
+      expect(body).toHaveProperty(key);
+    }
+    for (const key of [
+      'object',
+      'id',
+      'organization_id',
+      'connection_id',
+      'connection_type',
+      'idp_id',
+      'email',
+      'first_name',
+      'last_name',
+      'name',
+      'raw_attributes',
+    ]) {
+      expect(body.profile).toHaveProperty(key);
+    }
+  });
+
+  describe('/sso/profile token lifetime', () => {
+    afterEach(() => setSystemTime());
+
+    async function issueToken() {
+      const { conn } = await createOrgWithConnection();
+      const authRes = await app.request(
+        `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+      );
+      const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+      const tokenRes = await app.request('/sso/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'authorization_code', code }),
+      });
+      return (await json(tokenRes)) as { access_token: string; expires_in: number };
+    }
+
+    const profile = (token: string) => app.request('/sso/profile', { headers: { Authorization: `Bearer ${token}` } });
+
+    // The lifetime /sso/token reports is the one /sso/profile enforces: the token works for
+    // expires_in seconds and is refused once that has passed.
+    it('accepts an issued token until expires_in has passed, then refuses it', async () => {
+      const start = new Date('2026-01-01T00:00:00Z');
+      setSystemTime(start);
+      const { access_token, expires_in } = await issueToken();
+
+      expect((await profile(access_token)).status).toBe(200);
+
+      setSystemTime(new Date(start.getTime() + (expires_in - 1) * 1000));
+      expect((await profile(access_token)).status).toBe(200);
+
+      setSystemTime(new Date(start.getTime() + (expires_in + 1) * 1000));
+      const expired = await profile(access_token);
+      expect(expired.status).toBe(401);
+    });
+
+    it('refuses a token that is not one the emulator signed', async () => {
+      expect((await profile('not-a-token')).status).toBe(401);
+    });
+  });
+
+  // Production stores `name` as its own attribute — its reconciler sets it only when the
+  // connection's attribute map has a `name` key — and its serializer emits the stored value or
+  // null. It is never composed from the two parts: a derived "Ada Lovelace" would pass against
+  // the emulator and come back null from WorkOS.
+  it('reports the stored name, never one composed from first_name and last_name', () => {
+    const base: WorkOSSSOProfile = {
+      id: 'prof_1',
+      object: 'profile',
+      connection_id: 'conn_1',
+      connection_type: 'GenericSAML',
+      organization_id: 'org_1',
+      idp_id: 'idp_1',
+      email: 'ada@acme.test',
+      first_name: 'Ada',
+      last_name: 'Lovelace',
+      name: null,
+      groups: [],
+      raw_attributes: {},
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    };
+
+    expect(formatSSOProfile(base).name).toBeNull();
+    expect(formatSSOProfile({ ...base, name: 'Ada Lovelace' }).name).toBe('Ada Lovelace');
+    expect(formatSSOProfile({ ...base, name: 'Countess of Lovelace' }).name).toBe('Countess of Lovelace');
+  });
+
+  it('seeds a profile name only when the seed supplies one', () => {
+    seedFromConfig(store, 'http://localhost:0', {
+      organizations: [{ name: 'Seeded Org' }],
+      connections: [
+        {
+          name: 'Seeded SSO',
+          organization: 'Seeded Org',
+          profiles: [
+            { email: 'named@seeded.test', first_name: 'Ada', last_name: 'Lovelace', name: 'Ada Lovelace' },
+            { email: 'unnamed@seeded.test', first_name: 'Ada', last_name: 'Lovelace' },
+          ],
+        },
+      ],
+    });
+    const profiles = getWorkOSStore(store).ssoProfiles.all();
+    expect(profiles.find((p) => p.email === 'named@seeded.test')?.name).toBe('Ada Lovelace');
+    expect(profiles.find((p) => p.email === 'unnamed@seeded.test')?.name).toBeNull();
   });
 
   it('returns 404 when no active connection found', async () => {

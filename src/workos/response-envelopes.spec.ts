@@ -48,6 +48,7 @@ interface Fixtures {
   userId: string;
   membershipId: string;
   clientId: string;
+  connectionId: string;
   connectApplicationId: string;
   passwordResetToken: string;
   passwordResetId: string;
@@ -113,6 +114,18 @@ const CASES: readonly EnvelopeCase[] = [
     request: (app, f) => get(`/sso/jwks/${f.clientId}`)(app),
   },
   {
+    operation: 'POST /sso/token',
+    // The code is minted by the authorize redirect and spent by the exchange, so each run earns
+    // its own rather than sharing one with another case.
+    request: async (app, f) => {
+      const authorize = await app.request(
+        `/sso/authorize?connection=${f.connectionId}&redirect_uri=http://localhost:3000/callback`,
+      );
+      const code = new URL(authorize.headers.get('location')!).searchParams.get('code');
+      return post('/sso/token', { grant_type: 'authorization_code', code })(app);
+    },
+  },
+  {
     operation: 'POST /user_management/users/{userlandUserId}/auth_factors',
     request: (app, f) => post(`/user_management/users/${f.userId}/auth_factors`, { type: 'totp' })(app),
   },
@@ -141,6 +154,10 @@ const CASES: readonly EnvelopeCase[] = [
   { operation: 'GET /organizations', request: get('/organizations') },
   { operation: 'GET /user_management/users', request: get('/user_management/users') },
   { operation: 'GET /connect/applications', request: get('/connect/applications') },
+  {
+    operation: 'GET /organizations/{organization_id}/it_contacts',
+    request: (app, f) => get(`/organizations/${f.organizationId}/it_contacts`)(app),
+  },
   { operation: 'GET /webhook_endpoints', request: get('/webhook_endpoints') },
   { operation: 'GET /events', request: get('/events') },
   {
@@ -199,6 +216,8 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       users: [{ email: 'alice@acme.com', password: 'secret123', totp: true }],
       permissions: [{ slug: 'posts:read', name: 'Read Posts' }],
       roles: [{ slug: 'member', name: 'Member', permissions: ['posts:read'] }],
+      // An active connection for the SSO token exchange to authorize against.
+      connections: [{ name: 'Acme SSO', organization: 'Acme Corp', domains: ['acme.com'] }],
       // Subscribed to an event this test never triggers, not the catch-all `[]`. Webhook
       // endpoints are seeded before api keys and connect applications, so a catch-all would
       // fire deliveries at a port nothing is listening on — and those in-flight fetches
@@ -250,11 +269,23 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       code: '123456',
     }).id;
 
+    // The IT contact list has no create-then-list case of its own, so the page it returns
+    // needs a record: an empty `data` array would satisfy the field assertions vacuously.
+    ws.itContacts.insert({
+      object: 'it_contact',
+      organization_id: organizationId,
+      email: 'it@acme.com',
+      invited_at: null,
+      invite_intents: null,
+      invite_setup_link: null,
+    });
+
     const fixtures: Fixtures = {
       organizationId,
       userId,
       membershipId,
       clientId: 'client_billing',
+      connectionId: ws.connections.findOneBy('name', 'Acme SSO')!.id,
       connectApplicationId: ws.connectApplications.findOneBy('client_id', 'client_billing')!.id,
       passwordResetToken,
       passwordResetId,

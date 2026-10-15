@@ -27,12 +27,15 @@ import {
   formatDirectoryUser,
   formatRole,
   formatPermission,
+  formatGroupRoleAssignment,
   formatApiKeyRecord,
   formatPasswordReset,
   formatFeatureFlag,
   formatAuthFactor,
   formatAuthChallenge,
   formatClientSecret,
+  formatItContact,
+  formatSSOProfile,
 } from './helpers.js';
 import { RESPONSE_SHAPE_REQUIREMENTS } from './generated/response-shapes.js';
 import type {
@@ -44,12 +47,15 @@ import type {
   WorkOSDirectoryUser,
   WorkOSRole,
   WorkOSPermission,
+  WorkOSGroupRoleAssignment,
   WorkOSApiKey,
   WorkOSPasswordReset,
   WorkOSFeatureFlag,
   WorkOSAuthenticationFactor,
   WorkOSAuthenticationChallenge,
   WorkOSClientSecret,
+  WorkOSItContact,
+  WorkOSSSOProfile,
 } from './entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -169,6 +175,19 @@ const permission: WorkOSPermission = {
   updated_at: TS,
 };
 
+const groupRoleAssignment: WorkOSGroupRoleAssignment = {
+  id: 'gra_01',
+  object: 'group_role_assignment',
+  group_id: 'group_01',
+  role_id: 'role_01',
+  role_slug: 'admin',
+  resource_id: 'authz_resource_01',
+  resource_external_id: 'proj-456',
+  resource_type_slug: 'project',
+  created_at: TS,
+  updated_at: TS,
+};
+
 const apiKey: WorkOSApiKey = {
   id: 'api_key_01',
   object: 'api_key',
@@ -240,6 +259,18 @@ const authChallenge: WorkOSAuthenticationChallenge = {
 const store = new Store();
 const ws = getWorkOSStore(store);
 
+const itContact: WorkOSItContact = {
+  id: 'it_contact_01',
+  object: 'it_contact',
+  organization_id: 'org_01',
+  email: 'it@acme.com',
+  invited_at: TS,
+  invite_intents: ['sso'],
+  invite_setup_link: 'http://localhost:4100/portal/setup/it_contact_01',
+  created_at: TS,
+  updated_at: TS,
+};
+
 const clientSecret: WorkOSClientSecret = {
   id: 'secret_01',
   object: 'connect_application_secret',
@@ -247,6 +278,25 @@ const clientSecret: WorkOSClientSecret = {
   value: 'secret_supersecretplaintext',
   secret_hint: 'text',
   last_used_at: null,
+  created_at: TS,
+  updated_at: TS,
+};
+
+// Timestamps populated on purpose: the spec's Profile has none, so the reverse check is what
+// proves the formatter strips the store's bookkeeping rather than passing it through.
+const ssoProfile: WorkOSSSOProfile = {
+  id: 'prof_01',
+  object: 'profile',
+  connection_id: 'conn_01',
+  connection_type: 'GenericSAML',
+  organization_id: 'org_01',
+  idp_id: 'idp_usr_1',
+  email: 'alice@acme.com',
+  first_name: 'Alice',
+  last_name: 'Smith',
+  name: null,
+  groups: ['Engineering'],
+  raw_attributes: { email: 'alice@acme.com' },
   created_at: TS,
   updated_at: TS,
 };
@@ -260,12 +310,15 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'directory_user', output: formatDirectoryUser(directoryUser) },
   { objectType: 'role', output: formatRole(role, ws) },
   { objectType: 'permission', output: formatPermission(permission) },
+  { objectType: 'group_role_assignment', output: formatGroupRoleAssignment(groupRoleAssignment) },
   { objectType: 'api_key', output: formatApiKeyRecord(apiKey) },
   { objectType: 'password_reset', output: formatPasswordReset(passwordReset) },
   { objectType: 'feature_flag', output: formatFeatureFlag(featureFlag) },
   { objectType: 'authentication_factor', output: formatAuthFactor(authFactor) },
   { objectType: 'authentication_challenge', output: formatAuthChallenge(authChallenge) },
   { objectType: 'connect_application_secret', output: formatClientSecret(clientSecret) },
+  { objectType: 'it_contact', output: formatItContact(itContact) },
+  { objectType: 'profile', output: formatSSOProfile(ssoProfile) },
 ];
 
 /**

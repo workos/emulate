@@ -9,6 +9,8 @@ import type { ServicePlugin, RouteContext } from './plugin.js';
 
 export interface ServerOptions {
   port?: number;
+  /** Maximum requests per API key in each 60-second window; defaults to 1,000. */
+  requestsPerMinute?: number;
   /**
    * The externally reachable root at which the emulator's routes are served. Every link the
    * emulator mints — invitation, password reset, device verification, SSO logout — and the default
@@ -34,6 +36,10 @@ export interface ServerOptions {
 
 export function createServer(plugin: ServicePlugin, options: ServerOptions = {}) {
   const port = options.port ?? 4100;
+  const requestsPerMinute = options.requestsPerMinute ?? 1000;
+  if (!Number.isSafeInteger(requestsPerMinute) || requestsPerMinute < 1) {
+    throw new RangeError('requestsPerMinute must be a positive safe integer');
+  }
   // Every link the emulator mints is `${baseUrl}/<route>`, so a trailing slash on the option would
   // double up in all of them (and in the default `iss`, built the same way). A path prefix is kept:
   // see ServerOptions.baseUrl for the contract it states.
@@ -132,17 +138,15 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
 
     let counter = rateLimitCounters.get(key);
     if (!counter || counter.resetAt <= now) {
-      counter = { remaining: 1000, resetAt: now + 60 };
+      counter = { remaining: requestsPerMinute, resetAt: now + 60 };
       rateLimitCounters.set(key, counter);
     }
 
-    counter.remaining = Math.max(0, counter.remaining - 1);
-
-    c.header('X-RateLimit-Limit', '1000');
-    c.header('X-RateLimit-Remaining', String(counter.remaining));
+    c.header('X-RateLimit-Limit', String(requestsPerMinute));
     c.header('X-RateLimit-Reset', String(counter.resetAt));
 
     if (counter.remaining === 0) {
+      c.header('X-RateLimit-Remaining', '0');
       c.header('Retry-After', String(counter.resetAt - now));
       return c.json(
         {
@@ -152,6 +156,9 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
         429,
       );
     }
+
+    counter.remaining -= 1;
+    c.header('X-RateLimit-Remaining', String(counter.remaining));
 
     await next();
   });

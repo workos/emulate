@@ -1,4 +1,4 @@
-import { type RouteContext, parseListParams } from '../../core/index.js';
+import { type RouteContext, parseArrayParam, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatEvent, formatListResponse } from '../helpers.js';
 import type { WorkOSEvent } from '../entities.js';
@@ -11,12 +11,8 @@ export function eventRoutes(ctx: RouteContext): void {
     const url = new URL(c.req.url);
     const params = parseListParams(url);
     // The spec says `style: form, explode: false` (`events=a,b`), which is what workos-python,
-    // -kotlin, -elixir and -rust send. Production parses the query with `qs` and splits a scalar
-    // on commas, so it also takes repeated `events=` (workos-go, -node, -ruby), `events[]=`
-    // (workos-dotnet) and indexed `events[0]=` (workos-php). Accept all four.
-    const eventTypes = [...url.searchParams]
-      .filter(([key]) => key === 'events' || /^events\[\d*\]$/.test(key))
-      .flatMap(([, value]) => value.split(','));
+    // -kotlin, -elixir and -rust send. The other SDKs send the forms parseArrayParam also takes.
+    const eventTypes = parseArrayParam(url, 'events');
     const organizationId = url.searchParams.get('organization_id');
     const rangeStart = url.searchParams.get('range_start');
     const rangeEnd = url.searchParams.get('range_end');

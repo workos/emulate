@@ -99,6 +99,7 @@ workos-emulate --interactive          # serve login pages for E2E browser testin
 workos-emulate --interactive-password # ...and ask a user who has a password for it
 workos-emulate --signing-key ci-key.pem --issuer https://api.workos.com  # stable JWKS and iss
 workos-emulate --redirect-hosts app.example.test  # allow a non-localhost redirect_uri
+workos-emulate --requests-per-minute 10000  # widen the per-key request budget (default 1000)
 workos-emulate --version
 ```
 
@@ -205,6 +206,17 @@ emulator.reset();
 await emulator.close();
 ```
 
+The emulator's request budget defaults to 1,000 per API key in each 60-second window. Larger
+integration suites that share an API key can set `requestsPerMinute` to a positive safe integer,
+for example `createEmulator({ port: 0, requestsPerMinute: 10_000 })`. The full configured budget is
+accepted, so a budget of 1 allows one request before HTTP 429 responses with `Retry-After`. The
+last accepted request has `X-RateLimit-Remaining: 0`; the budget resets 60 seconds after the first
+request in the window. Anonymous requests share a separate budget.
+
+From the CLI, `--requests-per-minute 10000` sets the same budget, and
+`WORKOS_EMULATE_REQUESTS_PER_MINUTE=10000` is the environment equivalent, for a compose file or the
+Docker image. The flag wins over the environment.
+
 ### ⚠️ Important: EventBus Reset Limitation
 
 The `reset()` method clears all data and re-seeds from the original config, but **route-level authentication events will not work after reset**. This is because Hono's router cannot be modified after it's built, so the EventBus cannot be re-registered with the collection hooks.
@@ -240,6 +252,25 @@ await fetch(`${emulator.url}/user_management/authenticate`, {
 await emulator.close();
 const newEmulator = await createEmulator({ port: 0 });
 ```
+
+### Native group authorization
+
+Native AuthKit groups can receive scoped roles through
+`/authorization/groups/{groupId}/role_assignments`: create and list assignments, then get or delete
+one by ID or remove by role and resource criteria. Omitting the resource targets the
+organization's own resource. Direct role assignments also support criteria removal through
+`DELETE /authorization/organization_memberships/{id}/role_assignments`. Duplicate group
+assignments return `409` with code `duplicate_group_role_assignment`; an unknown role slug is a
+`404`, as is group criteria removal that matches nothing; roles and resources from another
+organization are rejected. Permission checks, effective-permission lists, and accessible-resource discovery resolve
+current group membership and include grants on resource ancestors. Removing a member or group
+revokes its derived access immediately. Membership and resource assignment lists expose inherited
+grants with `source.type: "group"` and the source group assignment ID; resource filters are honored.
+Deleting a role, group, or resource also removes its group grants. The emulator does not invent
+role-assignment webhook events. Bulk group assignment replacement is not yet supported.
+
+Resource updates accept the Node SDK's `PATCH` endpoints by ID and by organization, resource type,
+and external ID. The earlier `PUT`-by-ID endpoint remains available.
 
 ## Seed Data
 
@@ -352,6 +383,41 @@ sign-in for the user returns the spec's `mfa_challenge` step (a `pending_authent
 plus an `authentication_challenge`) instead of a session, completed with the
 `urn:workos:oauth:grant-type:mfa-totp` grant — so MFA administration and step-up login flows
 need no post-boot enrollment calls that in-memory state would lose on restart.
+
+### Organization IT contacts
+
+`/organizations/{id}/it_contacts` is implemented in full — list, create, delete, invite and
+revoke:
+
+```bash
+curl -X POST http://localhost:4100/organizations/org_01K.../it_contacts \
+  -H "Authorization: Bearer sk_test_ci_key" -H "Content-Type: application/json" \
+  -d '{"email":"it@acme.com"}'
+
+curl -X POST http://localhost:4100/organizations/org_01K.../it_contacts/it_contact_01K.../invite \
+  -H "Authorization: Bearer sk_test_ci_key" -H "Content-Type: application/json" \
+  -d '{"intents":["sso","directory_sync"]}'
+```
+
+Three production rules are enforced. The address is lowercased before it is stored, and an
+email may be an IT contact of a given organization only once — `409 it_contact_already_exists`
+otherwise, in any casing — though the same address may serve several organizations. An
+organization holds at most 20 contacts; the 21st is `422 too_many_it_contacts`. And an
+organization may hold **one active invitation at a time**: inviting _any_ contact while one is
+active is `409 it_contact_invitation_already_active`, including the contact who holds it, so
+revoke before you resend. Deleting a contact revokes its invitation, and `revoke` clears the
+organization's active invitation whichever contact you address it through — no endpoint
+reports which contact holds it. The list serves the whole set under null cursors and reads no
+query parameters, as production does.
+
+Nothing is emailed. `invite` records the setup link production would have sent, and `revoke`
+clears it; neither the link nor the invitation state appears in any response, because the
+spec's `it_contact` object documents no such fields and both routes answer `204`.
+
+The spec also documents `403` and `503` on all five routes. Neither is implemented: the
+emulator's store is not environment-scoped, so the forbidden case cannot arise, and `503` is a
+production infrastructure state. Both can still be injected per-route through the
+[error hooks](#error-hooks) if you need to exercise them.
 
 ### Pipes connected accounts
 
@@ -867,7 +933,7 @@ agentBlueprints:
 - **`agent_delegated`** exchanges an agent access token for a new session on the same instance.
   Chains are self-only (a token from another blueprint is `invalid_agent_access_token`), at most 32
   deep, and anchored at the root: no hop may outlive the root session's `created_at +
-max_age_seconds`.
+  max_age_seconds`.
 - **`refresh`** rotates the refresh token. Each is single-use, and a refresh never extends the
   session past its chain root's max-age window.
 
@@ -1598,6 +1664,10 @@ connections:
       - email: admin@acme.com
         first_name: Admin
         last_name: User
+        # The profile's full name is its own attribute, as in production, where it is set only
+        # when the connection maps one. Omit it and the profile reports `name: null` — it is
+        # never composed from first_name and last_name.
+        name: Admin User
         groups: [admins, it_staff]
       - email: employee@acme.com
         first_name: Regular
@@ -1734,7 +1804,7 @@ The WorkOS Emulator is designed for testing and development environments. When u
 ### Authentication & Authorization
 
 - **No real authentication**: The emulator uses a simple API key system (`sk_test_default`) that provides no real security. Anyone with access to the emulator can make API calls.
-- **No rate limiting**: By default, the emulator has no rate limiting. In production scenarios, implement rate limiting to prevent abuse.
+- **Local rate limiting**: The emulator defaults to a 1,000-request budget per API key per minute, configurable through `requestsPerMinute`, `--requests-per-minute` or `WORKOS_EMULATE_REQUESTS_PER_MINUTE`. This in-memory limit is intended for tests, not production abuse protection.
 - **Public error hook endpoints**: The `/_emulate/hooks` endpoints require no authentication and can be used by anyone who can reach the server.
 
 ### Data Security

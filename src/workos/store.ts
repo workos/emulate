@@ -3,6 +3,7 @@ import { STORE_KEYS } from './constants.js';
 import type {
   WorkOSOrganization,
   WorkOSOrganizationDomain,
+  WorkOSItContact,
   WorkOSOrganizationMembership,
   WorkOSGroup,
   WorkOSGroupMembership,
@@ -32,6 +33,7 @@ import type {
   WorkOSRolePermission,
   WorkOSAuthorizationResource,
   WorkOSRoleAssignment,
+  WorkOSGroupRoleAssignment,
   WorkOSDirectory,
   WorkOSDirectoryUser,
   WorkOSDirectoryGroup,
@@ -56,6 +58,7 @@ import type {
 export interface WorkOSStore {
   organizations: Collection<WorkOSOrganization>;
   organizationDomains: Collection<WorkOSOrganizationDomain>;
+  itContacts: Collection<WorkOSItContact>;
   organizationMemberships: Collection<WorkOSOrganizationMembership>;
   groups: Collection<WorkOSGroup>;
   groupMemberships: Collection<WorkOSGroupMembership>;
@@ -85,6 +88,7 @@ export interface WorkOSStore {
   rolePermissions: Collection<WorkOSRolePermission>;
   authorizationResources: Collection<WorkOSAuthorizationResource>;
   roleAssignments: Collection<WorkOSRoleAssignment>;
+  groupRoleAssignments: Collection<WorkOSGroupRoleAssignment>;
   directories: Collection<WorkOSDirectory>;
   directoryUsers: Collection<WorkOSDirectoryUser>;
   directoryGroups: Collection<WorkOSDirectoryGroup>;
@@ -120,6 +124,10 @@ export function getWorkOSStore(store: Store): WorkOSStore {
       ID_PREFIXES.organization_domain,
       ['organization_id', 'domain'],
     ),
+    itContacts: store.collection<WorkOSItContact>('workos.it_contacts', ID_PREFIXES.it_contact, [
+      'organization_id',
+      'email',
+    ]),
     organizationMemberships: store.collection<WorkOSOrganizationMembership>(
       'workos.organization_memberships',
       ID_PREFIXES.organization_membership,
@@ -213,6 +221,11 @@ export function getWorkOSStore(store: Store): WorkOSStore {
       'workos.authorization_resources',
       ID_PREFIXES.authorization_resource,
       ['organization_id', 'resource_type_slug'],
+    ),
+    groupRoleAssignments: store.collection<WorkOSGroupRoleAssignment>(
+      'workos.group_role_assignments',
+      ID_PREFIXES.group_role_assignment,
+      ['group_id', 'role_id', 'resource_id'],
     ),
     roleAssignments: store.collection<WorkOSRoleAssignment>('workos.role_assignments', ID_PREFIXES.role_assignment, [
       'organization_membership_id',

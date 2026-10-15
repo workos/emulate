@@ -26,6 +26,7 @@ import type {
   WorkOSAgentInstanceSession,
   WorkOSOrganization,
   WorkOSOrganizationDomain,
+  WorkOSItContact,
   WorkOSOrganizationMembership,
   WorkOSGroup,
   WorkOSUser,
@@ -50,6 +51,7 @@ import type {
   WorkOSPermission,
   WorkOSAuthorizationResource,
   WorkOSRoleAssignment,
+  WorkOSGroupRoleAssignment,
   WorkOSDirectory,
   WorkOSDirectoryUser,
   WorkOSDirectoryGroup,
@@ -119,6 +121,20 @@ const DOMAIN_EXCLUDE = new Set([...INTERNAL_FIELDS, 'verification_token', 'verif
 
 export function formatDomain(domain: WorkOSOrganizationDomain): Record<string, unknown> {
   return formatEntity(domain, { exclude: DOMAIN_EXCLUDE });
+}
+
+// The owning organization and the whole invitation state stay internal: the spec's ItContact
+// documents neither, and an invitation is addressed through the organization's routes.
+const IT_CONTACT_EXCLUDE = new Set([
+  ...INTERNAL_FIELDS,
+  'organization_id',
+  'invited_at',
+  'invite_intents',
+  'invite_setup_link',
+]);
+
+export function formatItContact(contact: WorkOSItContact): Record<string, unknown> {
+  return formatEntity(contact, { exclude: IT_CONTACT_EXCLUDE });
 }
 
 export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStore): Record<string, unknown> {
@@ -582,8 +598,23 @@ export function formatConnection(conn: WorkOSConnection): Record<string, unknown
   return formatEntity(conn);
 }
 
+/**
+ * The spec's Profile has no timestamps, and production's serializer
+ * (`api/src/sso/utils/serialize-profile.ts`) emits none — `created_at` and `updated_at` are
+ * the store's bookkeeping, not part of the wire shape.
+ */
+const SSO_PROFILE_EXCLUDE = new Set([...INTERNAL_FIELDS, 'created_at', 'updated_at']);
+
+/**
+ * The spec's Profile carries `name` (the user's full name, nullable) beside `first_name` and
+ * `last_name`, and the SDKs read it as a required key — workos-python's `Profile.from_dict` fails
+ * without it (#129). It is emitted as stored, never composed from the two parts: production's
+ * reconciler (`api/src/profiles/profile-reconciler.ts`) sets `name` only when the connection's
+ * attribute map has a `name` key, and its serializer returns that stored value or null. A
+ * derived "Ada Lovelace" would pass against the emulator and come back null from WorkOS.
+ */
 export function formatSSOProfile(p: WorkOSSSOProfile): Record<string, unknown> {
-  return formatEntity(p);
+  return formatEntity(p, { exclude: SSO_PROFILE_EXCLUDE });
 }
 
 export function formatPipeConnection(pc: WorkOSPipeConnection): Record<string, unknown> {
@@ -1040,9 +1071,28 @@ export function formatRoleAssignment(ra: WorkOSRoleAssignment): Record<string, u
       external_id: ra.resource_external_id ?? null,
       resource_type_slug: ra.resource_type_slug ?? null,
     },
-    source: { type: 'direct', group_role_assignment_id: null },
+    source: {
+      type: ra.group_role_assignment_id ? 'group' : 'direct',
+      group_role_assignment_id: ra.group_role_assignment_id ?? null,
+    },
     created_at: ra.created_at,
     updated_at: ra.updated_at,
+  };
+}
+
+export function formatGroupRoleAssignment(gra: WorkOSGroupRoleAssignment): Record<string, unknown> {
+  return {
+    object: 'group_role_assignment',
+    id: gra.id,
+    group_id: gra.group_id,
+    role: { slug: gra.role_slug },
+    resource: {
+      id: gra.resource_id,
+      external_id: gra.resource_external_id,
+      resource_type_slug: gra.resource_type_slug,
+    },
+    created_at: gra.created_at,
+    updated_at: gra.updated_at,
   };
 }
 

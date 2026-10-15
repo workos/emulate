@@ -174,6 +174,7 @@ export function organizationRoutes(ctx: RouteContext): void {
     if (!org) throw notFound('Organization');
 
     ws.organizationDomains.deleteBy('organization_id', org.id);
+    ws.itContacts.deleteBy('organization_id', org.id);
     for (const membership of ws.organizationMemberships.findBy('organization_id', org.id)) {
       ws.roleAssignments.deleteBy('organization_membership_id', membership.id);
     }
@@ -189,8 +190,13 @@ export function organizationRoutes(ctx: RouteContext): void {
     // ownership test the org listing route applies, so nothing it would list survives.
     revokeApiKeysForOwner(store, ws, (o) => (o.type === 'organization' ? o.id : o.organization_id) === org.id);
 
+    for (const group of ws.groups.findBy('organization_id', org.id)) {
+      ws.groupRoleAssignments.deleteBy('group_id', group.id);
+      ws.groups.delete(group.id);
+    }
     for (const resource of ws.authorizationResources.findBy('organization_id', org.id)) {
       ws.roleAssignments.deleteBy('resource_id', resource.id);
+      ws.groupRoleAssignments.deleteBy('resource_id', resource.id);
       ws.authorizationResources.delete(resource.id);
     }
     ws.organizations.delete(org.id);

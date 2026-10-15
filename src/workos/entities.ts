@@ -36,6 +36,22 @@ export interface WorkOSOrganizationDomain extends Entity {
   verification_prefix: string;
 }
 
+export interface WorkOSItContact extends Entity {
+  object: 'it_contact';
+  /** The owning organization. Not serialized: the spec's ItContact addresses it by route. */
+  organization_id: string;
+  email: string;
+  /**
+   * Admin Portal invitation state. None of it is serialized — the spec's invite and revoke
+   * routes answer 204 and `ItContact` documents no invitation fields — but it is what makes
+   * "an organization can have at most one active invitation" enforceable.
+   */
+  invited_at: string | null;
+  invite_intents: string[] | null;
+  /** The setup link an invitation would have emailed. Emulator-only; nothing delivers it. */
+  invite_setup_link: string | null;
+}
+
 export interface WorkOSOrganizationMembership extends Entity {
   object: 'organization_membership';
   organization_id: string;
@@ -226,6 +242,12 @@ export interface WorkOSSSOProfile extends Entity {
   email: string;
   first_name: string | null;
   last_name: string | null;
+  /**
+   * The full name, stored as its own attribute the way production stores it: the reconciler
+   * sets it only when the connection's attribute map has a `name` key, and never composes it
+   * from the two parts. Null for every profile the emulator mints itself.
+   */
+  name: string | null;
   groups: string[];
   raw_attributes: Record<string, unknown>;
 }
@@ -389,11 +411,28 @@ export interface WorkOSAuthorizationResource extends Entity {
 export interface WorkOSRoleAssignment extends Entity {
   object: 'role_assignment';
   organization_membership_id: string;
+  /** Present only for assignments derived from a native group's grant. */
+  group_role_assignment_id?: string;
   role_id: string;
   role_slug: string;
   resource_id: string | null;
   resource_external_id: string | null;
   resource_type_slug: string | null;
+}
+
+/**
+ * A role granted to a native AuthKit group on one resource. Unlike a direct
+ * assignment, a group grant is always resource-scoped: production resolves an
+ * omitted resource to the organization's own resource, so these are never null.
+ */
+export interface WorkOSGroupRoleAssignment extends Entity {
+  object: 'group_role_assignment';
+  group_id: string;
+  role_id: string;
+  role_slug: string;
+  resource_id: string;
+  resource_external_id: string;
+  resource_type_slug: string;
 }
 
 export interface WorkOSDirectory extends Entity {
