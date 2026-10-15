@@ -1170,19 +1170,26 @@ export function authRoutes(ctx: RouteContext): void {
         // with a fresh access token. Past that it is terminally invalid. The row stays, so a
         // later replay answers the same way rather than as an unknown token, until a rotation
         // of the session sweeps it.
+        // A token past its own expiry is spent whatever its retirement state, so a retired token
+        // cannot ride an unused successor past its lifetime: the presented token is checked
+        // before the chain is walked, and the live end of the chain after.
+        if (isExpired(presented.expires_at)) {
+          ws.refreshTokens.delete(presented.id);
+          throw new OauthApiError(400, 'invalid_grant', 'Refresh token has expired.');
+        }
+
         let refreshToken = presented;
         if (presented.exchanged_at !== null) {
           const live = replayableRefreshToken(ws, presented);
           if (!live) {
             throw new OauthApiError(400, 'invalid_grant', 'Refresh token already exchanged.');
           }
+          if (isExpired(live.expires_at)) {
+            ws.refreshTokens.delete(live.id);
+            throw new OauthApiError(400, 'invalid_grant', 'Refresh token has expired.');
+          }
           refreshToken = live;
           replayedRefreshToken = live;
-        }
-
-        if (isExpired(refreshToken.expires_at)) {
-          ws.refreshTokens.delete(refreshToken.id);
-          throw new OauthApiError(400, 'invalid_grant', 'Refresh token has expired.');
         }
 
         user = ws.users.get(refreshToken.user_id);

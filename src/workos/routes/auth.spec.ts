@@ -576,6 +576,23 @@ describe('Auth routes', () => {
     expect(getWorkOSStore(store).refreshTokens.all()).toHaveLength(2);
   });
 
+  it('refuses a retired token past its own expiry even while its successor is unused', async () => {
+    await createUser('expired-replay@test.com');
+    const signIn = await json(await signInWithMagicAuth('expired-replay@test.com'));
+    const rotated = await json(await refresh(signIn.refresh_token));
+    const tokens = getWorkOSStore(store).refreshTokens;
+    const retired = tokens.findOneBy('token', signIn.refresh_token)!;
+    tokens.update(retired.id, { expires_at: new Date(Date.now() - 60_000).toISOString() });
+
+    // Its successor is unused, which on its own would replay forever; its own lifetime still bounds it.
+    const replay = await refresh(signIn.refresh_token);
+    expect(replay.status).toBe(400);
+    expect(await json(replay)).toEqual({ error: 'invalid_grant', error_description: 'Refresh token has expired.' });
+    expect(tokens.findOneBy('token', signIn.refresh_token)).toBeUndefined();
+    // The successor is untouched and still rotates.
+    expect((await refresh(rotated.refresh_token)).status).toBe(200);
+  });
+
   it('a replay several rotations behind converges on the newest token in the chain', async () => {
     await createUser('chain@test.com');
     const signIn = await json(await signInWithMagicAuth('chain@test.com'));
