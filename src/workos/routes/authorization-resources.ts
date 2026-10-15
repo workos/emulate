@@ -176,10 +176,9 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     return c.json(formatAuthorizationResource(resource));
   });
 
-  app.put('/authorization/resources/:resource_id', async (c) => {
-    const resourceId = c.req.param('resource_id');
-    const resource = ws.authorizationResources.get(resourceId);
+  const updateResource = async (c: Context, resource: WorkOSAuthorizationResource | undefined) => {
     if (!resource) throw notFound('AuthorizationResource');
+    const resourceId = resource.id;
     if (resource.resource_type_slug === 'organization') {
       throw new WorkOSApiError(
         400,
@@ -216,6 +215,18 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
 
     const updated = ws.authorizationResources.update(resourceId, updates);
     return c.json(formatAuthorizationResource(updated!));
+  };
+  app.put('/authorization/resources/:resource_id', (c) =>
+    updateResource(c, ws.authorizationResources.get(c.req.param('resource_id'))),
+  );
+  app.patch('/authorization/resources/:resource_id', (c) =>
+    updateResource(c, ws.authorizationResources.get(c.req.param('resource_id'))),
+  );
+  app.patch('/authorization/organizations/:orgId/resources/:type_slug/:external_id', (c) => {
+    return updateResource(
+      c,
+      findResourceByExternalId(ws, c.req.param('orgId'), c.req.param('type_slug'), c.req.param('external_id')),
+    );
   });
 
   // Deleting a resource takes its descendants and their role assignments with
@@ -232,8 +243,12 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
 
     const subtree = collectSubtree(ws, resourceId);
     const assignments = [...subtree].flatMap((id) => ws.roleAssignments.findBy('resource_id', id));
+    const groupAssignments = [...subtree].flatMap((id) => ws.groupRoleAssignments.findBy('resource_id', id));
 
-    if (new URL(c.req.url).searchParams.get('cascade_delete') !== 'true' && (subtree.size > 1 || assignments.length)) {
+    if (
+      new URL(c.req.url).searchParams.get('cascade_delete') !== 'true' &&
+      (subtree.size > 1 || assignments.length || groupAssignments.length)
+    ) {
       throw new WorkOSApiError(
         409,
         `Resource '${resourceId}' has descendant resources or role assignments. Retry with cascade_delete=true to delete them.`,
@@ -242,6 +257,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     }
 
     for (const assignment of assignments) ws.roleAssignments.delete(assignment.id);
+    for (const assignment of groupAssignments) ws.groupRoleAssignments.delete(assignment.id);
     for (const id of subtree) ws.authorizationResources.delete(id);
     return c.body(null, 204);
   });

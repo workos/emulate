@@ -103,7 +103,8 @@ export const FEATURES: FeatureDef[] = [
     name: 'Organizations',
     tags: ['organizations', 'organization-domains', 'organizations.it-contacts'],
     seedKeys: ['organizations'],
-    notes: 'IT contact endpoints are not implemented.',
+    notes:
+      "IT contacts are stored lowercased, capped at 20 per organization, and listed whole under null cursors, as production does. An organization is held to one active Admin Portal invitation — inviting any contact while one is active conflicts, the holder included — but nothing is emailed: the setup link an invitation would send is recorded on the contact and served by no route. Revoking clears the organization's invitation through any contact, since no route reports which one holds it. The `403` and `503` these routes document are not implemented — the store is not environment-scoped, so the forbidden case cannot arise — but both can be injected through the error hooks.",
   },
   {
     name: 'User Management',
@@ -157,7 +158,7 @@ export const FEATURES: FeatureDef[] = [
     tags: ['authorization', 'permissions'],
     seedKeys: ['roles', 'permissions'],
     notes:
-      'Checks and effective-permission listings honor resource-scoped role assignments and ancestor inheritance (`parent_resource_id`); group role assignments are not implemented. Resource types are not modeled: any `resource_type_slug` is accepted on roles and permissions, and permission scopes are not checked against the role scope. Every organization owns an implicit `organization` resource whose `external_id` is the organization `external_id`, falling back to the organization id; resources created without parent fields attach to it, and it cannot be created, updated, or deleted directly.',
+      'Checks and effective-permission listings include direct and native group role assignments, live group membership, and ancestor inheritance (`parent_resource_id`). Group grants support create/list/get and removal by ID or criteria; bulk replacement is not implemented. Resource types are not modeled: any `resource_type_slug` is accepted on roles and permissions, and permission scopes are not checked against the role scope. Every organization owns an implicit `organization` resource whose `external_id` is the organization `external_id`, falling back to the organization id; resources created without parent fields attach to it, and it cannot be created, updated, or deleted directly.',
   },
   {
     name: 'Audit Logs',

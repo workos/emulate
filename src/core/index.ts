@@ -10,6 +10,7 @@ export {
 export { generateId, generateUlid, resetIdState, ID_PREFIXES } from './id.js';
 export {
   parseListParams,
+  parseArrayParam,
   cursorPaginate,
   type CursorPaginationOptions,
   type CursorPaginatedResult,

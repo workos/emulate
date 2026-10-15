@@ -10,6 +10,7 @@ import { validateSeedConfig, formatValidationErrors } from './workos/config-vali
 
 interface CliArgs {
   port: number;
+  requestsPerMinute?: number;
   host?: string;
   seed?: string;
   signingKey?: string;
@@ -57,6 +58,9 @@ Options:
                       (always allowed). Use for test environments with production-like
                       hostnames. Accepts subdomain wildcards ("*.example.test") and "*" to
                       allow any host. Repeatable.
+  --requests-per-minute <n>
+                      Requests each API key may make in a 60-second window before the emulator
+                      answers 429 (default: 1000). Raise it for a large suite sharing one key.
   --interactive, -i   Show login pages for SSO/AuthKit (for E2E browser testing)
   --interactive-password
                       Also ask a user who has a password for it on the AuthKit login page, as
@@ -67,12 +71,13 @@ Options:
   --help, -h          Show this help message
 
 Environment:
-  WORKOS_EMULATE_SIGNING_KEY=<path>     Same as --signing-key
-  WORKOS_EMULATE_KID=<id>               Same as --kid
-  WORKOS_EMULATE_ISSUER=<url>           Same as --issuer
-  WORKOS_EMULATE_REDIRECT_HOSTS=<hosts> Same as --redirect-hosts
-  NO_UPDATE_NOTIFIER=1                  Disable update checks
-  WORKOS_EMULATE_DISABLE_UPDATE_CHECK=1 Disable update checks
+  WORKOS_EMULATE_SIGNING_KEY=<path>      Same as --signing-key
+  WORKOS_EMULATE_KID=<id>                Same as --kid
+  WORKOS_EMULATE_ISSUER=<url>            Same as --issuer
+  WORKOS_EMULATE_REDIRECT_HOSTS=<hosts>  Same as --redirect-hosts
+  WORKOS_EMULATE_REQUESTS_PER_MINUTE=<n> Same as --requests-per-minute
+  NO_UPDATE_NOTIFIER=1                   Disable update checks
+  WORKOS_EMULATE_DISABLE_UPDATE_CHECK=1  Disable update checks
 `);
 }
 
@@ -132,6 +137,13 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg.startsWith('--port=')) {
       parsed.port = parsePort(arg.slice('--port='.length));
+      continue;
+    }
+
+    if (arg === '--requests-per-minute' || arg.startsWith('--requests-per-minute=')) {
+      const value = arg === '--requests-per-minute' ? argv[++i] : arg.slice('--requests-per-minute='.length);
+      if (!value) throw new Error('--requests-per-minute requires a value');
+      parsed.requestsPerMinute = parseRequestsPerMinute(value, '--requests-per-minute');
       continue;
     }
 
@@ -203,6 +215,18 @@ function parsePort(value: string): number {
     throw new Error(`Invalid port: ${value}`);
   }
   return port;
+}
+
+/**
+ * The same rule createServer enforces (a positive safe integer), applied here so a bad value fails
+ * naming the flag or variable it came from rather than an option the shell user never typed.
+ */
+function parseRequestsPerMinute(value: string, source: string): number {
+  const requestsPerMinute = Number(value);
+  if (!Number.isSafeInteger(requestsPerMinute) || requestsPerMinute < 1) {
+    throw new Error(`Invalid ${source}: ${value} (must be a positive integer)`);
+  }
+  return requestsPerMinute;
 }
 
 function loadSeedFile(filePath: string): EmulatorSeedConfig {
@@ -284,9 +308,16 @@ async function main(): Promise<void> {
   const kid = argv.kid ?? process.env.WORKOS_EMULATE_KID;
   const issuer = argv.issuer ?? process.env.WORKOS_EMULATE_ISSUER;
   const allowedRedirectHosts = argv.redirectHosts ?? splitHosts(process.env.WORKOS_EMULATE_REDIRECT_HOSTS ?? '');
+  const requestsPerMinuteEnv = process.env.WORKOS_EMULATE_REQUESTS_PER_MINUTE;
+  const requestsPerMinute =
+    argv.requestsPerMinute ??
+    (requestsPerMinuteEnv
+      ? parseRequestsPerMinute(requestsPerMinuteEnv, 'WORKOS_EMULATE_REQUESTS_PER_MINUTE')
+      : undefined);
 
   const emulator = await createEmulator({
     port: argv.port,
+    requestsPerMinute,
     hostname: argv.host,
     seed: seedConfig,
     issuer,

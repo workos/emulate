@@ -46,4 +46,9 @@ export function syncOrganizationResource(ws: WorkOSStore, organization: WorkOSOr
       ws.roleAssignments.update(assignment.id, { resource_external_id: values.external_id });
     }
   }
+  for (const assignment of ws.groupRoleAssignments.findBy('resource_id', root.id)) {
+    if (assignment.resource_external_id !== values.external_id) {
+      ws.groupRoleAssignments.update(assignment.id, { resource_external_id: values.external_id });
+    }
+  }
 }

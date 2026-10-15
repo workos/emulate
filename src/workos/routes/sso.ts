@@ -28,6 +28,16 @@ const OAUTH_CONNECTION_TYPES = new Set<WorkOSConnectionType>([
   'MicrosoftOAuth',
 ]);
 
+/**
+ * Lifetime of the access token `/sso/token` issues, in seconds. Production's
+ * `AuthorizationCodeExchanger.exchangeAuthorizationCode`
+ * (`api/src/authorization-codes/authorization-code-exchanger.ts`) mints the token with
+ * `addMinutes(5)`, so `expires_in` is 300 — not the 600 the API reference's example shows. The
+ * SDKs require the field (the Python SDK's `SSOTokenResponse` fails to parse a response without
+ * it), so the emulator signs the token with this lifetime and reports the same number.
+ */
+const SSO_TOKEN_TTL_SECONDS = 300;
+
 interface SSOAuthorizeParams {
   redirectUri: string;
   state: string | null;
@@ -117,6 +127,9 @@ export function ssoRoutes(ctx: RouteContext): void {
         email,
         first_name: email.split('@')[0],
         last_name: null,
+        // Production sets `name` only when the connection's attribute map has a `name` key, and
+        // the emulator's stand-in IdP maps none — so null, never a value composed from the parts.
+        name: null,
         groups: [],
         raw_attributes: { email },
       });
@@ -283,11 +296,14 @@ export function ssoRoutes(ctx: RouteContext): void {
 
     ws.ssoAuthorizations.delete(auth.id);
 
-    const accessToken = jwt.sign({
-      sub: profile.id,
-      aud: (body.client_id as string) ?? 'workos-emulate',
-      org_id: auth.organization_id,
-    });
+    const accessToken = jwt.sign(
+      {
+        sub: profile.id,
+        aud: (body.client_id as string) ?? 'workos-emulate',
+        org_id: auth.organization_id,
+      },
+      { expiresIn: SSO_TOKEN_TTL_SECONDS },
+    );
 
     store.setData(`${STORE_KEY_PREFIXES.ssoToken}${accessToken}`, profile.id);
 
@@ -320,8 +336,10 @@ export function ssoRoutes(ctx: RouteContext): void {
     });
 
     return c.json({
-      profile: formatSSOProfile(profile),
+      token_type: 'Bearer',
       access_token: accessToken,
+      expires_in: SSO_TOKEN_TTL_SECONDS,
+      profile: formatSSOProfile(profile),
     });
   });
 
@@ -332,15 +350,20 @@ export function ssoRoutes(ctx: RouteContext): void {
     }
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
 
+    // The token is checked before anything is looked up: its signature and its `exp`, which is
+    // the `expires_in` /sso/token reported. Resolving a token through the store first and only
+    // verifying the ones it did not know would leave an issued token usable after it expired.
+    let payload: ReturnType<typeof jwt.verify>;
+    try {
+      payload = jwt.verify(token);
+    } catch {
+      throw new WorkOSApiError(401, 'Invalid access token', 'unauthorized');
+    }
+
     const profileId = store.getData<string>(`${STORE_KEY_PREFIXES.ssoToken}${token}`);
     if (!profileId) {
-      try {
-        const payload = jwt.verify(token);
-        const profile = ws.ssoProfiles.get(payload.sub);
-        if (profile) return c.json(formatSSOProfile(profile));
-      } catch {
-        // fall through
-      }
+      const profile = ws.ssoProfiles.get(payload.sub);
+      if (profile) return c.json(formatSSOProfile(profile));
       throw new WorkOSApiError(401, 'Invalid access token', 'unauthorized');
     }
 
