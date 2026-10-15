@@ -598,12 +598,8 @@ describe('AuthKit OAuth server', () => {
       );
       expect((await json(badVerifier)).error).toBe('invalid_grant');
 
-      // That failed attempt spent the code; a fresh one redeems with Basic.
-      const fresh = await authorizeCode(client_id);
-      const ok = await token(
-        { ...grant, code: fresh.code, code_verifier: fresh.verifier },
-        { Authorization: `Basic ${basic}` },
-      );
+      // A bad verifier never spends the code, so the original one still redeems with Basic.
+      const ok = await token(grant, { Authorization: `Basic ${basic}` });
       expect(ok.status).toBe(200);
       const stored = ws.clientSecrets.all().find((s) => s.value === client_secret)!;
       expect(stored.last_used_at).not.toBeNull();
@@ -1044,6 +1040,16 @@ describe('AuthKit OAuth server', () => {
       const sid = server.jwt.verify(second.access_token).sid as string;
       ws.sessions.update(sid, { status: 'revoked', ended_at: new Date().toISOString() });
       expect((await json(await refresh(client_id, second.refresh_token))).error).toBe('invalid_grant');
+    });
+
+    it('sweeps the refresh tokens of a session that is gone, as the AuthKit grant does', async () => {
+      const { client_id } = await register();
+      const tokens = await json(await exchange(client_id));
+      const sid = server.jwt.verify(tokens.access_token).sid as string;
+      // Logout and revoke delete the session row outright.
+      ws.sessions.delete(sid);
+      expect((await json(await refresh(client_id, tokens.refresh_token))).error).toBe('invalid_grant');
+      expect(ws.refreshTokens.findBy('session_id', sid)).toHaveLength(0);
     });
 
     it('is not accepted by, and does not accept, the AuthKit refresh grant', async () => {

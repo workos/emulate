@@ -131,6 +131,9 @@ async function readTokenParams(c: Context): Promise<TokenParams> {
     const authHeader = c.req.header('authorization');
     if (!authHeader) throw invalidClient('Missing authorization header.');
     const decoded = Buffer.from(authHeader.match(/basic (.*)/i)?.[1] ?? '', 'base64').toString('utf-8');
+    // Split as production's parseAuthorization does (authkit-idp/guards/utils/
+    // parse-authorization-header.ts): on every colon, keeping the first two parts. A secret
+    // containing ':' is truncated there too, which is why the seed validator refuses pinning one.
     const [id, secret] = decoded.split(':');
     if (!id) throw invalidClient('Missing client_id.');
     clientId = id;
@@ -530,8 +533,17 @@ export function oauthRoutes(ctx: RouteContext): void {
       // Unlike authenticate, a revoked session ends its refresh tokens too: signing a person out
       // of an MCP client has to stop that client minting tokens for them.
       const session = ws.sessions.get(stored.session_id);
+      if (!session) {
+        // Logout and revoke delete the session row. Every token it still has goes with it, as
+        // /user_management/authenticate does for the same case, since no rotation will ever
+        // sweep a session that cannot refresh again.
+        for (const orphan of ws.refreshTokens.findBy('session_id', stored.session_id)) {
+          ws.refreshTokens.delete(orphan.id);
+        }
+        throw invalidGrant();
+      }
       const user = ws.users.get(stored.user_id);
-      if (!user || !session || session.status !== 'active' || isExpired(session.expires_at)) throw invalidGrant();
+      if (!user || session.status !== 'active' || isExpired(session.expires_at)) throw invalidGrant();
       // The organization the token was scoped to must still be one the user belongs to. Minting
       // with the stale `org_id` would hand a removed member access to a tenant they have left.
       if (
