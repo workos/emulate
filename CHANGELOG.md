@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.15.0](https://github.com/workos/emulate/compare/v0.14.0...v0.15.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **oauth:** serve the AuthKit OAuth server MCP clients sign in through ([#142](https://github.com/workos/emulate/issues/142))
+
+### Features
+
+* Add native group authorization ([#136](https://github.com/workos/emulate/issues/136)) ([dcf3719](https://github.com/workos/emulate/commit/dcf371966efb51335afc413c86510a40280aa5b5))
+* Make request budgets configurable ([#133](https://github.com/workos/emulate/issues/133)) ([2fa7f44](https://github.com/workos/emulate/commit/2fa7f44125ffa5b0eaaf116cc38e7fb96cfd5775))
+* **oauth:** serve the AuthKit OAuth server MCP clients sign in through ([#142](https://github.com/workos/emulate/issues/142)) ([dcfb3d4](https://github.com/workos/emulate/commit/dcfb3d4e301648b8088fa37003636f6c113f87ba))
+* **organizations:** implement IT contacts ([#126](https://github.com/workos/emulate/issues/126)) ([c1edc4c](https://github.com/workos/emulate/commit/c1edc4cf1a06f0c460fef5d6d13f0806f5de1dbb))
+
+
+### Bug Fixes
+
+* **auth:** replay a refresh token within the 30s grace period ([#137](https://github.com/workos/emulate/issues/137)) ([6bf2edf](https://github.com/workos/emulate/commit/6bf2edfcf802e8064fe4ae85d032d9f7c3558eda))
+* **dsync:** match spec payloads for dsync.activated and dsync.deleted ([#132](https://github.com/workos/emulate/issues/132)) ([933e75f](https://github.com/workos/emulate/commit/933e75f9ba2d57176b35cdfb572007be78d1a028))
+* **memberships:** honor the plain statuses param and default to active ([#135](https://github.com/workos/emulate/issues/135)) ([34fdbad](https://github.com/workos/emulate/commit/34fdbaded104d37536dd20d22e2981af3d98b3b0))
+* **sso:** return token_type, expires_in and profile.name from /sso/token ([#130](https://github.com/workos/emulate/issues/130)) ([83d0480](https://github.com/workos/emulate/commit/83d04803e247f61f59eee35f3976d292c4dac533))
+
 ## [0.14.0](https://github.com/workos/emulate/compare/v0.13.1...v0.14.0) (2026-09-22)
 
 
