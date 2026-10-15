@@ -474,13 +474,15 @@ describe('Auth routes', () => {
     // grant's internal 'OAuth' category — which would otherwise drop the field for this user.
     expect(refreshBody.authentication_method).toBe('Password');
 
-    // Once the 30-second replay grace period has elapsed, the old token is terminally invalid.
+    // Using the rotated token proves the client received the rotation; 30 seconds after that the
+    // old token is terminally invalid.
+    await refresh(refreshBody.refresh_token);
     setSystemTime(new Date(Date.now() + 31_000));
     const retryRes = await refresh(oldRefresh);
     expect(retryRes.status).toBe(400);
     const retryBody = await json(retryRes);
     expect(retryBody.error).toBe('invalid_grant');
-    expect(retryBody.error_description).toBe('Invalid refresh token.');
+    expect(retryBody.error_description).toBe('Refresh token already exchanged.');
   });
 
   it('replaying a just-exchanged refresh token within the grace period converges on the same rotation', async () => {
@@ -520,22 +522,58 @@ describe('Auth routes', () => {
     expect(ws.refreshTokens.all()).toHaveLength(2);
   });
 
-  it('rejects a replay once the grace period has elapsed, while the rotated token still works', async () => {
+  it('rejects a replay once its successor was used more than the grace period ago, while the live token still works', async () => {
     await createUser('late-replay@test.com');
     const signIn = await json(await signInWithMagicAuth('late-replay@test.com'));
     const rotated = await json(await refresh(signIn.refresh_token));
+    // Using the rotated token is what starts the original token's window, as in production: a
+    // client that has refreshed with the new token has proved it received the rotation.
+    const next = await json(await refresh(rotated.refresh_token));
 
     setSystemTime(new Date(Date.now() + 31_000));
 
     const replay = await refresh(signIn.refresh_token);
     expect(replay.status).toBe(400);
-    expect(await json(replay)).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
-    // The retired token is swept once it can never be honored again.
-    expect(getWorkOSStore(store).refreshTokens.findOneBy('token', signIn.refresh_token)).toBeUndefined();
+    expect(await json(replay)).toEqual({
+      error: 'invalid_grant',
+      error_description: 'Refresh token already exchanged.',
+    });
+    // The row is kept rather than deleted on the failed replay, so a second replay fails the same
+    // way instead of as an unknown token.
+    const again = await refresh(signIn.refresh_token);
+    expect(again.status).toBe(400);
+    expect(await json(again)).toEqual({
+      error: 'invalid_grant',
+      error_description: 'Refresh token already exchanged.',
+    });
+    expect(getWorkOSStore(store).refreshTokens.findOneBy('token', signIn.refresh_token)).toBeDefined();
 
-    const next = await refresh(rotated.refresh_token);
-    expect(next.status).toBe(200);
-    expect((await json(next)).refresh_token).not.toBe(rotated.refresh_token);
+    // The live token still rotates, and that rotation sweeps the original token (its successor
+    // was used more than 30 seconds ago) but not `rotated`, whose successor was used just now.
+    const live = await refresh(next.refresh_token);
+    expect(live.status).toBe(200);
+    expect((await json(live)).refresh_token).not.toBe(next.refresh_token);
+    const tokens = getWorkOSStore(store).refreshTokens;
+    expect(tokens.findOneBy('token', signIn.refresh_token)).toBeUndefined();
+    expect(tokens.findOneBy('token', rotated.refresh_token)).toBeDefined();
+  });
+
+  it('a retired token whose successor was never used still replays after the grace period', async () => {
+    await createUser('lost-response@test.com');
+    const signIn = await json(await signInWithMagicAuth('lost-response@test.com'));
+    const rotated = await json(await refresh(signIn.refresh_token));
+
+    // The rotation response never reached the client, so it comes back with the old token well
+    // past 30 seconds. Its successor has never been used, so nothing has started its window and
+    // production replays it however long ago it was exchanged.
+    setSystemTime(new Date(Date.now() + 10 * 60_000));
+
+    const replay = await refresh(signIn.refresh_token);
+    expect(replay.status).toBe(200);
+    const body = await json(replay);
+    expect(body.refresh_token).toBe(rotated.refresh_token);
+    expect(decodeJwt(body.access_token).sid).toBe(decodeJwt(signIn.access_token).sid);
+    expect(getWorkOSStore(store).refreshTokens.all()).toHaveLength(2);
   });
 
   it('a replay several rotations behind converges on the newest token in the chain', async () => {
@@ -554,15 +592,41 @@ describe('Auth routes', () => {
     expect(replayB.status).toBe(200);
     expect((await json(replayB)).refresh_token).toBe(tokenC);
 
-    // Once their grace windows close, the next rotation sweeps the retired links rather than
-    // leaving a row behind per refresh; only the token just retired and its successor remain.
+    // A rotation sweeps the retired links that can never be replayed again rather than leaving a
+    // row behind per refresh. A goes: its successor B was exchanged more than 30 seconds ago. B
+    // stays: its successor C is only being exchanged now, so a request still in flight carrying
+    // B converges on D.
     setSystemTime(new Date(Date.now() + 31_000));
     const { refresh_token: tokenD } = await json(await refresh(tokenC));
     const remaining = getWorkOSStore(store)
       .refreshTokens.all()
       .map((t) => t.token)
       .sort();
-    expect(remaining).toEqual([tokenC, tokenD].sort());
+    expect(remaining).toEqual([tokenB, tokenC, tokenD].sort());
+    expect((await json(await refresh(tokenB))).refresh_token).toBe(tokenD);
+  });
+
+  it('retires a token more than 50 rotations behind rather than walking the whole chain', async () => {
+    await createUser('deep-chain@test.com');
+    const signIn = await json(await signInWithMagicAuth('deep-chain@test.com'));
+    const tokens = [signIn.refresh_token];
+    for (let i = 0; i < 51; i++) {
+      tokens.push((await json(await refresh(tokens[tokens.length - 1]))).refresh_token);
+    }
+    const newest = tokens[tokens.length - 1];
+
+    // 51 links after the first token: too many generations behind to be a straggler.
+    const tooFar = await refresh(tokens[0]);
+    expect(tooFar.status).toBe(400);
+    expect(await json(tooFar)).toEqual({
+      error: 'invalid_grant',
+      error_description: 'Refresh token already exchanged.',
+    });
+
+    // 50 links after the second: the cap is inclusive, as in production.
+    const atCap = await refresh(tokens[1]);
+    expect(atCap.status).toBe(200);
+    expect((await json(atCap)).refresh_token).toBe(newest);
   });
 
   it('a replay for a revoked session fails like any refresh of that session', async () => {
@@ -591,7 +655,7 @@ describe('Auth routes', () => {
     expect(await json(live)).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token.' });
   });
 
-  it('a replay that switches organization leaves the returned token on that organization', async () => {
+  it('a replay that switches organization mints for it without moving the returned token', async () => {
     const user = await createUser('replay-switch@test.com');
     const orgX = joinOrg(user.id, 'Replay X');
     const signIn = await json(await signInWithMagicAuth('replay-switch@test.com'));
@@ -614,11 +678,12 @@ describe('Auth routes', () => {
     expect(claims.role).toBe('admin');
     expect(claims.sid).toBe(decodeJwt(signIn.access_token).sid);
 
-    // The switch sticks: a plain refresh of the token it handed back stays on Y rather than
-    // silently falling back to X.
+    // The switch does not persist: production's replay returns before the exchange hook that
+    // records the session's organization, so a plain refresh of the token it handed back is back
+    // on X.
     const next = await json(await refresh(rotated.refresh_token));
-    expect(next.organization_id).toBe(orgY.id);
-    expect(decodeJwt(next.access_token).org_id).toBe(orgY.id);
+    expect(next.organization_id).toBe(orgX.id);
+    expect(decodeJwt(next.access_token).org_id).toBe(orgX.id);
   });
 
   it('rejects invalid refresh token', async () => {

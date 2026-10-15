@@ -83,7 +83,8 @@ const INVITATION_TOKEN_GRANTS = new Set([
 ]);
 
 /**
- * How long a just-exchanged refresh token keeps answering with the tokens its exchange minted.
+ * How long a retired refresh token keeps replaying after the token it was exchanged for has
+ * itself been exchanged.
  *
  * Rotation on its own races: two concurrent requests that both notice an expired access token,
  * or a client retrying after a slow network, would present the same refresh token twice and the
@@ -95,29 +96,64 @@ const INVITATION_TOKEN_GRANTS = new Set([
  * on one result instead of tearing down the session. The grace period is 30 seconds." And once
  * it elapses: "the old token is terminally invalid. A replay after that point returns an
  * `invalid_grant` error and the session must re-authenticate."
+ *
+ * Production measures that window from the successor's exchange, not from the presented token's
+ * own. A retired token whose successor has never been used is never retired: that is the client
+ * whose rotation response was lost, and it may come back at any point in the session's life.
+ * Once the successor is itself exchanged — the client has proved it holds the rotation — the old
+ * token stays replayable for this long more, to absorb requests that were already in flight when
+ * that happened, and is then terminally invalid.
  */
 const REFRESH_TOKEN_REPLAY_GRACE_MS = 30 * 1000;
 
 /**
- * Whether a retired refresh token is still inside its replay grace period. Measured from the
- * token's own exchange, so each link in a rotation chain gets its own window.
+ * How many links of a rotation chain a replay walks before giving up. A token further behind
+ * than this is retired rather than walked, as in production: the expensive case is a very old
+ * token, which is also the adversarial one.
  */
+const REFRESH_TOKEN_REPLAY_MAX_CHAIN_DEPTH = 50;
+
+/** Whether a token exchanged at `exchangedAt` was exchanged inside the replay grace period. */
 function withinReplayGrace(exchangedAt: string, now = Date.now()): boolean {
   return now - new Date(exchangedAt).getTime() <= REFRESH_TOKEN_REPLAY_GRACE_MS;
 }
 
 /**
- * Follow a retired token's `exchanged_for_id` links to the live token at the end of its rotation
- * chain: the token every replay converges on, so a client two rotations behind still ends up
- * holding the same credentials as one that kept up. Undefined when a link is missing, which
- * happens once the chain's live token has been expired or its session revoked and swept.
+ * The live token a retired refresh token still replays, or undefined once it is terminally
+ * invalid. The rules are production's: nothing to replay when the successor is gone (expired or
+ * swept); retired when the successor was itself exchanged more than the grace period ago, or
+ * when the live end of the chain is more than REFRESH_TOKEN_REPLAY_MAX_CHAIN_DEPTH links away.
+ * Otherwise the token at the end of the chain, so a client several rotations behind converges on
+ * the same credentials as one that kept up — an intermediate link has itself been exchanged, and
+ * handing it back would move the client backwards onto a spent token.
  */
-function liveRefreshTokenInChain(ws: WorkOSStore, retired: WorkOSRefreshToken): WorkOSRefreshToken | undefined {
-  let current: WorkOSRefreshToken | undefined = retired;
-  while (current && current.exchanged_for_id !== null) {
-    current = ws.refreshTokens.get(current.exchanged_for_id);
+function replayableRefreshToken(ws: WorkOSStore, retired: WorkOSRefreshToken): WorkOSRefreshToken | undefined {
+  if (retired.exchanged_for_id === null) return undefined;
+  const successor = ws.refreshTokens.get(retired.exchanged_for_id);
+  if (!successor) return undefined;
+  if (successor.exchanged_at !== null && !withinReplayGrace(successor.exchanged_at)) return undefined;
+
+  let current = successor;
+  let depth = 1;
+  while (current.exchanged_for_id !== null) {
+    if (depth === REFRESH_TOKEN_REPLAY_MAX_CHAIN_DEPTH) return undefined;
+    const next = ws.refreshTokens.get(current.exchanged_for_id);
+    if (!next) return undefined;
+    current = next;
+    depth++;
   }
   return current;
+}
+
+/**
+ * Whether a retired token can never be replayed again, so its row can go: its successor is gone,
+ * or was itself exchanged more than the grace period ago. This is the check replayableRefreshToken
+ * makes before it walks the chain, so sweeping on it never removes a link a replay could still
+ * reach — anything older in the chain than a swept token has a successor exchanged earlier still.
+ */
+function replayGraceClosed(ws: WorkOSStore, retired: WorkOSRefreshToken): boolean {
+  const successor = retired.exchanged_for_id === null ? undefined : ws.refreshTokens.get(retired.exchanged_for_id);
+  return !successor || (successor.exchanged_at !== null && !withinReplayGrace(successor.exchanged_at));
 }
 
 interface AuthorizeParams {
@@ -1112,17 +1148,29 @@ export function authRoutes(ctx: RouteContext): void {
           throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
         }
 
-        // A retired token is replayed, not re-rotated: inside its grace period it resolves to
-        // the live token its exchange led to, and the response hands that same token back with
-        // a fresh access token (see REFRESH_TOKEN_REPLAY_GRACE_MS). Past the grace period, or
-        // once the chain it led to is gone, it is terminally invalid — swept here, since nothing
-        // else will ever encounter it.
+        // Revoking a session or logging out deletes its row, which a refresh of any of the
+        // session's tokens must then fail like an unknown token — checked before the token's own
+        // state, the order production checks in. Every token the session still has goes with
+        // it, a replay's retired links included, since no rotation will ever sweep a session
+        // that cannot refresh again.
+        if (!ws.sessions.get(presented.session_id)) {
+          for (const orphan of ws.refreshTokens.findBy('session_id', presented.session_id)) {
+            ws.refreshTokens.delete(orphan.id);
+          }
+          throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
+        }
+
+        // A retired token is replayed, not re-rotated: while its successor is unused, and for
+        // REFRESH_TOKEN_REPLAY_GRACE_MS after the successor is itself exchanged, it resolves to
+        // the live token at the end of its chain and the response hands that same token back
+        // with a fresh access token. Past that it is terminally invalid. The row stays, so a
+        // later replay answers the same way rather than as an unknown token, until a rotation
+        // of the session sweeps it.
         let refreshToken = presented;
         if (presented.exchanged_at !== null) {
-          const live = withinReplayGrace(presented.exchanged_at) ? liveRefreshTokenInChain(ws, presented) : undefined;
+          const live = replayableRefreshToken(ws, presented);
           if (!live) {
-            ws.refreshTokens.delete(presented.id);
-            throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
+            throw new OauthApiError(400, 'invalid_grant', 'Refresh token already exchanged.');
           }
           refreshToken = live;
           replayedRefreshToken = live;
@@ -1131,16 +1179,6 @@ export function authRoutes(ctx: RouteContext): void {
         if (isExpired(refreshToken.expires_at)) {
           ws.refreshTokens.delete(refreshToken.id);
           throw new OauthApiError(400, 'invalid_grant', 'Refresh token has expired.');
-        }
-        // Revoking a session or logging out deletes its row, which a refresh of any of the
-        // session's tokens must then fail like an unknown token. Every token the session still
-        // has goes with it — a replay's retired links included — since no rotation will ever
-        // sweep a session that cannot refresh again.
-        if (!ws.sessions.get(refreshToken.session_id)) {
-          for (const orphan of ws.refreshTokens.findBy('session_id', refreshToken.session_id)) {
-            ws.refreshTokens.delete(orphan.id);
-          }
-          throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
         }
 
         user = ws.users.get(refreshToken.user_id);
@@ -1513,12 +1551,11 @@ export function authRoutes(ctx: RouteContext): void {
         exchanged_at: null,
         exchanged_for_id: null,
       });
-    // A replay that also carries an explicit organization_id switches organization the way a
-    // rotation would. The token handed back has to agree with the organization this response
-    // reports, or the next plain refresh of it would silently switch back.
-    if (replayedRefreshToken && replayedRefreshToken.organization_id !== organizationId) {
-      ws.refreshTokens.update(replayedRefreshToken.id, { organization_id: organizationId });
-    }
+    // A replay that also carries an explicit organization_id mints the access token for it and
+    // reports it, but the token handed back keeps the organization the original exchange bound
+    // it to: production's replay returns before the exchange hook that records the session's
+    // organization, so a replayed switch is not persisted and the next plain refresh is back on
+    // the previous organization.
     // Retire the token a rotation consumed, pointing it at its successor. Done only now, after
     // every check that could still fail the grant, so a refresh that fails leaves the token
     // live for the client to retry.
@@ -1527,13 +1564,14 @@ export function authRoutes(ctx: RouteContext): void {
         exchanged_at: new Date().toISOString(),
         exchanged_for_id: newRefreshToken.id,
       });
-      // Sweep this session's retired tokens whose grace window has closed, since a replay is
+      // Sweep this session's retired tokens that can never be replayed again, since a replay is
       // the only other thing that ever touches one and a client that kept up never sends it
-      // again — without this every rotation would leave a row behind for good. Safe for chain
-      // walks: anything older in the chain than a swept token was exchanged earlier still, so
-      // it is past its own window and would be rejected before the walk.
+      // again — without this every rotation would leave a row behind for good. The token just
+      // retired is never swept here (its successor was minted this instant), nor is the one
+      // before it, whose successor it is: only links whose successor was exchanged more than
+      // the grace period ago, or is gone.
       for (const retired of ws.refreshTokens.findBy('session_id', session.id)) {
-        if (retired.exchanged_at !== null && !withinReplayGrace(retired.exchanged_at)) {
+        if (retired.exchanged_at !== null && replayGraceClosed(ws, retired)) {
           ws.refreshTokens.delete(retired.id);
         }
       }
