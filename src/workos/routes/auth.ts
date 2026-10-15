@@ -103,6 +103,10 @@ const INVITATION_TOKEN_GRANTS = new Set([
  * Once the successor is itself exchanged — the client has proved it holds the rotation — the old
  * token stays replayable for this long more, to absorb requests that were already in flight when
  * that happened, and is then terminally invalid.
+ *
+ * The length is the documented 30 seconds. Production reads it from a feature flag
+ * (`userland-refresh-token-grace-period-in-milliseconds`, code default 0) rather than a constant,
+ * so the public docs are the figure to match, not the monorepo.
  */
 const REFRESH_TOKEN_REPLAY_GRACE_MS = 30 * 1000;
 
@@ -1187,7 +1191,11 @@ export function authRoutes(ctx: RouteContext): void {
         if (!user) {
           throw new OauthApiError(400, 'invalid_grant', 'Invalid refresh token.');
         }
-        // Allow body.organization_id to switch org context (switchToOrganization)
+        // Allow body.organization_id to switch org context (switchToOrganization). On a replay the
+        // access token is minted for it and the response reports it, but the token handed back keeps
+        // the organization the original exchange bound it to: production's replay returns before the
+        // exchange hook that records the session's organization, so a replayed switch is not
+        // persisted and the next plain refresh is back on the previous organization.
         organizationId = (body.organization_id as string) ?? refreshToken.organization_id;
 
         // Rotate within the existing session: capture it for reuse and issue a new token below —
@@ -1551,11 +1559,6 @@ export function authRoutes(ctx: RouteContext): void {
         exchanged_at: null,
         exchanged_for_id: null,
       });
-    // A replay that also carries an explicit organization_id mints the access token for it and
-    // reports it, but the token handed back keeps the organization the original exchange bound
-    // it to: production's replay returns before the exchange hook that records the session's
-    // organization, so a replayed switch is not persisted and the next plain refresh is back on
-    // the previous organization.
     // Retire the token a rotation consumed, pointing it at its successor. Done only now, after
     // every check that could still fail the grant, so a refresh that fails leaves the token
     // live for the client to retry.
