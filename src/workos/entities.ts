@@ -442,7 +442,7 @@ export interface WorkOSDirectory extends Entity {
   domain: string | null;
   type: string;
   state: 'linked' | 'unlinked' | 'deleting' | 'invalid_credentials';
-  external_key: string | null;
+  external_key: string;
 }
 
 export interface WorkOSDirectoryUser extends Entity {

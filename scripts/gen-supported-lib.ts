@@ -146,7 +146,7 @@ export const FEATURES: FeatureDef[] = [
     tags: ['directories', 'directory-users', 'directory-groups'],
     seedKeys: ['directories'],
     notes:
-      'Read-only over HTTP, as production is: a directory is connected in the dashboard, so there is no POST route to emulate. Seed `directories` to get one, with its groups, its users, and group-to-role mappings resolved onto the organization membership (which then reports `directory_managed`); seeding emits `dsync.activated` (for a `linked` directory), `dsync.group.created`, `dsync.user.created`, and `dsync.group.user_added` for each seeded membership (queryable at `GET /events`, not delivered — seeded endpoints register after), and `DELETE /directories/:id` emits a delivered `dsync.deleted`. Removing a user from a group emits `dsync.group.user_removed`.',
+      'Read-only over HTTP, as production is: a directory is connected in the dashboard, so there is no POST route to emulate. Seed `directories` to get one, with its groups, its users, and group-to-role mappings resolved onto the organization membership (which then reports `directory_managed`); seeding emits `dsync.activated` (for a `linked` directory), `dsync.group.created`, `dsync.user.created`, and `dsync.group.user_added` for each seeded membership (queryable at `GET /events`, not delivered — seeded endpoints register after), and `DELETE /directories/:id` emits a delivered `dsync.deleted` — except for an `unlinked` directory with no groups, which production deletes silently. Removing a user from a group emits `dsync.group.user_removed`.',
   },
   {
     name: 'Multi-Factor Auth',
