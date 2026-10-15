@@ -4,6 +4,7 @@ import { generateId } from '../core/index.js';
 import { syncOrganizationResource } from './organization-resource.js';
 import { getWorkOSStore } from './store.js';
 import { organizationRoutes } from './routes/organizations.js';
+import { itContactRoutes } from './routes/it-contacts.js';
 import { organizationDomainRoutes } from './routes/organization-domains.js';
 import { membershipRoutes } from './routes/memberships.js';
 import { groupRoutes } from './routes/groups.js';
@@ -219,6 +220,11 @@ export interface WorkOSSeedConnection {
     email: string;
     first_name?: string;
     last_name?: string;
+    /**
+     * The full name as its own attribute, the way production stores it. Null when omitted —
+     * never composed from `first_name` and `last_name`.
+     */
+    name?: string;
     idp_id?: string;
     groups?: string[];
   }>;
@@ -653,6 +659,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
             email: p.email,
             first_name: p.first_name ?? null,
             last_name: p.last_name ?? null,
+            name: p.name ?? null,
             groups: p.groups ?? [],
             raw_attributes: { email: p.email },
           });
@@ -1070,6 +1077,7 @@ export const workosPlugin: ServicePlugin = {
   name: 'workos',
   register(ctx: RouteContext): void {
     organizationRoutes(ctx);
+    itContactRoutes(ctx);
     organizationDomainRoutes(ctx);
     membershipRoutes(ctx);
     groupRoutes(ctx);

@@ -174,6 +174,7 @@ export function organizationRoutes(ctx: RouteContext): void {
     if (!org) throw notFound('Organization');
 
     ws.organizationDomains.deleteBy('organization_id', org.id);
+    ws.itContacts.deleteBy('organization_id', org.id);
     for (const membership of ws.organizationMemberships.findBy('organization_id', org.id)) {
       ws.roleAssignments.deleteBy('organization_membership_id', membership.id);
     }

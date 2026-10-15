@@ -3,6 +3,7 @@ import { STORE_KEYS } from './constants.js';
 import type {
   WorkOSOrganization,
   WorkOSOrganizationDomain,
+  WorkOSItContact,
   WorkOSOrganizationMembership,
   WorkOSGroup,
   WorkOSGroupMembership,
@@ -56,6 +57,7 @@ import type {
 export interface WorkOSStore {
   organizations: Collection<WorkOSOrganization>;
   organizationDomains: Collection<WorkOSOrganizationDomain>;
+  itContacts: Collection<WorkOSItContact>;
   organizationMemberships: Collection<WorkOSOrganizationMembership>;
   groups: Collection<WorkOSGroup>;
   groupMemberships: Collection<WorkOSGroupMembership>;
@@ -120,6 +122,10 @@ export function getWorkOSStore(store: Store): WorkOSStore {
       ID_PREFIXES.organization_domain,
       ['organization_id', 'domain'],
     ),
+    itContacts: store.collection<WorkOSItContact>('workos.it_contacts', ID_PREFIXES.it_contact, [
+      'organization_id',
+      'email',
+    ]),
     organizationMemberships: store.collection<WorkOSOrganizationMembership>(
       'workos.organization_memberships',
       ID_PREFIXES.organization_membership,

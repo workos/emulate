@@ -184,6 +184,11 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
       'updated_at',
     ],
   },
+  it_contact: {
+    schema: 'ItContact',
+    properties: ['created_at', 'email', 'id', 'object', 'updated_at'],
+    required: ['created_at', 'email', 'id', 'object', 'updated_at'],
+  },
   organization: {
     schema: 'Organization',
     properties: [
@@ -246,6 +251,39 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
       'slug',
       'system',
       'updated_at',
+    ],
+  },
+  profile: {
+    schema: 'Profile',
+    properties: [
+      'connection_id',
+      'connection_type',
+      'custom_attributes',
+      'email',
+      'first_name',
+      'groups',
+      'id',
+      'idp_id',
+      'last_name',
+      'name',
+      'object',
+      'organization_id',
+      'raw_attributes',
+      'role',
+      'roles',
+    ],
+    required: [
+      'connection_id',
+      'connection_type',
+      'email',
+      'first_name',
+      'id',
+      'idp_id',
+      'last_name',
+      'name',
+      'object',
+      'organization_id',
+      'raw_attributes',
     ],
   },
   role: {
@@ -337,6 +375,11 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
   },
   'GET /organizations': {
     schema: 'OrganizationList',
+    properties: ['data', 'list_metadata', 'object'],
+    required: ['data', 'list_metadata', 'object'],
+  },
+  'GET /organizations/{organization_id}/it_contacts': {
+    schema: 'ItContactList',
     properties: ['data', 'list_metadata', 'object'],
     required: ['data', 'list_metadata', 'object'],
   },
@@ -437,6 +480,11 @@ export const RESPONSE_ENVELOPE_REQUIREMENTS: Record<string, ResponseShapeRequire
     schema: 'PortalLinkResponse',
     properties: ['link'],
     required: ['link'],
+  },
+  'POST /sso/token': {
+    schema: 'SsoTokenResponse',
+    properties: ['access_token', 'expires_in', 'oauth_tokens', 'profile', 'token_type'],
+    required: ['access_token', 'expires_in', 'profile', 'token_type'],
   },
   'POST /user_management/password_reset': {
     schema: 'PasswordReset',

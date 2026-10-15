@@ -103,7 +103,8 @@ export const FEATURES: FeatureDef[] = [
     name: 'Organizations',
     tags: ['organizations', 'organization-domains', 'organizations.it-contacts'],
     seedKeys: ['organizations'],
-    notes: 'IT contact endpoints are not implemented.',
+    notes:
+      "IT contacts are stored lowercased, capped at 20 per organization, and listed whole under null cursors, as production does. An organization is held to one active Admin Portal invitation — inviting any contact while one is active conflicts, the holder included — but nothing is emailed: the setup link an invitation would send is recorded on the contact and served by no route. Revoking clears the organization's invitation through any contact, since no route reports which one holds it. The `403` and `503` these routes document are not implemented — the store is not environment-scoped, so the forbidden case cannot arise — but both can be injected through the error hooks.",
   },
   {
     name: 'User Management',
