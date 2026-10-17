@@ -447,6 +447,8 @@ export interface WorkOSRoleAssignment extends Entity {
   organization_membership_id: string;
   /** Present only for assignments derived from a native group's grant. */
   group_role_assignment_id?: string;
+  /** The group whose grant this assignment derives from; set alongside group_role_assignment_id. */
+  group?: { id: string; name: string };
   role_id: string;
   role_slug: string;
   resource_id: string | null;

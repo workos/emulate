@@ -92,7 +92,11 @@ describe('Native group authorization', () => {
     expect(derived[0]).toMatchObject({
       object: 'role_assignment',
       organization_membership_id: membership.id,
-      source: { type: 'group', group_role_assignment_id: assignment.id },
+      source: {
+        type: 'group',
+        group_role_assignment_id: assignment.id,
+        group: { id: group.id, name: group.name },
+      },
     });
     expect(((await (await request(memberPath)).json()) as any).data[0].id).toBe(derived[0].id);
     expect(((await (await request(`${memberPath}?resource_id=${other.id}`)).json()) as any).data).toEqual([]);

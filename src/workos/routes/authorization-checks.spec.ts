@@ -152,7 +152,7 @@ describe('Authorization check + role assignment routes', () => {
     expect(body.role_id).toBe(adminRole.id);
     expect(body.role).toEqual({ slug: 'admin-role' });
     expect(body.resource).toEqual({ id: null, external_id: null, resource_type_slug: null });
-    expect(body.source).toEqual({ type: 'direct', group_role_assignment_id: null });
+    expect(body.source).toEqual({ type: 'direct', group_role_assignment_id: null, group: null });
 
     // The assignment grants its permissions
     const checkRes = await req(`/authorization/organization_memberships/${membership.id}/check`, {

@@ -91,6 +91,7 @@ function membershipRoleAssignments(ws: WorkOSStore, membershipId: string): WorkO
         object: 'role_assignment',
         organization_membership_id: membershipId,
         group_role_assignment_id: assignment.id,
+        group: { id: group.id, name: group.name },
       });
     }
   }
