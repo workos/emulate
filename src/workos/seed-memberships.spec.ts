@@ -50,7 +50,7 @@ describe('Seeding organization memberships', () => {
   });
 
   // The join resolves case-insensitively, like every other lookup by email, so a reference the
-  // running emulator would honour is not rejected at startup on letter case alone.
+  // running emulator would honor is not rejected at startup on letter case alone.
   it('joins a membership to its user by any casing of the address', async () => {
     emulator = await createEmulator({
       port: 0,

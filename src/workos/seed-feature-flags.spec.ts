@@ -103,7 +103,7 @@ describe('Seeding feature flags', () => {
     expect(documented.id as string).toStartWith('flag_');
   });
 
-  it('honours a pinned flag id', async () => {
+  it('honors a pinned flag id', async () => {
     emulator = await createEmulator({
       port: 0,
       seed: { featureFlags: [{ id: 'flag_01PINNED', slug: 'pinned' }] },
