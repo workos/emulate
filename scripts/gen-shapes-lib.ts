@@ -179,7 +179,7 @@ export const ENVELOPE_SCHEMA_MAP: readonly EnvelopeMapEntry[] = [
     schemaName: 'AuthenticationChallengeVerifyResponse',
   },
   // Paginated list envelopes. Several, not one, because each is wrapped by a different
-  // route — a route that forgets `list_metadata` is invisible if only its neighbour is checked.
+  // route — a route that forgets `list_metadata` is invisible if only its neighbor is checked.
   { method: 'GET', path: '/organizations', status: '200', schemaName: 'OrganizationList' },
   { method: 'GET', path: '/user_management/users', status: '200', schemaName: 'UserlandUserList' },
   { method: 'GET', path: '/connect/applications', status: '200', schemaName: 'ConnectApplicationList' },
@@ -531,7 +531,7 @@ function collectIdPrefixes(
  * The spec's documented id prefix per object, extracted from its own `id` examples.
  *
  * Nothing is curated here: every object the spec gives a prefixed `id` example for is
- * catalogued. Where the spec contradicts itself the canonical example is the shallowest
+ * cataloged. Where the spec contradicts itself the canonical example is the shallowest
  * one — the resource schema rather than an event payload's nested copy — with the losing
  * prefixes kept in `conflicts` so the disagreement stays visible rather than being picked
  * silently. Ties break on source name, so the output is stable across runs.

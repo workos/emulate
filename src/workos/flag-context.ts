@@ -17,7 +17,7 @@ export type FlagActor = { id: string; name: string };
 const PLACEHOLDER_ACTOR: FlagActor = { id: 'api_key_emulator', name: 'Emulator API key' };
 
 /**
- * `access_type` summarises a flag's reach in one word, the way the dashboard shows it:
+ * `access_type` summarizes a flag's reach in one word, the way the dashboard shows it:
  * `all` when the default value carries every resource, `some` when only targets are on,
  * `none` when the flag reaches nobody (disabled, or enabled with neither).
  */

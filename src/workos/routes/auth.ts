@@ -1549,7 +1549,7 @@ export function authRoutes(ctx: RouteContext): void {
         permissions: permissionSlugs,
         client_id: tokenClientId,
         // session.created_at gives the documented semantics: stamped at sign-in, unchanged by
-        // refresh (which reuses the session). If in-session re-authentication is ever modelled,
+        // refresh (which reuses the session). If in-session re-authentication is ever modeled,
         // this needs a dedicated session.authenticated_at to read instead.
         auth_time: Math.floor(new Date(session.created_at).getTime() / 1000),
         // RFC 8693 actor claim; the docs put the impersonator's email in the nested sub. The

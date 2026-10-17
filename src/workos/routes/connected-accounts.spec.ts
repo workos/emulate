@@ -129,7 +129,7 @@ describe('Connected account routes', () => {
       expect(data).not.toContainKey('access_token');
     });
 
-    it('rejects references and states the emulator could not honour', () => {
+    it('rejects references and states the emulator could not honor', () => {
       const base = { users: [{ email: 'known@acme.test' }] };
 
       const unknownUser = validateSeedConfig({
@@ -220,7 +220,7 @@ describe('Connected account routes', () => {
       expect((await json(res)).state).toBe('connected');
     });
 
-    it('honours an explicit state over derivation', async () => {
+    it('honors an explicit state over derivation', async () => {
       const user = await createUser('explicit@test.com');
       const res = await req(`/user_management/users/${user.id}/connected_accounts/github`, {
         method: 'POST',

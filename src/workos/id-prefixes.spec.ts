@@ -3,7 +3,7 @@
  * prefixes the OpenAPI spec's own `id` examples use. The spec requirements come from
  * src/workos/generated/response-shapes.ts (regenerate with `npm run gen:shapes`), where
  * they are discovered structurally — every object the spec gives a prefixed `id` example
- * for is catalogued, nothing is curated.
+ * for is cataloged, nothing is curated.
  *
  * Response shape conformance cannot catch this: a field set says nothing about what goes
  * in the fields, so `id: "ra_01…"` satisfies a spec that documents `role_assignment_01…`.

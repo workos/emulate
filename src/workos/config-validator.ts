@@ -49,7 +49,7 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
   // the store resolves them: lowercased, because every lookup by email is case-insensitive, and
   // trimmed, because that is the form seeding writes. A membership for 'a@x.test' names the user
   // seeded as ' A@x.test ', and resolving it any other way would reject a reference the running
-  // emulator then honours.
+  // emulator then honors.
   const userEmails = new Set(
     Array.isArray(config.users)
       ? config.users

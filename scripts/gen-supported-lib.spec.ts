@@ -254,7 +254,7 @@ export interface EmulatorOptions {
     expect(parseSeedConfigKeys(source)).toEqual(['apiKeys', 'organizations', 'errorHooks']);
   });
 
-  it('does not bleed into neighbouring interfaces', () => {
+  it('does not bleed into neighboring interfaces', () => {
     expect(parseSeedConfigKeys(source)).not.toContain('port');
     expect(parseSeedConfigKeys(source)).not.toContain('status');
   });
