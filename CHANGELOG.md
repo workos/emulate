@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.16.0](https://github.com/workos/emulate/compare/v0.15.0...v0.16.0) (2026-10-20)
+
+
+### Features
+
+* **user-management:** hold several roles per membership and list an organization's roles ([#146](https://github.com/workos/emulate/issues/146)) ([40cbc50](https://github.com/workos/emulate/commit/40cbc50345dc4f3d10be0dba28bfe1bffd337512))
+
+
+### Bug Fixes
+
+* **authorization:** emit source.group on role assignments ([#144](https://github.com/workos/emulate/issues/144)) ([8089acf](https://github.com/workos/emulate/commit/8089acfb29cb919eb9736e1f93b320da68829708))
+* **invitations:** create the invitee's user and pending membership on invite ([#149](https://github.com/workos/emulate/issues/149)) ([a2c750c](https://github.com/workos/emulate/commit/a2c750c2fb4b2a4354b45d53cbb8cfeca8cd3dbf))
+* **memberships:** reactivate an inactive membership on create, refuse a pending one ([#152](https://github.com/workos/emulate/issues/152)) ([826a452](https://github.com/workos/emulate/commit/826a4523b61a82d60e733faf68afcec8b5ca52d9))
+* **memberships:** refuse pending deactivate and reactivate, make repeats no-ops ([#150](https://github.com/workos/emulate/issues/150)) ([0498fac](https://github.com/workos/emulate/commit/0498fac374501afb8f9662f61be991a43b5d54fd))
+
 ## [0.15.0](https://github.com/workos/emulate/compare/v0.14.0...v0.15.0) (2026-10-15)
 
 
