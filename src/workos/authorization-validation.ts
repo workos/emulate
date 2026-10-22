@@ -36,10 +36,16 @@ export const notEmpty: Constraint = (value, field) =>
 export const isString: Constraint = (value, field) =>
   typeof value === 'string' ? undefined : `${field} must be a string`;
 
+/**
+ * class-validator's MaxLength counts a surrogate pair as one character (validator.js
+ * `isLength`), so an astral character such as an emoji counts once, as it does in production.
+ */
 export const maxLength =
   (max: number): Constraint =>
   (value, field) =>
-    typeof value === 'string' && value.length <= max ? undefined : `${field} cannot be more than ${max} characters`;
+    typeof value === 'string' && Array.from(value).length <= max
+      ? undefined
+      : `${field} cannot be more than ${max} characters`;
 
 export const matches =
   (pattern: RegExp, message: string): Constraint =>

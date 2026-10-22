@@ -124,6 +124,27 @@ describe('Authorization environment role routes', () => {
     expect(await json(res)).toMatchObject({ message: 'Validation failed', errors: [error] });
   });
 
+  it('counts an astral character once against a length cap, as class-validator does', async () => {
+    const name = '😀'.repeat(48);
+    expect(name.length).toBe(96);
+    const accepted = await req('/authorization/roles', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'emoji', name, description: '🙂'.repeat(150) }),
+    });
+    expect(accepted.status).toBe(201);
+    expect((await json(accepted)).name).toBe(name);
+
+    const rejected = await req('/authorization/roles', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'emoji-2', name: '😀'.repeat(49), description: '🙂'.repeat(151) }),
+    });
+    expect(rejected.status).toBe(422);
+    expect((await json(rejected)).errors).toEqual([
+      { field: 'name', code: 'name cannot be more than 48 characters' },
+      { field: 'description', code: 'description cannot be more than 150 characters' },
+    ]);
+  });
+
   it('refuses the properties the create DTO does not declare, unknown ones first', async () => {
     const res = await req('/authorization/roles', {
       method: 'POST',
