@@ -1,11 +1,54 @@
 # Production parity
 
 The emulator answers what production answers, under production's codes, so a suite that passes
-here does not meet a surprise against the real API. This page collects those rules by API area and
-names the places the emulator knowingly differs. Which routes exist is in
-[SUPPORTED.md](../SUPPORTED.md); how data gets in is in [seeding.md](seeding.md).
+here does not meet a surprise against the real API. This page collects those rules by feature, one
+section per row of [SUPPORTED.md](../SUPPORTED.md) in the same order, and names the places the
+emulator knowingly differs. Which routes exist is in SUPPORTED.md; how data gets in is in
+[seeding.md](seeding.md).
+
+## Organizations
+
+`external_id` is unique across organizations: `400 external_id_already_used` on create and update.
+
+### Domains
+
+Domains are stored lowercased and validated as production does: a `domain_data` entry needs a
+`state` of `pending` or `verified`, and a malformed domain, a domain listed twice or a public
+consumer domain (production's list, vendored) is `422` before the organization is written; the
+organization's own duplicate on `POST /organization_domains` is `409 domain_already_exists`, but two
+organizations may share a domain, since production enforces uniqueness only behind a flag.
+`POST /organization_domains/{id}/verify` starts DNS verification — `201`, `pending`, the `dns`
+strategy and a fresh token; `400 domain_already_verified` once verified — and resolves no DNS, so a
+domain gets verified only by seeding `state: verified` or sending `domain_data[].state: verified`,
+which on update recreates the domain under a new id as production does.
+
+### IT contacts
+
+IT contacts are stored lowercased, capped at 20 per organization, and listed whole under null
+cursors, as production does. An organization is held to one active Admin Portal invitation —
+inviting any contact while one is active conflicts, the holder included — but nothing is emailed:
+the setup link an invitation would send is recorded on the contact and served by no route. Revoking
+clears the organization's invitation through any contact, since no route reports which one holds
+it. The `403` and `503` these routes document are not implemented — the store is not
+environment-scoped, so the forbidden case cannot arise — but both can be injected through the error
+hooks.
+
+## User Management
+
+The email-change confirm and send endpoints and the waitlist endpoints are not implemented.
+
+`PUT /user_management/users/{id}` applies `email` — a malformed address is `400 invalid_email`, one another user holds is `400 email_not_available`, and a changed address is unverified until something verifies it; an email-verification code sent to the old address is a `404`, since production checks a code against the factor of the user's current address, which has no challenge yet — and refuses `email_verified: false` on a verified user with `400 email_already_verified`. An `external_id` another user holds is `400 external_id_already_used` on update, and on create a `400 user_creation_error` carrying `external_id_already_used`.
+
+### Passwords are held to production's policy
+
+`POST /user_management/users`, `PUT /user_management/users/{id}` and `POST /user_management/password_reset/confirm` refuse a password production would refuse, at the settings a new environment is born with: at least 10 characters, at most 72 bytes (bcrypt's limit), not containing the account's email address, and a [zxcvbn](https://github.com/zxcvbn-ts/zxcvbn) score of 3 or more — scored with the same library, dictionaries and keyboard graphs production configures, so the same passwords pass and fail (`correct horse battery staple` passes; `password123` does not). The create and update routes answer `400 password_strength_error` and the reset `400 password_reset_error`, each with an `errors` array naming every broken rule (`password_too_short`, `password_too_long`, `password_contains_email`, `password_too_weak`, and on the reset `password_reset_token_expired`) with production's detail fields (`minimum_length`, `warning`, `suggestions`). The breached-password lookup (`password_pwned`) is not performed: it is off by default in production and needs the network. Seeded `password:` values are written as given, so a seed's `test123` still signs in; only what arrives over the API is checked.
+
+A password reset token lasts 15 minutes. Confirming one sets the password, signs the user out of every session (each emits `session.revoked`), and verifies the email, as production does; a token the emulator never issued is a `404 password_reset_token_not_found`.
 
 ## Authentication
+
+The grants at `POST /user_management/authenticate` and `POST /oauth2/token` are hand-written rather
+than generated from the spec, the one deliberate exception to the emulator's codegen.
 
 ### Organization-scoped sessions
 
@@ -112,12 +155,6 @@ A field named `email` must be a string wherever it is accepted. A number or obje
 
 The typo guard applies wherever an address is written rather than looked up: both routes that create users, `POST /user_management/invitations` (acceptance resolves the recipient by email, so a typo is an invitation that is spent without enrolling anyone), and seeded `users`, `invitations`, and organization `memberships`. Read paths are left alone — an address that resolves to nothing is still a `404` you can act on, not a validation error.
 
-### Passwords are held to production's policy
-
-`POST /user_management/users`, `PUT /user_management/users/{id}` and `POST /user_management/password_reset/confirm` refuse a password production would refuse, at the settings a new environment is born with: at least 10 characters, at most 72 bytes (bcrypt's limit), not containing the account's email address, and a [zxcvbn](https://github.com/zxcvbn-ts/zxcvbn) score of 3 or more — scored with the same library, dictionaries and keyboard graphs production configures, so the same passwords pass and fail (`correct horse battery staple` passes; `password123` does not). The create and update routes answer `400 password_strength_error` and the reset `400 password_reset_error`, each with an `errors` array naming every broken rule (`password_too_short`, `password_too_long`, `password_contains_email`, `password_too_weak`, and on the reset `password_reset_token_expired`) with production's detail fields (`minimum_length`, `warning`, `suggestions`). The breached-password lookup (`password_pwned`) is not performed: it is off by default in production and needs the network. Seeded `password:` values are written as given, so a seed's `test123` still signs in; only what arrives over the API is checked.
-
-A password reset token lasts 15 minutes. Confirming one sets the password, signs the user out of every session (each emits `session.revoked`), and verifies the email, as production does; a token the emulator never issued is a `404 password_reset_token_not_found`.
-
 ### One-time codes are single-use, latest-only, and lock after three misses
 
 A Magic Auth code, an email verification code, and an MFA challenge are one authentication challenge underneath in production, verified by one rule, and the emulator verifies all three the same way:
@@ -133,11 +170,23 @@ Messages name the email for Magic Auth and email verification (`One-time code fo
 
 `POST /auth/challenges/{id}/verify` (the SDKs' `verifyChallenge`) answers a wrong code with `201 { "challenge": …, "valid": false }` — the verification ran and said no — and keeps its errors for a challenge that cannot be verified at all: `422 authentication_challenge_expired`, `422 authentication_challenge_previously_verified`, and `400 one_time_code_too_many_attempts`.
 
-### Enrolled means verified
+## Organization Memberships
 
-`POST /user_management/users/{id}/auth_factors` creates the factor and the enrollment challenge that completes it, and until that challenge is verified at `POST /auth/challenges/{id}/verify` the factor is not enrolled: `GET /user_management/users/{id}/auth_factors` lists verified factors only, and the `password` grant — and the hosted login page — challenges a second factor only when the user has one. A test that wants the `mfa_challenge` step enrolls, reads the enrollment challenge's code off the store (a TOTP code is delivered nowhere), verifies it, and then signs in; an enrollment abandoned at the QR code changes nothing about how the user signs in, as it does live. Seeded `totp: true` factors come up verified.
+`POST` and `PUT /user_management/organization_memberships` answer a `role_slug` (or any of `role_slugs`) that names no role with `422 invalid_role`. A slug resolves to a role of that organization or of the environment; `member` and `admin` always resolve, since production creates both with every environment, so they need no seeding. `GET /user_management/organization_memberships` wants an `organization_id` or a `user_id` (`400 missing_user_id_or_organization_id`).
 
-## SSO connections follow production's rules
+One assumption runs through the membership and invitation routes: multiple roles are enabled for the environment, so `role_slugs` is accepted wherever production accepts it with that setting on, and `multiple_roles_not_enabled` is never answered.
+
+## Groups
+
+A second group with the same name in an organization is a `409` whose body is `{"message": "A group with name: … already exists in the organization.", "error": "Conflict"}` with no `code`, as production's conflict renders; `name` is at most 256 characters and `description` a non-empty string of at most 150 (`null` clears it); a group holds at most 500 members (`400 group_membership_limit_exceeded`).
+
+## Invitations
+
+`POST /user_management/invitations`: an open invitation to the same organization is `400 email_already_invited_to_organization`; without an organization, an open invitation for the address is `400 email_already_invited` and an existing account is `400 user_already_exists` (production lets through an account that only an organization invitation created, since its owner has not signed up; the emulator records no such distinction and refuses any existing account); an unknown `role_slug` is `400 invalid_role`; `expires_in_days` must be 1 to 30 (`expires_in_days_too_short`, `expires_in_days_too_long`) and defaults to 7 days; an unknown `organization_id` or `inviter_user_id` is a `404`.
+
+An invitation's `state` is derived when it is read, so one expires on its own once `expires_at` passes. Accepting or revoking anything but a pending invitation is `400 invite_not_pending`; resending one that has expired, been revoked or been accepted is `400 invite_expired`, `invite_revoked` or `invite_accepted`. There is no `DELETE` for an invitation, as there is none in the API — revoke it.
+
+## SSO
 
 `POST /connections` enforces what production's create endpoint enforces, so a suite that passes here does not meet a 400 on the real API:
 
@@ -153,19 +202,28 @@ The authorization and token endpoints check what production checks:
 - `POST /sso/token` requires `client_id` and `client_secret`. The secret is an API key of the environment — in production it is looked up among the environment's keys, here among the emulator's (`sk_test_default`, or the keys you configured) — and a wrong one is `400 {"error": "invalid_client", "error_description": "Invalid client secret."}`, with no `authentication.sso_failed` event, since nothing was authenticated. The `client_id` is only required to be present, and becomes the access token's `aud`.
 - An authorization code lives five minutes, as production's do.
 
-## What the user-management routes refuse
+## Directory Sync
 
-Each of these mirrors a check production makes, under production's code:
+Read-only over HTTP, as production is: a directory is connected in the dashboard, so there is no
+`POST` route to emulate, and the seed file is the only way to get one
+([seeding.md](seeding.md#directory-sync)). A seeded directory's group-to-role mappings are resolved
+onto the organization memberships, which then report `directory_managed`, and an organization holds
+one directory, as it holds one SSO connection. `DELETE /directories/:id` emits a delivered
+`dsync.deleted` — except for an `unlinked` directory with no groups, which production deletes
+silently. Removing a user from a group emits `dsync.group.user_removed`.
 
-- `PUT /user_management/users/{id}` applies `email` — a malformed address is `400 invalid_email`, one another user holds is `400 email_not_available`, and a changed address is unverified until something verifies it; an email-verification code sent to the old address is a `404`, since production checks a code against the factor of the user's current address, which has no challenge yet — and refuses `email_verified: false` on a verified user with `400 email_already_verified`. An `external_id` another user holds is `400 external_id_already_used` on update, and on create a `400 user_creation_error` carrying `external_id_already_used`.
-- `POST` and `PUT /user_management/organization_memberships` answer a `role_slug` (or any of `role_slugs`) that names no role with `422 invalid_role`. A slug resolves to a role of that organization or of the environment; `member` and `admin` always resolve, since production creates both with every environment, so they need no seeding. `GET /user_management/organization_memberships` wants an `organization_id` or a `user_id` (`400 missing_user_id_or_organization_id`).
-- `POST /user_management/invitations`: an open invitation to the same organization is `400 email_already_invited_to_organization`; without an organization, an open invitation for the address is `400 email_already_invited` and an existing account is `400 user_already_exists` (production lets through an account that only an organization invitation created, since its owner has not signed up; the emulator records no such distinction and refuses any existing account); an unknown `role_slug` is `400 invalid_role`; `expires_in_days` must be 1 to 30 (`expires_in_days_too_short`, `expires_in_days_too_long`) and defaults to 7 days; an unknown `organization_id` or `inviter_user_id` is a `404`.
-- An invitation's `state` is derived when it is read, so one expires on its own once `expires_at` passes. Accepting or revoking anything but a pending invitation is `400 invite_not_pending`; resending one that has expired, been revoked or been accepted is `400 invite_expired`, `invite_revoked` or `invite_accepted`. There is no `DELETE` for an invitation, as there is none in the API — revoke it.
-- Groups: a second group with the same name in an organization is a `409` whose body is `{"message": "A group with name: … already exists in the organization.", "error": "Conflict"}` with no `code`, as production's conflict renders; `name` is at most 256 characters and `description` a non-empty string of at most 150 (`null` clears it); a group holds at most 500 members (`400 group_membership_limit_exceeded`).
+## Multi-Factor Auth
 
-One assumption runs through the membership and invitation routes: multiple roles are enabled for the environment, so `role_slugs` is accepted wherever production accepts it with that setting on, and `multiple_roles_not_enabled` is never answered.
+TOTP codes are accepted without verifying the shared secret. A challenge is verified under the
+[one-time-code rules](#one-time-codes-are-single-use-latest-only-and-lock-after-three-misses):
+single-use, locked after three wrong codes, and — since a challenge is named by its id — not
+retired when another is issued.
 
-## Authorization
+### Enrolled means verified
+
+`POST /user_management/users/{id}/auth_factors` creates the factor and the enrollment challenge that completes it, and until that challenge is verified at `POST /auth/challenges/{id}/verify` the factor is not enrolled: `GET /user_management/users/{id}/auth_factors` lists verified factors only, and the `password` grant — and the hosted login page — challenges a second factor only when the user has one. A test that wants the `mfa_challenge` step enrolls, reads the enrollment challenge's code off the store (a TOTP code is delivered nowhere), verifies it, and then signs in; an enrollment abandoned at the QR code changes nothing about how the user signs in, as it does live. Seeded `totp: true` factors come up verified.
+
+## FGA / Authorization
 
 ### Roles, permissions, and resources
 
@@ -183,6 +241,9 @@ and at most 128. Bodies accept only the fields the spec's DTOs declare, so `prio
 unknown properties as production's unwhitelisted pipe does. A role's priority is seed-only: a role
 created through the API joins the end of the priority order, and `GET /authorization/roles` lists
 environment roles unpaged in that order, as the organization list does.
+
+Resource types are not modeled: any well-formed `resource_type_slug` is accepted on roles and
+permissions, and permission scopes are not checked against the role scope.
 
 There is no `DELETE /authorization/roles/{slug}`; production deletes environment roles from the
 dashboard only. `DELETE /authorization/organizations/{id}/roles/{slug}` answers `409`
@@ -204,6 +265,10 @@ it for every organization.
 `missing_organization_id_or_resource_type_slug`), and the memberships-for-resource routes require
 `permission_slug` (`422`; a slug that names no permission is a `404`).
 
+Every organization owns an implicit `organization` resource whose `external_id` is the
+organization's `external_id`, falling back to the organization id. Resources created without parent
+fields attach to it, and it cannot be created, updated, or deleted directly.
+
 ### Native group authorization
 
 Native AuthKit groups can receive scoped roles through
@@ -222,6 +287,76 @@ role-assignment webhook events. Bulk group assignment replacement is not yet sup
 
 Resource updates accept the Node SDK's `PATCH` endpoints by ID and by organization, resource type,
 and external ID. The earlier `PUT`-by-ID endpoint remains available.
+
+## Audit Logs
+
+Events are ingested with production's `{organization_id, event}` body, validated the way its DTO
+validates them, and stored under their idempotency key. No action schemas are registered, so any
+action, target type and metadata are accepted. Export generation is not implemented.
+
+## Vault
+
+Object CRUD is implemented; the data-key encryption endpoints are not.
+
+## Feature Flags
+
+Every spec endpoint is implemented at its documented verb; the emulator additionally accepts `POST`
+on enable/disable and `PUT` on target creation as aliases, which production rejects. Flags resolve
+into the `feature_flags` access-token claim, the per-user and per-organization list endpoints, and
+`GET /sdk/feature-flags` — the Node SDK runtime client's polling endpoint, which the spec does not
+define. Production has no create-flag endpoint, so flags come from the `featureFlags` seed key
+([seeding.md](seeding.md#feature-flags)).
+
+## API Keys
+
+A key created through `POST /organizations/{id}/api_keys`, or seeded under `apiKeys`, authenticates
+real requests the way the default key does.
+
+## Pipes / Connected Apps
+
+User-owned connected-account CRUD and access-token retrieval are supported; a refresh mints a local
+`di_mock_` token rather than contacting the provider. Organization-owned connected accounts are not
+implemented. The older `/pipes/connections` routes remain emulator-specific.
+
+## Applications
+
+A redirect URI is stored as a bare string, so `default` is accepted on create and update but always
+reported as `false`. `uses_pkce` and `is_first_party` are stored and reported; `uses_pkce` makes a
+public client, whose codes `/oauth2/token` redeems by PKCE verifier alone and which may present no
+client secret. `POST /oauth2/register` (RFC 7591, outside the spec) creates
+`was_dynamically_registered` applications, which `registration_types` filters. `POST /client/token`
+mints a signed, short-lived token, but the spec documents only the `{ token }` envelope — the claims
+inside are an emulator convention, and no Client GraphQL API is served for it to authenticate
+against.
+
+## JWT Templates
+
+Claims render into every access token. Filters, conditionals, and loops are not supported. The
+template language is in [tokens.md](tokens.md).
+
+## Webhooks
+
+`POST` and `PATCH /webhook_endpoints` validate as production does: an HTTPS `endpoint_url`, a
+non-empty `events` list from the subscribable catalog, `status` of `enabled` or `disabled`, and a
+generated signing secret (returned on every read). One emulator-only relaxation: a plain `http://`
+URL is accepted for a loopback host (`localhost`, `127.0.0.0/8`, `::1`), so a local receiver can be
+registered over the API. Seed an endpoint to point it at any other `http://` receiver, pin its
+`secret`, or subscribe it to every event with an empty `events` list. Delivery is fire-and-forget
+with a 5s timeout and no retries. Endpoints registered in a seed file do not receive events from
+that same seed file.
+
+## Events
+
+Emitted as a side effect of every other operation. All are queryable at `GET /events`, including
+those with no registered webhook endpoint; the `events` filter is required, as in production.
+
+## AuthKit Configuration
+
+Redirect URIs are accepted but not enforced against authorize requests. MCP resource indicators
+(RFC 8707) are stored and, when a request names a registered one, become the `aud` of tokens from
+`/oauth2/token`; once any is registered, a dynamically registered client naming an unregistered one
+at `/oauth2/authorize` is answered `invalid_target`, and one naming none is bound to the resource
+flagged `default`. Resources are matched by normalized URL; wildcard patterns are refused.
 
 ## Admin Portal
 
@@ -297,6 +432,20 @@ refetches the token once, then renders its expired-session or incorrect-permissi
 
 Not implemented yet: the `scope="user"` variant (`/_widgets/UserApiKeys/*`) and the other widgets'
 `/_widgets/*` routes.
+
+## Radar
+
+Attempt listing only; no risk signals are computed, and the Radar challenge grants are not
+implemented (see [Authentication failure shapes](#authentication-failure-shapes)).
+
+## Agent Auth
+
+Blueprint CRUD, all four token grants (`user_delegated`, `autonomous`, `agent_delegated`,
+`refresh`), token validation, and instance and session listing, lookup, deletion and revocation are
+implemented. Agent access tokens are signed with the emulator key (`typ: at+jwt`,
+`sub_profile: ai_agent`) so JWKS validation works; delegated permissions are recomputed from the
+member's current role at every mint and refresh. Agent tokens carry the `workos-emulate` placeholder
+audience, since nothing at the API-key-authenticated token endpoint names a client.
 
 ## Not-Found Responses
 

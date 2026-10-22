@@ -14,10 +14,13 @@
  * it asks "can you get data in?", which is what a reader actually wants to
  * know. See `deriveSetup`.
  *
- * The only hand-authored input is FEATURES: the spec's tags are API-shaped
- * (45 of them) while readers think in products (~20), and the caveat prose
- * needs judgment. Everything else is derived, so the table cannot drift from
- * the code without CI noticing.
+ * The only hand-authored input here is FEATURES: the spec's tags are
+ * API-shaped (45 of them) while readers think in products (~20). What each
+ * feature does and does not do is prose, and prose belongs in Markdown:
+ * docs/behavior.md holds one `## <Feature>` section per row, the table links
+ * to it, and `checkBehaviorSections` fails the build when an implemented
+ * feature has none. Everything else is derived, so the table cannot drift
+ * from the code without CI noticing.
  */
 
 // ---------------------------------------------------------------------------
@@ -89,8 +92,6 @@ export interface FeatureDef {
    * renders as "no way to create data", which reads as broken.
    */
   automatic?: boolean;
-  /** Caveat prose. The only column that needs human judgment. */
-  notes?: string;
 }
 
 /**
@@ -103,80 +104,57 @@ export const FEATURES: FeatureDef[] = [
     name: 'Organizations',
     tags: ['organizations', 'organization-domains', 'organizations.it-contacts'],
     seedKeys: ['organizations'],
-    notes:
-      "IT contacts are stored lowercased, capped at 20 per organization, and listed whole under null cursors, as production does. An organization is held to one active Admin Portal invitation — inviting any contact while one is active conflicts, the holder included — but nothing is emailed: the setup link an invitation would send is recorded on the contact and served by no route. Revoking clears the organization's invitation through any contact, since no route reports which one holds it. The `403` and `503` these routes document are not implemented — the store is not environment-scoped, so the forbidden case cannot arise — but both can be injected through the error hooks. Domains are stored lowercased and validated as production does: a `domain_data` entry needs a `state` of `pending` or `verified`, and a malformed domain, a domain listed twice or a public consumer domain (production's list, vendored) is `422` before the organization is written; the organization's own duplicate on `POST /organization_domains` is `409 domain_already_exists`, but two organizations may share a domain, since production enforces uniqueness only behind a flag. `POST /organization_domains/{id}/verify` starts DNS verification — `201`, `pending`, the `dns` strategy and a fresh token; `400 domain_already_verified` once verified — and resolves no DNS, so a domain gets verified only by seeding `state: verified` or sending `domain_data[].state: verified`, which on update recreates the domain under a new id as production does. `external_id` is unique across organizations: `400 external_id_already_used` on create and update.",
   },
   {
     name: 'User Management',
     tags: ['user-management.users', 'user-management.session-tokens', 'user-management.waitlists'],
     seedKeys: ['users'],
-    notes:
-      "Email-change confirm/send and waitlist endpoints are not implemented. Passwords sent to create, update and the password-reset confirm are held to production's policy (10+ characters, 72 bytes at most, not containing the email, zxcvbn score 3+) and refused with production's error bodies; the breached-password lookup is not performed, and seeded passwords are written as given. A password reset token lasts 15 minutes, and confirming it signs the user out everywhere and verifies the email. A taken `external_id` is refused, and `email_verified` can be set but not unset.",
   },
   {
     name: 'Authentication',
     tags: ['user-management.authentication', 'user-management.magic-auth'],
-    notes:
-      "All grant types are hand-written rather than generated from the spec, and only production's public grant names are accepted: anything else is the 422 production's body validation gives. Refresh tokens rotate on every exchange, with the documented 30-second replay grace period, and a refresh can only switch into an organization the user is an active member of. A pending_authentication_token is bound to the step that issued it, so an MFA challenge or email-verification gate cannot be skipped by spending its token on another grant. A Magic Auth or email verification code is single-use, locks after three wrong codes, and is compared only while it is the latest issued to the user: requesting another retires it.",
   },
   {
     name: 'Organization Memberships',
     tags: ['user-management.organization-membership', 'user-management.organization-membership.groups'],
     seedVia: 'memberships',
-    notes:
-      'Seeded via `memberships` nested under an organization. A role slug must name a role of the organization or of the environment (`member` and `admin` always resolve, as production creates both with every environment), else `422 invalid_role`; listing wants an `organization_id` or `user_id`. Multiple roles are assumed enabled for the environment.',
   },
   {
     name: 'Groups',
     tags: ['groups'],
     seedVia: 'groups',
-    notes:
-      'Seeded via `groups` nested under an organization. Members reference a seeded membership by email. Names are unique within an organization (a bare `409`, as production renders it), `name` is at most 256 characters, `description` a non-empty string of at most 150, and a group holds at most 500 members.',
   },
   {
     name: 'Invitations',
     tags: ['user-management.invitations'],
     seedKeys: ['invitations'],
-    notes:
-      "State is derived when an invitation is read, so one expires on its own: 7 days by default, or `expires_in_days` from 1 to 30. A second open invitation for the address, an existing account on an environment invitation, an unknown role slug, and accepting, revoking or resending a non-pending invitation are refused with production's codes. There is no DELETE route, as there is none in the spec.",
   },
   {
     name: 'SSO',
     tags: ['sso', 'connections'],
     seedKeys: ['connections'],
-    notes:
-      'Seeded connections carry `profiles`, which drive the SSO login flow. `POST /connections` follows production: one SSO connection per organization (`connection_already_exists_for_organization`, with `organization_id` in the body), SAML and OIDC types only with their `saml_options` / `oidc_options` present, no `domains` field (seed-only), and a created connection starts `validating` until the first login through it activates it and emits `connection.activated`. `GET /connections` lists SSO connections only. `GET /sso/authorize` requires `client_id`, sends a `validating` connection through and redirects an `inactive` one back with `error=connection_unlinked`; `POST /sso/token` requires `client_id` and `client_secret` (an environment API key); authorization codes live five minutes.',
   },
   {
     name: 'Directory Sync',
     tags: ['directories', 'directory-users', 'directory-groups'],
     seedKeys: ['directories'],
-    notes:
-      'Read-only over HTTP, as production is: a directory is connected in the dashboard, so there is no POST route to emulate. Seed `directories` to get one, with its groups, its users, and group-to-role mappings resolved onto the organization membership (which then reports `directory_managed`); seeding emits `dsync.activated` (for a `linked` directory), `dsync.group.created`, `dsync.user.created`, and `dsync.group.user_added` for each seeded membership (queryable at `GET /events`, not delivered — seeded endpoints register after), and `DELETE /directories/:id` emits a delivered `dsync.deleted` — except for an `unlinked` directory with no groups, which production deletes silently. Removing a user from a group emits `dsync.group.user_removed`.',
   },
   {
     name: 'Multi-Factor Auth',
     tags: ['multi-factor-auth', 'multi-factor-auth.challenges', 'user-management.multi-factor-authentication'],
-    notes:
-      'TOTP codes are accepted without verifying the shared secret. A factor is listed and challenged only once its enrollment challenge has been verified, and a challenge is single-use and locks after three wrong codes, as in production; a challenge is named by id, so issuing another does not retire it.',
   },
   {
     name: 'FGA / Authorization',
     tags: ['authorization', 'permissions'],
     seedKeys: ['roles', 'permissions'],
-    notes:
-      "Checks and effective-permission listings include direct and native group role assignments, live group membership, and ancestor inheritance (`parent_resource_id`). Group grants support create/list/get and removal by ID or criteria; bulk replacement is not implemented. Role, permission, and resource bodies follow production's slug patterns (`org-` prefix or a generated slug for organization roles), lengths, and whitelists, answering 422 with production's field messages. Environment roles cannot be deleted over HTTP, as in production; an organization role a membership still holds answers 409 `role_has_assignments`. The organization role priority endpoint takes `role_priority_order`, naming every applying role once; the emulator keeps one priority per role, so an environment role reordered through one organization is reordered everywhere. Resource types are not modeled: any well-formed `resource_type_slug` is accepted on roles and permissions, and permission scopes are not checked against the role scope. Every organization owns an implicit `organization` resource whose `external_id` is the organization `external_id`, falling back to the organization id; resources created without parent fields attach to it, and it cannot be created, updated, or deleted directly.",
   },
   {
     name: 'Audit Logs',
     tags: ['audit-logs'],
-    notes:
-      "Events are ingested with production's `{organization_id, event}` body, validated the way its DTO validates them, and stored under their idempotency key. No action schemas are registered, so any action, target type and metadata are accepted. Export generation is not implemented.",
   },
   {
     name: 'Vault',
     tags: ['vault'],
-    notes: 'Object CRUD is implemented; data-key encryption endpoints are not.',
   },
   {
     name: 'Feature Flags',
@@ -187,22 +165,17 @@ export const FEATURES: FeatureDef[] = [
       'user-management.users.feature-flags',
     ],
     seedKeys: ['featureFlags'],
-    notes:
-      "Every spec endpoint is implemented at its documented verb; the emulator additionally accepts `POST` on enable/disable and `PUT` on target creation as aliases, which production rejects. Flags resolve into the `feature_flags` access-token claim, the per-user and per-organization list endpoints, and `GET /sdk/feature-flags` — the Node SDK runtime client's polling endpoint, which the spec does not define. Production has no create-flag endpoint, so flags come from the `featureFlags` seed key.",
   },
   {
     name: 'API Keys',
     tags: ['api_keys', 'organizations.api_keys'],
     seedKeys: ['apiKeys'],
-    notes: 'Created and seeded keys authenticate real requests.',
   },
   {
     name: 'Pipes / Connected Apps',
     tags: ['pipes', 'pipes.provider', 'user-management.data-providers', 'organizations.data-providers'],
     emulatorCreateRoutes: ['/pipes'],
     seedKeys: ['connectedAccounts'],
-    notes:
-      'User-owned connected-account CRUD and access-token retrieval are supported; a refresh mints a local `di_mock_` token rather than contacting the provider. Organization-owned connected accounts are not implemented. The older `/pipes/connections` routes remain emulator-specific.',
   },
   {
     name: 'Applications',
@@ -215,70 +188,52 @@ export const FEATURES: FeatureDef[] = [
       'workos-connect',
     ],
     seedKeys: ['connectApplications'],
-    notes:
-      'A redirect URI is stored as a bare string, so `default` is accepted on create and update but always reported as `false`. `uses_pkce` and `is_first_party` are stored and reported; `uses_pkce` makes a public client, whose codes `/oauth2/token` redeems by PKCE verifier alone and which may present no client secret. `POST /oauth2/register` (RFC 7591, outside the spec) creates `was_dynamically_registered` applications, which `registration_types` filters. `POST /client/token` mints a signed, short-lived token, but the spec documents only the `{ token }` envelope — the claims inside are an emulator convention, and no Client GraphQL API is served for it to authenticate against.',
   },
   {
     name: 'JWT Templates',
     tags: ['user-management.jwt-template'],
     seedKeys: ['jwtTemplate'],
-    notes: 'Claims render into every access token. Filters, conditionals, and loops are not supported.',
   },
   {
     name: 'Webhooks',
     tags: ['webhooks'],
     seedKeys: ['webhookEndpoints'],
-    notes:
-      '`POST` and `PATCH /webhook_endpoints` validate as production does: an HTTPS `endpoint_url`, a non-empty `events` list from the subscribable catalog, `status` of `enabled` or `disabled`, and a generated signing secret (returned on every read). One emulator-only relaxation: a plain `http://` URL is accepted for a loopback host (`localhost`, `127.0.0.0/8`, `::1`), so a local receiver can be registered over the API. Seed an endpoint to point it at any other `http://` receiver, pin its `secret`, or subscribe it to every event with an empty `events` list. Delivery is fire-and-forget with a 5s timeout and no retries. Endpoints registered in a seed file do not receive events from that same seed file.',
   },
   {
     name: 'Events',
     tags: ['events'],
     automatic: true,
-    notes:
-      'Emitted as a side effect of every other operation. All are queryable at `GET /events`, including those with no registered webhook endpoint; the `events` filter is required, as in production.',
   },
   {
     name: 'AuthKit Configuration',
     tags: ['user-management.redirect-uris', 'user-management.cors-origins', 'user-management.authkit-oauth-resources'],
     seedKeys: ['resourceIndicators'],
-    notes:
-      'Redirect URIs are accepted but not enforced against authorize requests. MCP resource indicators (RFC 8707) are stored and, when a request names a registered one, become the `aud` of tokens from `/oauth2/token`; once any is registered, a dynamically registered client naming an unregistered one at `/oauth2/authorize` is answered `invalid_target`, and one naming none is bound to the resource flagged `default`. Resources are matched by normalized URL; wildcard patterns are refused.',
   },
   {
     name: 'Admin Portal',
     tags: ['admin-portal'],
-    notes:
-      "Generates a portal link (`201`) for an existing organization (`404` otherwise) and one of production's intents — `enterprise_managed_authorization` included, which needs an active Okta connection (`400 okta_connection_required`); an unknown or missing intent is a `400 invalid_portal_link_intent`. The portal itself is not served, and `certificate_renewal` is not held to production's expiring-certificate check, since certificates are not modeled.",
   },
   {
     name: 'Widgets',
     tags: ['widgets'],
     emulatorCreateRoutes: ['/_widgets'],
-    notes:
-      "Mints widget tokens (`201`) under production's rules: scopes must be production's, an organization must exist and a user hold an active membership in it (`404`), and a session may be org-only (standalone scopes) or user-only (no scopes); a user's `permissions` are not narrowed to the role's grants. Serves the private `/_widgets/ApiKeys/*` routes the org-scope `<ApiKeys>` widget calls; that surface is outside the public spec, so it is not counted here. Other widgets and `scope=\"user\"` API keys are not implemented.",
   },
   {
     name: 'Radar',
     tags: ['radar'],
-    notes: 'Attempt listing only; no risk signals are computed.',
   },
   {
     name: 'Agent Auth',
     tags: ['agents.blueprints', 'agents.blueprints.tokens', 'agents.instances', 'agents.sessions'],
     seedKeys: ['agentBlueprints'],
-    notes:
-      'Blueprint CRUD, all four token grants (`user_delegated`, `autonomous`, `agent_delegated`, `refresh`), token validation, and instance and session listing, lookup, deletion and revocation. Agent access tokens are signed with the emulator key (`typ: at+jwt`, `sub_profile: ai_agent`) so JWKS validation works; delegated permissions are recomputed from the member’s current role at every mint and refresh. Agent tokens carry the `workos-emulate` placeholder audience, since nothing at the API-key-authenticated token endpoint names a client.',
   },
   {
     name: 'Agent Registration',
     tags: ['agents.registrations'],
-    notes: 'Not implemented.',
   },
   {
     name: 'Platform Teams',
     tags: ['platform.teams'],
-    notes: 'Not implemented.',
   },
 ];
 
@@ -456,7 +411,6 @@ export interface FeatureRow {
   read: CoverageCell;
   write: CoverageCell;
   setup: SetupCell;
-  notes?: string;
 }
 
 export interface SupportMatrix {
@@ -619,7 +573,6 @@ export function buildMatrix(
       read: toCell(coveredReads, reads.length),
       write: toCell(coveredWriteOps.length, writes.length),
       setup: deriveSetup(feature, seedConfigKeys, coveredCreates),
-      notes: feature.notes,
     });
   }
 
@@ -629,6 +582,14 @@ export function buildMatrix(
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
+
+/**
+ * SUPPORTED.md is hand-written except for the region between these two
+ * markers, which the generator rewrites in place. Keeping the prose in the
+ * Markdown file means editing it is editing Markdown, not a TypeScript string.
+ */
+export const GENERATED_BEGIN = '<!-- gen:supported:begin -->';
+export const GENERATED_END = '<!-- gen:supported:end -->';
 
 const ICONS: Record<SupportLevel, string> = {
   full: '✅',
@@ -649,66 +610,109 @@ function escapeCell(value: string): string {
   return value.replace(/\|/g, '\\|');
 }
 
+/**
+ * GitHub's heading-to-anchor rule: lowercase, drop everything but letters,
+ * digits, spaces and hyphens, then turn spaces into hyphens. "FGA / Authorization"
+ * becomes `fga--authorization`, which is the anchor GitHub actually renders.
+ */
+export function slugifyHeading(heading: string): string {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N} -]/gu, '')
+    .replace(/ /g, '-');
+}
+
+/** The level-2 headings of a Markdown document, as anchor slugs. Fenced code is skipped. */
+export function parseSectionSlugs(markdown: string): Set<string> {
+  const slugs = new Set<string>();
+  let inFence = false;
+  for (const line of markdown.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const match = /^## (.+?)\s*$/.exec(line);
+    if (match) slugs.add(slugifyHeading(match[1]));
+  }
+  return slugs;
+}
+
+/** A feature with at least one implemented endpoint has behavior worth documenting. */
+export function isImplemented(row: FeatureRow): boolean {
+  return row.read.covered > 0 || row.write.covered > 0;
+}
+
+/**
+ * Every implemented feature must have a `## <Feature>` section in the parity
+ * doc, so the table always has somewhere to send the reader and a new feature
+ * cannot ship undocumented. Features with no routes are exempt: their row
+ * already says everything there is to say.
+ */
+export function checkBehaviorSections(matrix: SupportMatrix, sections: Set<string>, docPath: string): void {
+  const missing = matrix.rows.filter((row) => isImplemented(row) && !sections.has(slugifyHeading(row.name)));
+  if (missing.length > 0) {
+    throw new Error(
+      `${docPath} has no "## <Feature>" section for: ${missing.map((row) => row.name).join(', ')}. ` +
+        `Add one, even a sentence long, so the table has somewhere to link.`,
+    );
+  }
+}
+
 export interface RenderOptions {
   /** Version of @workos/openapi-spec the matrix was generated from. */
   specVersion?: string;
+  /**
+   * The parity doc as a link target relative to the output file, with the
+   * slugs of its sections. A feature that has a section links to it.
+   */
+  behaviorDoc?: { path: string; sections: Set<string> };
 }
 
-export function generateSupportedMarkdown(matrix: SupportMatrix, options: RenderOptions = {}): string {
+/** The generated region: the headline number and the matrix. Everything around it is hand-written. */
+export function renderMatrix(matrix: SupportMatrix, options: RenderOptions = {}): string {
   const { rows, totals } = matrix;
   const pct = totals.total > 0 ? ((totals.covered / totals.total) * 100).toFixed(1) : '0.0';
   const specNote = options.specVersion ? ` (\`@workos/openapi-spec@${options.specVersion}\`)` : '';
 
   const lines: string[] = [
-    '<!-- Generated by `bun run gen:supported`. Do not edit by hand. -->',
-    '',
-    '# Supported Features',
-    '',
     `The emulator implements **${totals.covered} of ${totals.total}** endpoints in the WorkOS OpenAPI spec${specNote} (**${pct}%**).`,
     '',
-    'Endpoint coverage says whether a route exists, not whether a',
-    'feature is usable; for example, Directory Sync implements every endpoint the spec defines for it and is',
-    'still unusable, because nothing can create a directory. The **Set up** column is the one that',
-    'answers "can I actually emulate this?".',
-    '',
-    '| Column     | Meaning                                                                    |',
-    '| ---------- | -------------------------------------------------------------------------- |',
-    '| **Read**   | `GET` endpoints implemented / defined in the spec                          |',
-    '| **Write**  | `POST`/`PUT`/`PATCH`/`DELETE` endpoints implemented / defined in the spec   |',
-    '| **Set up** | How data gets in: ✅ seed file, ⚠️ API calls only, ❌ no way to create data |',
-    '',
-    '✅ full · ⚠️ partial · ❌ none · — not applicable',
-    '',
-    '| Feature | Read | Write | Set up | Notes |',
-    '| ------- | ---- | ----- | ------ | ----- |',
+    '| Feature | Read | Write | Set up |',
+    '| ------- | ---- | ----- | ------ |',
   ];
 
   for (const row of rows) {
-    const cells = [
-      escapeCell(row.name),
-      renderCoverage(row.read),
-      renderCoverage(row.write),
-      renderSetup(row.setup),
-      escapeCell(row.notes ?? ''),
-    ];
+    const slug = slugifyHeading(row.name);
+    const doc = options.behaviorDoc;
+    const name =
+      doc && doc.sections.has(slug) ? `[${escapeCell(row.name)}](${doc.path}#${slug})` : escapeCell(row.name);
+    const cells = [name, renderCoverage(row.read), renderCoverage(row.write), renderSetup(row.setup)];
     lines.push(`| ${cells.join(' | ')} |`);
   }
 
-  lines.push(
-    '',
-    '## How this file is generated',
-    '',
-    'Every column except **Notes** is derived, so the table cannot drift from the code:',
-    '',
-    "- **Read** / **Write** come from cross-referencing the spec's paths against the routes",
-    '  registered in `src/workos/routes/`.',
-    '- **Set up** comes from the `EmulatorSeedConfig` keys in `src/index.ts`. A feature declaring',
-    '  a seed key that the interface does not define fails the build.',
-    "- **Feature** groups the spec's API-shaped tags into products, in",
-    '  `scripts/gen-supported-lib.ts`. A spec tag with no feature also fails the build, so a new',
-    '  WorkOS product cannot silently disappear from this table.',
-    '',
-  );
-
   return lines.join('\n');
+}
+
+/**
+ * Replace the generated region of a hand-written document. The markers stay
+ * on their own lines so the next run finds them again, and everything outside
+ * them comes back untouched.
+ */
+export function spliceGenerated(document: string, region: string): string {
+  const begin = document.indexOf(GENERATED_BEGIN);
+  const end = document.indexOf(GENERATED_END);
+  if (begin === -1 || end === -1) {
+    const marker = begin === -1 ? GENERATED_BEGIN : GENERATED_END;
+    throw new Error(
+      `Document has no ${marker} marker; the generated table goes between the two gen:supported markers.`,
+    );
+  }
+  if (end < begin) {
+    throw new Error('The gen:supported markers are out of order: begin must come before end.');
+  }
+  const head = document.slice(0, begin + GENERATED_BEGIN.length);
+  const tail = document.slice(end);
+  return `${head}\n\n${region}\n\n${tail}`;
 }

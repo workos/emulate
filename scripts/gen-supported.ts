@@ -1,8 +1,14 @@
 #!/usr/bin/env bun
 /**
  * Codegen script: reads the WorkOS OpenAPI spec, the emulator's registered
- * routes, and the EmulatorSeedConfig keys, and generates the feature support
- * matrix (SUPPORTED.md).
+ * routes, and the EmulatorSeedConfig keys, and rewrites the feature support
+ * matrix inside SUPPORTED.md.
+ *
+ * SUPPORTED.md is hand-written around a generated region marked by two
+ * `gen:supported` comments; only that region is replaced. Each row links to
+ * its `## <Feature>` section in docs/behavior.md, and an implemented feature
+ * with no section fails the run, so the parity doc cannot fall behind the
+ * table any more than the table can fall behind the code.
  *
  * By default the spec comes from the @workos/openapi-spec devDependency, so
  * regenerating is just:
@@ -10,14 +16,13 @@
  * A local spec file can still be passed explicitly:
  *   npm run gen:supported -- path/to/openapi.yaml [--out <file>] [--dry-run]
  *
- * The generated file is committed and CI re-runs this script to check for
- * drift, so the table cannot fall behind the code. Running twice on the same
- * inputs produces identical output (idempotent).
+ * The result is committed and CI re-runs this script to check for drift.
+ * Running twice on the same inputs produces identical output (idempotent).
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve, extname, join, dirname } from 'node:path';
+import { resolve, relative, extname, join, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { format, type FormatConfig } from 'oxfmt';
@@ -29,13 +34,19 @@ import {
   parseRoleHelperRoutes,
   parseSeedConfigKeys,
   buildMatrix,
-  generateSupportedMarkdown,
+  renderMatrix,
+  spliceGenerated,
+  parseSectionSlugs,
+  checkBehaviorSections,
+  GENERATED_BEGIN,
+  GENERATED_END,
 } from './gen-supported-lib.js';
 
 const ROUTES_DIR = 'src/workos/routes';
 const ROLE_HELPER_FILE = 'src/workos/role-helpers.ts';
 const SERVER_FILE = 'src/core/server.ts';
 const INDEX_FILE = 'src/index.ts';
+const BEHAVIOR_DOC = 'docs/behavior.md';
 
 /** Load the project's oxfmt config so generated output matches `npm run fmt`. */
 function loadFormatConfig(): FormatConfig {
@@ -112,14 +123,34 @@ async function main(): Promise<void> {
   // buildMatrix throws on an unmapped spec tag or a stale seed key — that is
   // the drift check, and it must fail the build rather than emit a wrong table.
   const matrix = buildMatrix(operations, routes, seedKeys);
-  const markdown = generateSupportedMarkdown(matrix, {
+
+  // SUPPORTED.md is hand-written around the generated region, so it has to
+  // exist already; this script only fills in what lies between the markers.
+  const resolvedOut = resolve(outFile);
+  if (!existsSync(resolvedOut)) {
+    console.error(
+      `${outFile} not found. It is hand-written around a generated region; create it with the ` +
+        `${GENERATED_BEGIN} and ${GENERATED_END} markers and run again.`,
+    );
+    process.exit(1);
+  }
+
+  // The prose about each feature lives in docs/behavior.md, one `## <Feature>`
+  // section per row. The table links there, and an implemented feature with
+  // no section is a build failure, so the parity doc cannot fall behind.
+  const resolvedDoc = resolve(BEHAVIOR_DOC);
+  const sections = parseSectionSlugs(readFileSync(resolvedDoc, 'utf-8'));
+  checkBehaviorSections(matrix, sections, BEHAVIOR_DOC);
+
+  const region = renderMatrix(matrix, {
     specVersion: positional[0] ? undefined : readSpecVersion(require),
+    behaviorDoc: { path: relative(dirname(resolvedOut), resolvedDoc).split(sep).join('/'), sections },
   });
+  const markdown = spliceGenerated(readFileSync(resolvedOut, 'utf-8'), region);
 
   // Run the output through oxfmt (which aligns Markdown tables) so a freshly
   // generated file is already `fmt:check`-clean — otherwise every regeneration
   // would trip the pre-push hook and CI.
-  const resolvedOut = resolve(outFile);
   const formatted = await format(resolvedOut, markdown, loadFormatConfig());
   if (formatted.errors.length > 0) {
     console.error('oxfmt reported errors while formatting generated output:');
