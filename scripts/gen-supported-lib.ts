@@ -222,7 +222,7 @@ export const FEATURES: FeatureDef[] = [
     tags: ['webhooks'],
     seedKeys: ['webhookEndpoints'],
     notes:
-      '`POST` and `PATCH /webhook_endpoints` validate as production does: an HTTPS `endpoint_url`, a non-empty `events` list from the subscribable catalog, `status` of `enabled` or `disabled`, and a generated signing secret (returned on every read). Seed an endpoint to point it at a plain `http://` receiver, pin its `secret`, or subscribe it to every event with an empty `events` list. Delivery is fire-and-forget with a 5s timeout and no retries. Endpoints registered in a seed file do not receive events from that same seed file.',
+      '`POST` and `PATCH /webhook_endpoints` validate as production does: an HTTPS `endpoint_url`, a non-empty `events` list from the subscribable catalog, `status` of `enabled` or `disabled`, and a generated signing secret (returned on every read). One emulator-only relaxation: a plain `http://` URL is accepted for a loopback host (`localhost`, `127.0.0.0/8`, `::1`), so a local receiver can be registered over the API. Seed an endpoint to point it at any other `http://` receiver, pin its `secret`, or subscribe it to every event with an empty `events` list. Delivery is fire-and-forget with a 5s timeout and no retries. Endpoints registered in a seed file do not receive events from that same seed file.',
   },
   {
     name: 'Events',

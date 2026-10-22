@@ -139,10 +139,24 @@ describe('Webhook endpoint routes', () => {
       expect(await json(res)).toStrictEqual(validationFailed(errors));
     });
 
+    // The one deliberate departure from production's HTTPS rule: a receiver on this machine.
     it.each([
-      ['an http URL', 'http://example.com/webhooks'],
+      'http://localhost:5005/webhooks',
+      'http://app.localhost:5005/webhooks',
+      'http://127.0.0.1:5005/webhooks',
+      'http://127.1.2.3:5005/webhooks',
+      'http://[::1]:5005/webhooks',
+    ])('accepts the plain http loopback receiver %s', async (endpoint_url) => {
+      const ep = await create({ ...VALID, endpoint_url });
+      expect(ep.endpoint_url).toBe(endpoint_url);
+    });
+
+    it.each([
+      ['an http URL on a non-loopback host', 'http://example.com/webhooks'],
+      ['an http URL on a private, non-loopback address', 'http://10.0.0.5/webhooks'],
+      ['an http URL whose host only starts with localhost', 'http://localhost.example.com/webhooks'],
       ['something that is not a URL', 'not a url'],
-      ['a non-web scheme', 'ftp://example.com/webhooks'],
+      ['a non-web scheme', 'ftp://localhost/webhooks'],
     ])('returns 422 invalid_url for %s', async (_case, endpoint_url) => {
       const res = await post({ ...VALID, endpoint_url });
       expect(res.status).toBe(422);
@@ -305,7 +319,7 @@ describe('Webhook endpoint routes', () => {
       expect(await json(res)).toStrictEqual(validationFailed(errors));
     });
 
-    it('returns 422 invalid_url for an http endpoint_url', async () => {
+    it('returns 422 invalid_url for an http endpoint_url off the loopback, and accepts one on it', async () => {
       const created = await create();
       const res = await patch(created.id, { endpoint_url: 'http://example.com/webhooks' });
       expect(res.status).toBe(422);
@@ -313,6 +327,10 @@ describe('Webhook endpoint routes', () => {
         message: 'The `endpoint_url` must be an HTTPS URL',
         code: 'invalid_url',
       });
+
+      const local = await patch(created.id, { endpoint_url: 'http://localhost:5005/webhooks' });
+      expect(local.status).toBe(200);
+      expect((await json(local)).endpoint_url).toBe('http://localhost:5005/webhooks');
     });
 
     it('returns 422 unknown_event_type for a name outside the subscribable catalog', async () => {

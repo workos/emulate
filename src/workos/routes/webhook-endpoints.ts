@@ -66,15 +66,31 @@ function validateStatus(value: unknown): ValidationItem | undefined {
   return { code: 'status_required', message: `status must be one of the following values: ${STATUSES.join(', ')}` };
 }
 
-/** The controller's `HttpsUrl` rule, the part of it that is not deployment policy. */
-function assertHttpsUrl(value: string): void {
+/** `localhost`, `*.localhost`, `127.0.0.0/8` and `::1` — what a receiver on this machine answers on. */
+function isLoopbackHost(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    hostname === '[::1]'
+  );
+}
+
+/**
+ * The controller's `HttpsUrl` rule, with one deliberate emulator-only relaxation: a plain
+ * `http://` URL is accepted when its host is a loopback address. Production has no local
+ * receiver to reach; an emulator exists to deliver to one, and a test's receiver rarely has a
+ * certificate. Every other host is held to HTTPS exactly as production holds it.
+ */
+function assertWebhookUrl(value: string): void {
   let parsed: URL | undefined;
   try {
     parsed = new URL(value);
   } catch {
     parsed = undefined;
   }
-  if (parsed?.protocol !== 'https:') {
+  const allowed = parsed?.protocol === 'https:' || (parsed?.protocol === 'http:' && isLoopbackHost(parsed.hostname));
+  if (!allowed) {
     throw new WorkOSApiError(422, 'The `endpoint_url` must be an HTTPS URL', 'invalid_url');
   }
 }
@@ -111,7 +127,7 @@ export function webhookEndpointRoutes(ctx: RouteContext): void {
 
     const endpointUrl = body.endpoint_url as string;
     const events = body.events as string[];
-    assertHttpsUrl(endpointUrl);
+    assertWebhookUrl(endpointUrl);
     assertSubscribable(events);
     if (findOtherByUrl(endpointUrl)) throw duplicateEndpoint(endpointUrl);
 
@@ -160,7 +176,7 @@ export function webhookEndpointRoutes(ctx: RouteContext): void {
     const updates: Partial<WorkOSWebhookEndpoint> = {};
     if (body.endpoint_url !== undefined) {
       const endpointUrl = body.endpoint_url as string;
-      assertHttpsUrl(endpointUrl);
+      assertWebhookUrl(endpointUrl);
       updates.endpoint_url = endpointUrl;
     }
     if (body.events !== undefined) {

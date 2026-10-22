@@ -48,9 +48,8 @@ describe('Concurrent Webhook Delivery', () => {
 
   beforeAll(async () => {
     receiver = await startWebhookReceiver();
-    // Seeded, not registered over the API: the receiver is plain `http://`, which
-    // `POST /webhook_endpoints` refuses as production does, and an empty `events` list
-    // (every event) is a seed-only convenience.
+    // Seeded, not registered over the API: an empty `events` list (every event) is a seed-only
+    // convenience — `POST /webhook_endpoints` requires at least one event, as production does.
     emulator = await createEmulator({
       port: 0,
       seed: { webhookEndpoints: [{ endpoint_url: receiver.url, events: [] }] },
@@ -206,10 +205,9 @@ describe('Concurrent Webhook Delivery', () => {
   });
 
   it('should handle webhook endpoint failures gracefully', async () => {
-    // Create a second receiver that will fail. HTTPS, since the API requires it, and a port
-    // nothing listens on, so every delivery is refused.
+    // Create a second receiver that will fail
     const failingReceiver: WebhookReceiver = {
-      url: 'https://127.0.0.1:59999/webhooks',
+      url: 'http://127.0.0.1:59999/webhooks', // Non-existent port
       received: [],
       close: async () => {},
     };
