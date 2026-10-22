@@ -7,7 +7,6 @@ import {
   parseListParams,
   cursorPaginate,
   PlainApiError,
-  WorkOSApiError,
 } from '../../core/index.js';
 import { getWorkOSStore, type WorkOSStore } from '../store.js';
 import { formatGroup, formatMembershipBase, formatListResponse } from '../helpers.js';
