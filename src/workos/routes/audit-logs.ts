@@ -194,11 +194,7 @@ export function auditLogRoutes(ctx: RouteContext): void {
     const organizationId = body.organization_id as string;
     const event = body.event as IngestionEvent;
 
-    if (!ws.organizations.get(organizationId)) {
-      throw new WorkOSApiError(404, `Organization not found: '${organizationId}'.`, 'entity_not_found', undefined, {
-        entity_id: organizationId,
-      });
-    }
+    if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
     // Production resolves the version before anything else looks at the event, so an explicit
     // `version: 1` and an omitted one are the same event: same hash, same idempotency key.
