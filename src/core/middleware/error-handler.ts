@@ -1,12 +1,24 @@
 import type { Context, ErrorHandler, MiddlewareHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
+/**
+ * One entry of an error's `errors` array. Production's items carry a `code` and `message` and,
+ * for some codes, further detail (`minimum_length`, `warning`, `suggestions`, …), which is
+ * rendered as given.
+ */
+export interface ApiErrorItem {
+  field?: string;
+  code: string;
+  message?: string;
+  [detail: string]: unknown;
+}
+
 export class WorkOSApiError extends Error {
   constructor(
     public status: number,
     message: string,
     public code: string,
-    public errors?: Array<{ field?: string; code: string; message?: string }>,
+    public errors?: ApiErrorItem[],
   ) {
     super(message);
     this.name = 'WorkOSApiError';

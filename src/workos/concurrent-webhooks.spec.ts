@@ -74,7 +74,7 @@ describe('Concurrent Webhook Delivery', () => {
         },
         body: JSON.stringify({
           email: `concurrent${i}@example.com`,
-          password: 'password123',
+          password: 'correct-horse-battery',
         }),
       }),
     );
@@ -102,7 +102,7 @@ describe('Concurrent Webhook Delivery', () => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${emulator.apiKey}`,
         },
-        body: JSON.stringify({ email: 'user1@example.com', password: 'pass' }),
+        body: JSON.stringify({ email: 'user1@example.com', password: 'correct-horse-battery' }),
       }),
       fetch(`${emulator.url}/user_management/users`, {
         method: 'POST',
@@ -110,7 +110,7 @@ describe('Concurrent Webhook Delivery', () => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${emulator.apiKey}`,
         },
-        body: JSON.stringify({ email: 'user2@example.com', password: 'pass' }),
+        body: JSON.stringify({ email: 'user2@example.com', password: 'correct-horse-battery' }),
       }),
       // Create organizations
       fetch(`${emulator.url}/organizations`, {
@@ -160,7 +160,7 @@ describe('Concurrent Webhook Delivery', () => {
         },
         body: JSON.stringify({
           email: `rapid${i}@example.com`,
-          password: 'password123',
+          password: 'correct-horse-battery',
         }),
       });
     }
@@ -186,7 +186,7 @@ describe('Concurrent Webhook Delivery', () => {
         },
         body: JSON.stringify({
           email: `ordered${i}@example.com`,
-          password: 'password123',
+          password: 'correct-horse-battery',
         }),
       });
       const user = (await res.json()) as any;
@@ -235,7 +235,7 @@ describe('Concurrent Webhook Delivery', () => {
       },
       body: JSON.stringify({
         email: 'failing@example.com',
-        password: 'password123',
+        password: 'correct-horse-battery',
       }),
     });
 
@@ -255,7 +255,7 @@ describe('Concurrent Webhook Delivery', () => {
       },
       body: JSON.stringify({
         email: 'auth1@example.com',
-        password: 'password123',
+        password: 'correct-horse-battery',
         email_verified: true,
       }),
     });
@@ -269,7 +269,7 @@ describe('Concurrent Webhook Delivery', () => {
       },
       body: JSON.stringify({
         email: 'auth2@example.com',
-        password: 'password123',
+        password: 'correct-horse-battery',
         email_verified: true,
       }),
     });
@@ -283,7 +283,7 @@ describe('Concurrent Webhook Delivery', () => {
         body: JSON.stringify({
           grant_type: 'password',
           email: 'auth1@example.com',
-          password: 'password123',
+          password: 'correct-horse-battery',
         }),
       }),
       fetch(`${emulator.url}/user_management/authenticate`, {
@@ -292,7 +292,7 @@ describe('Concurrent Webhook Delivery', () => {
         body: JSON.stringify({
           grant_type: 'password',
           email: 'auth2@example.com',
-          password: 'password123',
+          password: 'correct-horse-battery',
         }),
       }),
     ];

@@ -19,6 +19,7 @@ export { JWTManager, type JWTPayload, type SigningKeyOptions } from './jwt.js';
 export { createServer, type ServerOptions } from './server.js';
 export { type ServicePlugin, type RouteContext } from './plugin.js';
 export {
+  type ApiErrorItem,
   WorkOSApiError,
   OauthApiError,
   EntityNotFoundError,

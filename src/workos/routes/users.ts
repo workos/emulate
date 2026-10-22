@@ -14,10 +14,12 @@ import {
   formatListResponse,
   findUserByEmail,
   emailsMatch,
+  normalizeEmail,
   requireEmailField,
   revokeApiKeysForOwner,
 } from '../helpers.js';
 import { deleteAgentInstancesForMembership } from '../agent-sessions.js';
+import { passwordStrengthError } from '../password-policy.js';
 
 export function userRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -52,6 +54,20 @@ export function userRoutes(ctx: RouteContext): void {
     }
 
     const password = body.password as string | undefined;
+    if (password) {
+      const tooWeak = passwordStrengthError(password, email);
+      if (tooWeak) throw tooWeak;
+    }
+
+    // An external_id names one user; production reports a taken one the way it reports a
+    // taken email, as a reason inside `user_creation_error`.
+    const externalId = (body.external_id as string) ?? null;
+    if (externalId && ws.users.findOneBy('external_id', externalId)) {
+      throw new WorkOSApiError(400, 'Could not create user.', 'user_creation_error', [
+        { code: 'external_id_already_used', message: 'External ID has already been used' },
+      ]);
+    }
+
     const user = ws.users.insert({
       object: 'user',
       email,
@@ -61,7 +77,7 @@ export function userRoutes(ctx: RouteContext): void {
       email_verified: (body.email_verified as boolean) ?? false,
       profile_picture_url: null,
       last_sign_in_at: null,
-      external_id: (body.external_id as string) ?? null,
+      external_id: externalId,
       metadata: (body.metadata as Record<string, string>) ?? {},
       locale: null,
       password_hash: password ? hashPassword(password) : null,
@@ -124,12 +140,58 @@ export function userRoutes(ctx: RouteContext): void {
     }
     if ('first_name' in body) updates.first_name = body.first_name ?? null;
     if ('last_name' in body) updates.last_name = body.last_name ?? null;
-    if ('email_verified' in body) updates.email_verified = body.email_verified;
-    if ('external_id' in body) updates.external_id = body.external_id ?? null;
-    if ('metadata' in body) updates.metadata = body.metadata ?? {};
+
+    // Verification is a fact about the address that this endpoint can assert, not retract:
+    // `true` verifies an unverified user, `false` on one is ignored, and `false` on a verified
+    // user is refused.
+    if (body.email_verified === false && user.email_verified) {
+      throw new WorkOSApiError(
+        400,
+        'The user email has already been verified and cannot be unverified.',
+        'email_already_verified',
+      );
+    }
+    if (body.email_verified === true) updates.email_verified = true;
+
     if ('password' in body && body.password) {
+      const tooWeak = passwordStrengthError(body.password as string, user.email);
+      if (tooWeak) throw tooWeak;
       updates.password_hash = hashPassword(body.password as string);
     }
+
+    if (body.email) {
+      // Reported in the 400 shape production's email change answers in, not the 422 the create
+      // route gives a malformed address.
+      const normalized = normalizeEmail(body.email, { requireShape: true });
+      if (!normalized.ok) {
+        throw new WorkOSApiError(400, 'Email must be a valid email address.', 'invalid_email');
+      }
+      const email = normalized.email;
+      if (!emailsMatch(email, user.email)) {
+        const holder = findUserByEmail(ws, email);
+        if (holder && holder.id !== user.id) {
+          throw new WorkOSApiError(400, 'This email is not available.', 'email_not_available');
+        }
+        updates.email = email;
+        // A new address is unproven until something verifies it; `email_verified: true` in the
+        // same request still wins, as it does in production, which applies it afterwards.
+        if (body.email_verified !== true) updates.email_verified = false;
+      }
+    }
+
+    if ('external_id' in body) {
+      const externalId = (body.external_id as string) ?? null;
+      const holder = externalId ? ws.users.findOneBy('external_id', externalId) : undefined;
+      if (holder && holder.id !== user.id) {
+        throw new WorkOSApiError(
+          400,
+          'The external_id provided has already been assigned to another user.',
+          'external_id_already_used',
+        );
+      }
+      updates.external_id = externalId;
+    }
+    if ('metadata' in body) updates.metadata = body.metadata ?? {};
 
     const updated = ws.users.update(user.id, updates);
     return c.json(formatUser(updated!));

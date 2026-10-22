@@ -240,7 +240,7 @@ describe('Events routes', () => {
     // Create a user which should trigger an event via collection hooks
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'test@example.com', password: 'password123' }),
+      body: JSON.stringify({ email: 'test@example.com', password: 'correct-horse-battery' }),
     });
 
     const res = await req('/events?events=user.created');

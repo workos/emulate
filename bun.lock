@@ -6,6 +6,9 @@
       "name": "@workos/emulate",
       "dependencies": {
         "@hono/node-server": "^2.1.1",
+        "@zxcvbn-ts/core": "^2.1.0",
+        "@zxcvbn-ts/language-common": "^2.0.1",
+        "@zxcvbn-ts/language-en": "^2.1.0",
         "chalk": "^5.6.2",
         "hono": "^4",
         "semver": "^7.7.4",
@@ -153,9 +156,17 @@
 
     "@workos/openapi-spec": ["@workos/openapi-spec@0.133.0", "https://socket-firewall.workos.dev/@workos/openapi-spec/-/openapi-spec-0.133.0.tgz", {}, "sha512-NnO632u/dzSWtqfiP/hltrlAygm6COSJ1KB2UV5r54GML4t8blX3LorBfg/CS4arM7BHjT1d1f5vPe8yc1jhdA=="],
 
+    "@zxcvbn-ts/core": ["@zxcvbn-ts/core@2.2.1", "https://socket-firewall.workos.dev/@zxcvbn-ts/core/-/core-2.2.1.tgz", { "dependencies": { "fastest-levenshtein": "1.0.16" } }, "sha512-Cg1JyRpCDIF+Dh3nauqygmmCYxogNVZDxSn+9PgkPD1HZ2QiJe4elruVJrGmYRS7muGmZ1hNJq8ySQdPv6GHaw=="],
+
+    "@zxcvbn-ts/language-common": ["@zxcvbn-ts/language-common@2.0.1", "https://socket-firewall.workos.dev/@zxcvbn-ts/language-common/-/language-common-2.0.1.tgz", {}, "sha512-P+v5MA/UNc9nb3FEOEoDgTyIGQc2vLc6m04pdf5YyuNOzrL0iNANhECk2TUp62JbrjouJVodqhMH0j1a8/24Bg=="],
+
+    "@zxcvbn-ts/language-en": ["@zxcvbn-ts/language-en@2.1.0", "https://socket-firewall.workos.dev/@zxcvbn-ts/language-en/-/language-en-2.1.0.tgz", {}, "sha512-I3n4AAbArjPAZtwCrk9MQnSrcj5+9rq8sic2rUU44fP5QaR17Vk8zDt61+R9dnP9ZRsj09aAUYML4Ash05qZjQ=="],
+
     "bun-types": ["bun-types@1.4.2", "https://socket-firewall.workos.dev/bun-types/-/bun-types-1.4.2.tgz", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "chalk": ["chalk@5.6.2", "https://socket-firewall.workos.dev/chalk/-/chalk-5.6.2.tgz", {}, "sha512-7NzBL0rN6fMUW+f7A6Io4h40qQlG+xGmtMxfbnH/K7TAtt8JQWVQK+6g0UXKMeVJoyV5EkkNsErQ8pVD3bLHbA=="],
+
+    "fastest-levenshtein": ["fastest-levenshtein@1.0.16", "https://socket-firewall.workos.dev/fastest-levenshtein/-/fastest-levenshtein-1.0.16.tgz", {}, "sha512-eRnCtTTtGZFpQCwhJiUOuxPQWRXVKYDn0b2PeHfXL6/Zi53SLAzAHfVhVWK2AryC/WH05kGfxhFIPvTF0SXQzg=="],
 
     "hono": ["hono@4.13.0", "https://socket-firewall.workos.dev/hono/-/hono-4.13.0.tgz", {}, "sha512-jhunvfHWxd7J5EFfSgH4xsYJzSe/lfqbUCxiyyeaQasUsXeEHXtzVid+7EOGByc5JnFa23SSFL3Y2RV/z1T+eQ=="],
 

@@ -1,16 +1,22 @@
-import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
+import { type RouteContext, notFound, parseJsonBody, WorkOSApiError, type ApiErrorItem } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatPasswordReset,
+  formatUser,
   generateVerificationToken,
   hashPassword,
   expiresIn,
   isExpired,
   findUserByEmail,
   requireEmailString,
+  revokeSessionsForUser,
 } from '../helpers.js';
+import { passwordPolicyErrors } from '../password-policy.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
 import type { EventBus } from '../event-bus.js';
+
+/** Production's `PASSWORD_RESET_TOKEN_EXPIRATION_IN_MINUTES` (`userland-password-resetter.ts`). */
+export const PASSWORD_RESET_TOKEN_TTL_MINUTES = 15;
 
 export function passwordResetRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -45,7 +51,7 @@ export function passwordResetRoutes(ctx: RouteContext): void {
       // link points at the emulator itself, carrying the token under the `token` query parameter
       // the confirm endpoint documents.
       password_reset_url: `${ctx.baseUrl}/user_management/password_reset/confirm?token=${token}`,
-      expires_at: expiresIn(60),
+      expires_at: expiresIn(PASSWORD_RESET_TOKEN_TTL_MINUTES),
     });
 
     return c.json(formatPasswordReset(pr), 201);
@@ -63,13 +69,15 @@ export function passwordResetRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, 'new_password is required', 'invalid_request');
     }
 
-    const resets = ws.passwordResets.all();
-    const pr = resets.find((r) => r.password_reset_token === token);
+    // Production looks the user up by the token, so a token it has never issued is a 404 for
+    // the user, not a 400 for the token.
+    const pr = ws.passwordResets.all().find((r) => r.password_reset_token === token);
     if (!pr) {
-      throw new WorkOSApiError(400, 'Invalid token', 'invalid_token');
-    }
-    if (isExpired(pr.expires_at)) {
-      throw new WorkOSApiError(400, 'Token has expired', 'expired_token');
+      throw new WorkOSApiError(
+        404,
+        `Could not locate user with provided token: '${token}'`,
+        'password_reset_token_not_found',
+      );
     }
 
     const user = ws.users.get(pr.user_id);
@@ -78,15 +86,34 @@ export function passwordResetRoutes(ctx: RouteContext): void {
       throw notFound('User', pr.user_id);
     }
 
-    ws.users.update(pr.user_id, {
+    // An expired token and a password that breaks the policy are reported together, in that
+    // order, the way production's resetter collects them before refusing.
+    const errors: ApiErrorItem[] = [];
+    if (isExpired(pr.expires_at)) {
+      errors.push({ code: 'password_reset_token_expired', message: 'The password reset token has expired.' });
+    }
+    errors.push(...passwordPolicyErrors(newPassword, user.email));
+    if (errors.length > 0) {
+      throw new WorkOSApiError(400, 'Could not reset password.', 'password_reset_error', errors);
+    }
+
+    // The response carries the user as production serializes it: the record it looked up by the
+    // token, before the reset touched it.
+    const userBeforeReset = formatUser(user);
+
+    ws.users.update(user.id, {
       password_hash: hashPassword(newPassword),
+      // The link reached the inbox, which is the proof email verification asks for.
+      email_verified: true,
     });
     ws.passwordResets.delete(pr.id);
+    // The reset is how an account is taken back from whoever else is signed in to it.
+    revokeSessionsForUser(ws, user.id);
 
     // Manual emit: the spec event fires on confirmation, not on a collection insert
     const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
     eventBus?.emit({ event: EVENTS.passwordResetSucceeded, data: formatPasswordReset(pr) });
 
-    return c.json({ user: { object: 'user', id: user.id, email: user.email } });
+    return c.json({ user: userBeforeReset });
   });
 }
