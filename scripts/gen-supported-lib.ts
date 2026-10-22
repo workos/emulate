@@ -110,7 +110,8 @@ export const FEATURES: FeatureDef[] = [
     name: 'User Management',
     tags: ['user-management.users', 'user-management.session-tokens', 'user-management.waitlists'],
     seedKeys: ['users'],
-    notes: 'Email-change confirm/send and waitlist endpoints are not implemented.',
+    notes:
+      "Email-change confirm/send and waitlist endpoints are not implemented. Passwords sent to create, update and the password-reset confirm are held to production's policy (10+ characters, 72 bytes at most, not containing the email, zxcvbn score 3+) and refused with production's error bodies; the breached-password lookup is not performed, and seeded passwords are written as given. A password reset token lasts 15 minutes, and confirming it signs the user out everywhere and verifies the email. A taken `external_id` is refused, and `email_verified` can be set but not unset.",
   },
   {
     name: 'Authentication',
@@ -122,18 +123,22 @@ export const FEATURES: FeatureDef[] = [
     name: 'Organization Memberships',
     tags: ['user-management.organization-membership', 'user-management.organization-membership.groups'],
     seedVia: 'memberships',
-    notes: 'Seeded via `memberships` nested under an organization.',
+    notes:
+      'Seeded via `memberships` nested under an organization. A role slug must name a role of the organization or of the environment (`member` and `admin` always resolve, as production creates both with every environment), else `422 invalid_role`; listing wants an `organization_id` or `user_id`. Multiple roles are assumed enabled for the environment.',
   },
   {
     name: 'Groups',
     tags: ['groups'],
     seedVia: 'groups',
-    notes: 'Seeded via `groups` nested under an organization. Members reference a seeded membership by email.',
+    notes:
+      'Seeded via `groups` nested under an organization. Members reference a seeded membership by email. Names are unique within an organization (a bare `409`, as production renders it), `name` is at most 256 characters, `description` a non-empty string of at most 150, and a group holds at most 500 members.',
   },
   {
     name: 'Invitations',
     tags: ['user-management.invitations'],
     seedKeys: ['invitations'],
+    notes:
+      "State is derived when an invitation is read, so one expires on its own: 7 days by default, or `expires_in_days` from 1 to 30. A second open invitation for the address, an existing account on an environment invitation, an unknown role slug, and accepting, revoking or resending a non-pending invitation are refused with production's codes. There is no DELETE route, as there is none in the spec.",
   },
   {
     name: 'SSO',
