@@ -722,9 +722,10 @@ export interface WorkOSWebhookEndpoint extends Entity {
   object: 'webhook_endpoint';
   endpoint_url: string;
   secret: string;
-  enabled: boolean;
+  /** `enabled` or `disabled`, the wire vocabulary `PATCH /webhook_endpoints/:id` sets it with. */
+  status: 'enabled' | 'disabled';
+  /** Subscribed event names. Empty subscribes to everything — reachable only through a seed. */
   events: string[];
-  description: string | null;
 }
 
 export interface WorkOSAgentBlueprintInvocableBy {

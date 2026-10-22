@@ -37,6 +37,7 @@ import {
   formatItContact,
   formatSSOProfile,
   formatAuthkitOauthResource,
+  formatWebhookEndpoint,
 } from './helpers.js';
 import { RESPONSE_SHAPE_REQUIREMENTS } from './generated/response-shapes.js';
 import type {
@@ -58,6 +59,7 @@ import type {
   WorkOSItContact,
   WorkOSSSOProfile,
   WorkOSAuthkitOauthResource,
+  WorkOSWebhookEndpoint,
 } from './entities.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -312,6 +314,17 @@ const authkitOauthResource: WorkOSAuthkitOauthResource = {
   updated_at: TS,
 };
 
+const webhookEndpoint: WorkOSWebhookEndpoint = {
+  id: 'we_01',
+  object: 'webhook_endpoint',
+  endpoint_url: 'https://example.com/webhooks',
+  secret: 'A1b2C3d4E5f6G7h8I9j0K1l2M',
+  status: 'enabled',
+  events: ['user.created'],
+  created_at: TS,
+  updated_at: TS,
+};
+
 const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown> }> = [
   { objectType: 'user', output: formatUser(user) },
   { objectType: 'organization', output: formatOrganization(organization, ws, { domains: [] }) },
@@ -331,6 +344,7 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
   { objectType: 'it_contact', output: formatItContact(itContact) },
   { objectType: 'profile', output: formatSSOProfile(ssoProfile) },
   { objectType: 'authkit_oauth_resource', output: formatAuthkitOauthResource(authkitOauthResource) },
+  { objectType: 'webhook_endpoint', output: formatWebhookEndpoint(webhookEndpoint) },
 ];
 
 /**

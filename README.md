@@ -1240,10 +1240,11 @@ webhookEndpoints:
   - endpoint_url: http://localhost:5005/webhooks
     secret: whsec_test # optional; generated if omitted
     events: []
+    status: enabled # optional; `enabled` or `disabled`
 ```
 
-Pin `secret` when your consumer verifies signatures: the API masks an endpoint's secret after
-creation, so a generated one can't be recovered for the consumer's environment.
+Pin `secret` when your consumer verifies signatures, so the secret is in its environment before
+anything talks to the emulator; a generated one is only discoverable through `GET /webhook_endpoints`.
 
 Or register at runtime:
 
@@ -1251,8 +1252,17 @@ Or register at runtime:
 curl -X POST http://localhost:4100/webhook_endpoints \
   -H "Authorization: Bearer sk_test_default" \
   -H "Content-Type: application/json" \
-  -d '{"endpoint_url":"http://localhost:5005/webhooks","secret":"whsec_test","events":[]}'
+  -d '{"endpoint_url":"https://app.example.com/webhooks","events":["user.created","session.created"]}'
 ```
+
+The API holds a request to what production holds it to: `endpoint_url` must be an HTTPS URL
+(422 `invalid_url`), `events` must name at least one event from the subscribable catalog (422
+`invalid_request_parameters`, with an `unknown_event_type` item per bad name), a URL another
+endpoint already uses is a 409 `duplicate_endpoint`, and the signing secret is generated — a
+`secret` in the body is ignored, as is `enabled`. `PATCH /webhook_endpoints/:id` takes
+`endpoint_url`, `events` and `status` (`enabled` or `disabled`) under the same rules. A plain
+`http://` receiver — the usual local setup — and the catch-all empty `events` list are therefore
+seed-only: the seed is where the emulator holds state the real API would never let you create.
 
 ### 2. Walk the login flow
 
@@ -1388,7 +1398,7 @@ Authentication events carry the spec payload `{ type, status, user_id, email, ip
 
 The full catalog (including names the emulator never emits, like `authentication.passkey_*` and `vault.*`) lives in `src/workos/generated/events.ts`, generated from the [`@workos/openapi-spec`](https://www.npmjs.com/package/@workos/openapi-spec) package.
 
-All events are also queryable at `GET /events` (filter with `?events[]=user.created`, or repeated `?events=`, which is what the Go SDK sends).
+All events are also queryable at `GET /events`. The `events` filter is required, as in production — there is no "all events" listing — in any form an SDK sends it (`?events=user.created,user.updated`, repeated `?events=`, or `?events[]=`); a name outside the catalog is a 400 `invalid_events_request`, and so is `range_start` combined with `after`.
 
 ### Caveats
 
@@ -1916,7 +1926,7 @@ connections:
 webhookEndpoints:
   - endpoint_url: http://localhost:5000/webhooks
     events: []
-    enabled: true
+    status: enabled
 ```
 
 ## Interactive Auth (E2E Browser Testing)

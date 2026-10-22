@@ -222,14 +222,14 @@ export const FEATURES: FeatureDef[] = [
     tags: ['webhooks'],
     seedKeys: ['webhookEndpoints'],
     notes:
-      'Delivery is fire-and-forget with a 5s timeout and no retries. Endpoints registered in a seed file do not receive events from that same seed file.',
+      '`POST` and `PATCH /webhook_endpoints` validate as production does: an HTTPS `endpoint_url`, a non-empty `events` list from the subscribable catalog, `status` of `enabled` or `disabled`, and a generated signing secret (returned on every read). Seed an endpoint to point it at a plain `http://` receiver, pin its `secret`, or subscribe it to every event with an empty `events` list. Delivery is fire-and-forget with a 5s timeout and no retries. Endpoints registered in a seed file do not receive events from that same seed file.',
   },
   {
     name: 'Events',
     tags: ['events'],
     automatic: true,
     notes:
-      'Emitted as a side effect of every other operation. All are queryable at `GET /events`, including those with no registered webhook endpoint.',
+      'Emitted as a side effect of every other operation. All are queryable at `GET /events`, including those with no registered webhook endpoint; the `events` filter is required, as in production.',
   },
   {
     name: 'AuthKit Configuration',

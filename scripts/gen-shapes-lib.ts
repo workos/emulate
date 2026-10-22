@@ -76,6 +76,8 @@ export const OBJECT_SCHEMA_MAP: readonly ShapeMapEntry[] = [
   // variant is an inline schema, so `secret` is carried as a tracked gap on this entry.
   { objectType: 'connect_application_secret', schemaName: 'NewConnectApplicationSecret' },
   { objectType: 'authkit_oauth_resource', schemaName: 'AuthkitOauthResource' },
+  // `secret` is spec-required: production serializes the signing secret on every read.
+  { objectType: 'webhook_endpoint', schemaName: 'WebhookEndpointJson' },
   // `connect_application` is deliberately absent: `ConnectApplication` is an allOf over a
   // four-way oneOf (first-party / dynamically registered / third-party oauth, and m2m), and
   // this catalog models one flat shape per object. Flattening it would drop the discriminated

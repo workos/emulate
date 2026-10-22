@@ -57,9 +57,8 @@ describe('EventBus', () => {
       object: 'webhook_endpoint',
       endpoint_url: 'http://localhost:9999/webhook',
       secret: 'whsec_test',
-      enabled: false,
+      status: 'disabled',
       events: [],
-      description: null,
     });
 
     bus.rebuildIndex();
@@ -74,9 +73,8 @@ describe('EventBus', () => {
       object: 'webhook_endpoint',
       endpoint_url: 'http://localhost:9999/webhook',
       secret: 'whsec_test',
-      enabled: true,
+      status: 'enabled',
       events: ['organization.created'],
-      description: null,
     });
 
     bus.rebuildIndex();
@@ -98,9 +96,8 @@ describe('EventBus', () => {
       object: 'webhook_endpoint',
       endpoint_url: 'http://localhost:9999/webhook',
       secret,
-      enabled: true,
+      status: 'enabled',
       events: [],
-      description: null,
     });
 
     bus.rebuildIndex();
@@ -141,9 +138,8 @@ describe('EventBus', () => {
       object: 'webhook_endpoint',
       endpoint_url: 'http://localhost:9999/webhook',
       secret: 'whsec_test',
-      enabled: true,
+      status: 'enabled',
       events: [],
-      description: null,
     });
 
     bus.rebuildIndex();

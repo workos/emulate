@@ -355,6 +355,11 @@ export const RESPONSE_SHAPE_REQUIREMENTS: Record<string, ResponseShapeRequiremen
       'updated_at',
     ],
   },
+  webhook_endpoint: {
+    schema: 'WebhookEndpointJson',
+    properties: ['created_at', 'endpoint_url', 'events', 'id', 'object', 'secret', 'status', 'updated_at'],
+    required: ['created_at', 'endpoint_url', 'events', 'id', 'object', 'secret', 'status', 'updated_at'],
+  },
 };
 
 /**
