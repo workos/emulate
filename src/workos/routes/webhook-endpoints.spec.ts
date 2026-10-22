@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
-import { workosPlugin } from '../index.js';
+import { workosPlugin, seedFromConfig, getWorkOSStore } from '../index.js';
+import { validateSeedConfig } from '../config-validator.js';
 
 const apiKeys: ApiKeyMap = { sk_test_wh: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_wh', 'Content-Type': 'application/json' };
@@ -350,6 +351,17 @@ describe('Webhook endpoint routes', () => {
       });
     });
 
+    // Production validates the DTO while resolving the handler's arguments, before the lookup;
+    // the controller-level rules (HTTPS, catalog) run after it.
+    it('checks the body before looking the endpoint up, as the DTO pipe does', async () => {
+      const malformed = await patch('we_nonexistent', { status: 'off' });
+      expect(malformed.status).toBe(422);
+      expect((await json(malformed)).code).toBe('invalid_request_parameters');
+
+      const wellFormed = await patch('we_nonexistent', { endpoint_url: 'http://example.com/webhooks' });
+      expect(wellFormed.status).toBe(404);
+    });
+
     it('no longer answers PUT, which production never served', async () => {
       const created = await create();
       const res = await req(`/webhook_endpoints/${created.id}`, {
@@ -357,6 +369,52 @@ describe('Webhook endpoint routes', () => {
         body: JSON.stringify({ status: 'disabled' }),
       });
       expect(res.status).toBe(404);
+    });
+  });
+
+  // The seed keeps what the API refuses — an `http://` receiver, a pinned secret, an empty
+  // `events` list meaning every event — but speaks the wire vocabulary and rejects what could
+  // never fire. `validateSeedConfig` (behind `--validate-config`) and `seedFromConfig` agree,
+  // so a bad seed is reported before the emulator starts, not at startup.
+  describe('seed config', () => {
+    const receiver = 'http://localhost:5005/webhooks';
+
+    it('seeds status, a pinned secret, an http receiver and the catch-all empty events list', () => {
+      const { store } = createTestApp();
+      seedFromConfig(store, 'http://localhost:0', {
+        webhookEndpoints: [
+          { endpoint_url: receiver, secret: 'whsec_pinned', events: [] },
+          {
+            endpoint_url: 'http://localhost:5006/webhooks',
+            events: ['user.created', 'user.created'],
+            status: 'disabled',
+          },
+          { endpoint_url: 'http://localhost:5007/webhooks', enabled: false },
+        ],
+      });
+      const [all, disabled, legacy] = getWorkOSStore(store).webhookEndpoints.all();
+      expect(all).toMatchObject({ endpoint_url: receiver, secret: 'whsec_pinned', status: 'enabled', events: [] });
+      expect(disabled).toMatchObject({ status: 'disabled', events: ['user.created'] });
+      expect(legacy.status).toBe('disabled');
+    });
+
+    it.each([
+      ['an unknown event name', { endpoint_url: receiver, events: ['user.cretaed'] }, 'events'],
+      [
+        'an event hidden from subscription',
+        { endpoint_url: receiver, events: ['authentication.mfa_failed'] },
+        'events',
+      ],
+      ['an invalid status', { endpoint_url: receiver, status: 'off' as 'enabled' }, 'status'],
+    ])('reports %s from validateSeedConfig and refuses it in seedFromConfig', (_case, endpoint, field) => {
+      const { valid, errors } = validateSeedConfig({ webhookEndpoints: [endpoint] });
+      expect(valid).toBe(false);
+      expect(errors.map((e) => e.path)).toEqual([`webhookEndpoints[0].${field}`]);
+
+      const { store } = createTestApp();
+      expect(() => seedFromConfig(store, 'http://localhost:0', { webhookEndpoints: [endpoint] })).toThrow(
+        `webhookEndpoints[0].${field}`,
+      );
     });
   });
 
