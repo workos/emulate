@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { createServer, type ApiKeyMap } from '../../core/index.js';
+import { createServer, type ApiKeyMap, type Store } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 
 const apiKeys: ApiKeyMap = { sk_test_inv: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_inv', 'Content-Type': 'application/json' };
@@ -11,9 +12,12 @@ function createTestApp() {
 
 describe('Invitation routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: Store;
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -58,18 +62,150 @@ describe('Invitation routes', () => {
   });
 
   it('lists invitations with organization_id filter', async () => {
+    const org = await json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'Inv Org' }) }));
     await req('/user_management/invitations', {
       method: 'POST',
-      body: JSON.stringify({ email: 'org@test.com', organization_id: 'org_123' }),
+      body: JSON.stringify({ email: 'org@test.com', organization_id: org.id }),
     });
     await req('/user_management/invitations', {
       method: 'POST',
       body: JSON.stringify({ email: 'no-org@test.com' }),
     });
 
-    const list = await json(await req('/user_management/invitations?organization_id=org_123'));
+    const list = await json(await req(`/user_management/invitations?organization_id=${org.id}`));
     expect(list.data).toHaveLength(1);
     expect(list.data[0].email).toBe('org@test.com');
+  });
+
+  describe('what production refuses to create', () => {
+    const invite = (body: Record<string, unknown>) =>
+      req('/user_management/invitations', { method: 'POST', body: JSON.stringify(body) });
+    const createOrg = async (name: string) =>
+      json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name }) }));
+
+    it('404s an unknown organization or inviter', async () => {
+      expect((await invite({ email: 'x@test.com', organization_id: 'org_nope' })).status).toBe(404);
+      expect((await invite({ email: 'x@test.com', inviter_user_id: 'user_nope' })).status).toBe(404);
+    });
+
+    it('refuses a second open invitation to the same organization', async () => {
+      const org = await createOrg('Twice Org');
+      expect((await invite({ email: 'dup@test.com', organization_id: org.id })).status).toBe(201);
+
+      const res = await invite({ email: 'Dup@test.com', organization_id: org.id });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        message: 'Email already invited to organization.',
+        code: 'email_already_invited_to_organization',
+      });
+
+      // Another organization is another invitation.
+      const other = await createOrg('Other Org');
+      expect((await invite({ email: 'dup@test.com', organization_id: other.id })).status).toBe(201);
+    });
+
+    it('refuses a second open invitation to the environment, or one for an existing account', async () => {
+      expect((await invite({ email: 'signup@test.com' })).status).toBe(201);
+      const again = await invite({ email: 'signup@test.com' });
+      expect(again.status).toBe(400);
+      expect(await json(again)).toEqual({ message: 'Email already invited.', code: 'email_already_invited' });
+
+      await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'exists@test.com' }) });
+      const exists = await invite({ email: 'exists@test.com' });
+      expect(exists.status).toBe(400);
+      expect(await json(exists)).toEqual({ message: 'User already exists.', code: 'user_already_exists' });
+    });
+
+    it('allows a new invitation once the open one is revoked', async () => {
+      const first = await json(await invite({ email: 'retry@test.com' }));
+      await req(`/user_management/invitations/${first.id}/revoke`, { method: 'POST' });
+      expect((await invite({ email: 'retry@test.com' })).status).toBe(201);
+    });
+
+    it('refuses a role slug that names no role, before the invitation exists', async () => {
+      const org = await createOrg('Role Org');
+      const res = await invite({ email: 'role@test.com', organization_id: org.id, role_slug: 'no-such-role' });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({ message: 'The role is invalid.', code: 'invalid_role' });
+      expect((await json(await req('/user_management/invitations'))).data).toHaveLength(0);
+
+      // The built-in environment roles need no seeding; a defined organization role resolves too.
+      expect((await invite({ email: 'admin@test.com', organization_id: org.id, role_slug: 'admin' })).status).toBe(201);
+      await req(`/authorization/organizations/${org.id}/roles`, {
+        method: 'POST',
+        body: JSON.stringify({ slug: 'auditor', name: 'Auditor' }),
+      });
+      expect((await invite({ email: 'auditor@test.com', organization_id: org.id, role_slug: 'auditor' })).status).toBe(
+        201,
+      );
+    });
+
+    it('holds expires_in_days to 1..30 and defaults to 7 days', async () => {
+      const tooLong = await invite({ email: 'long@test.com', expires_in_days: 31 });
+      expect(tooLong.status).toBe(400);
+      expect(await json(tooLong)).toEqual({
+        message: 'Expires in days must be less than or equal to 30.',
+        code: 'expires_in_days_too_long',
+      });
+      const tooShort = await invite({ email: 'short@test.com', expires_in_days: 0 });
+      expect(tooShort.status).toBe(400);
+      expect(await json(tooShort)).toEqual({
+        message: 'Expires in days must be greater than 1.',
+        code: 'expires_in_days_too_short',
+      });
+      expect((await invite({ email: 'float@test.com', expires_in_days: 1.5 })).status).toBe(422);
+
+      const day = 24 * 60 * 60 * 1000;
+      const lifetime = (inv: any) => new Date(inv.expires_at).getTime() - new Date(inv.created_at).getTime();
+      const defaulted = await json(await invite({ email: 'default@test.com' }));
+      expect(lifetime(defaulted)).toBeGreaterThan(7 * day - 1000);
+      expect(lifetime(defaulted)).toBeLessThanOrEqual(7 * day);
+      const month = await json(await invite({ email: 'month@test.com', expires_in_days: 30 }));
+      expect(lifetime(month)).toBeGreaterThan(30 * day - 1000);
+    });
+  });
+
+  describe('expiry', () => {
+    /** An invitation whose lifetime has run out, as the clock sees it. */
+    async function expiredInvitation() {
+      const created = await json(
+        await req('/user_management/invitations', { method: 'POST', body: JSON.stringify({ email: 'late@test.com' }) }),
+      );
+      getWorkOSStore(store).invitations.update(created.id, { expires_at: new Date(Date.now() - 1000).toISOString() });
+      return created;
+    }
+
+    it('reports an invitation as expired once its expires_at has passed, without any request', async () => {
+      const created = await expiredInvitation();
+      expect(created.state).toBe('pending');
+
+      const read = await json(await req(`/user_management/invitations/${created.id}`));
+      expect(read.state).toBe('expired');
+      expect((await json(await req(`/user_management/invitations/by_token/${created.token}`))).state).toBe('expired');
+      expect((await json(await req('/user_management/invitations'))).data[0].state).toBe('expired');
+    });
+
+    it('refuses to accept, revoke or resend an expired invitation', async () => {
+      const created = await expiredInvitation();
+
+      for (const action of ['accept', 'revoke']) {
+        const res = await req(`/user_management/invitations/${created.id}/${action}`, { method: 'POST' });
+        expect(res.status).toBe(400);
+        expect(await json(res)).toEqual({ message: 'Invite is not pending.', code: 'invite_not_pending' });
+      }
+      const resend = await req(`/user_management/invitations/${created.id}/resend`, { method: 'POST' });
+      expect(resend.status).toBe(400);
+      expect(await json(resend)).toEqual({ message: 'Invite has expired.', code: 'invite_expired' });
+    });
+
+    it('no longer counts an expired invitation as open', async () => {
+      await expiredInvitation();
+      const res = await req('/user_management/invitations', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'late@test.com' }),
+      });
+      expect(res.status).toBe(201);
+    });
   });
 
   it('gets invitation by id', async () => {
@@ -404,6 +540,11 @@ describe('Invitation routes', () => {
 
     const res = await req(`/user_management/invitations/${created.id}/accept`, { method: 'POST' });
     expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ message: 'Invite is not pending.', code: 'invite_not_pending' });
+
+    const again = await req(`/user_management/invitations/${created.id}/revoke`, { method: 'POST' });
+    expect(again.status).toBe(400);
+    expect((await json(again)).code).toBe('invite_not_pending');
   });
 
   it('resends an invitation with new token', async () => {
@@ -423,9 +564,9 @@ describe('Invitation routes', () => {
     expect(resent.accept_invitation_url).toContain(resent.token);
   });
 
-  // Resending puts the invitation back to pending, so the terminal metadata has to clear with it:
-  // a pending invitation that still carries accepted_at or revoked_at contradicts its own state.
-  it('clears acceptance metadata when an accepted invitation is resent', async () => {
+  // Resending sends the pending invitation again; it does not reopen one that was accepted or
+  // revoked, and production names which under a code of its own.
+  it('refuses to resend an accepted invitation', async () => {
     const user = await json(
       await req('/user_management/users', {
         method: 'POST',
@@ -435,21 +576,21 @@ describe('Invitation routes', () => {
     const created = await json(
       await req('/user_management/invitations', {
         method: 'POST',
-        body: JSON.stringify({ email: user.email }),
+        body: JSON.stringify({ email: user.email, organization_id: (await createOrgFor('Accepted Org')).id }),
       }),
     );
 
     const accepted = await json(await req(`/user_management/invitations/${created.id}/accept`, { method: 'POST' }));
-    expect(accepted.accepted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(accepted.state).toBe('accepted');
     expect(accepted.accepted_user_id).toBe(user.id);
 
-    const resent = await json(await req(`/user_management/invitations/${created.id}/resend`, { method: 'POST' }));
-    expect(resent.state).toBe('pending');
-    expect(resent.accepted_at).toBeNull();
-    expect(resent.accepted_user_id).toBeNull();
+    const res = await req(`/user_management/invitations/${created.id}/resend`, { method: 'POST' });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ message: 'Invite has already been accepted.', code: 'invite_accepted' });
+    expect((await json(await req(`/user_management/invitations/${created.id}`))).state).toBe('accepted');
   });
 
-  it('clears revocation metadata when a revoked invitation is resent', async () => {
+  it('refuses to resend a revoked invitation', async () => {
     const created = await json(
       await req('/user_management/invitations', {
         method: 'POST',
@@ -458,14 +599,16 @@ describe('Invitation routes', () => {
     );
 
     const revoked = await json(await req(`/user_management/invitations/${created.id}/revoke`, { method: 'POST' }));
-    expect(revoked.revoked_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(revoked.state).toBe('revoked');
 
-    const resent = await json(await req(`/user_management/invitations/${created.id}/resend`, { method: 'POST' }));
-    expect(resent.state).toBe('pending');
-    expect(resent.revoked_at).toBeNull();
+    const res = await req(`/user_management/invitations/${created.id}/resend`, { method: 'POST' });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ message: 'Invite has been revoked.', code: 'invite_revoked' });
+    expect((await json(await req(`/user_management/invitations/${created.id}`))).state).toBe('revoked');
   });
 
-  it('deletes an invitation', async () => {
+  // The spec has no DELETE for an invitation; revoking is how one is withdrawn.
+  it('has no delete route', async () => {
     const created = await json(
       await req('/user_management/invitations', {
         method: 'POST',
@@ -474,9 +617,10 @@ describe('Invitation routes', () => {
     );
 
     const delRes = await req(`/user_management/invitations/${created.id}`, { method: 'DELETE' });
-    expect(delRes.status).toBe(204);
-
-    const getRes = await req(`/user_management/invitations/${created.id}`);
-    expect(getRes.status).toBe(404);
+    expect(delRes.status).toBe(404);
+    expect((await req(`/user_management/invitations/${created.id}`)).status).toBe(200);
   });
+
+  const createOrgFor = async (name: string) =>
+    json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name }) }));
 });

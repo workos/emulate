@@ -296,10 +296,14 @@ export interface WorkOSSSOAuthorization extends Entity {
   expires_at: string;
 }
 
+/**
+ * An invitation stores what happened to it, not a state: `state` is derived from `revoked_at`,
+ * `accepted_at` and `expires_at` when it is read (see `invitationState`), as production derives
+ * it, so an invitation expires on its own.
+ */
 export interface WorkOSInvitation extends Entity {
   object: 'invitation';
   email: string;
-  state: 'pending' | 'accepted' | 'expired' | 'revoked';
   token: string;
   accept_invitation_url: string;
   organization_id: string | null;

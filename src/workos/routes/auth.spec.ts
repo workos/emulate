@@ -173,7 +173,7 @@ describe('Auth routes', () => {
   it('authenticate with password grant', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'pass@test.com', password: 'secret', email_verified: true }),
+      body: JSON.stringify({ email: 'pass@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -182,7 +182,7 @@ describe('Auth routes', () => {
       body: JSON.stringify({
         grant_type: 'password',
         email: 'pass@test.com',
-        password: 'secret',
+        password: 'correct-horse-battery',
       }),
     });
     expect(res.status).toBe(200);
@@ -195,7 +195,7 @@ describe('Auth routes', () => {
   it('rejects invalid password', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'bad@test.com', password: 'correct', email_verified: true }),
+      body: JSON.stringify({ email: 'bad@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -225,9 +225,12 @@ describe('Auth routes', () => {
     /** Sign up unverified and take the password grant's 403 to the verification step. */
     async function gatedSignIn(email: string, extra?: Record<string, unknown>) {
       const user = await json(
-        await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email, password: 'pw' }) }),
+        await req('/user_management/users', {
+          method: 'POST',
+          body: JSON.stringify({ email, password: 'correct-horse-battery' }),
+        }),
       );
-      const res = await post({ grant_type: 'password', email, password: 'pw', ...extra });
+      const res = await post({ grant_type: 'password', email, password: 'correct-horse-battery', ...extra });
       return { user, res, body: await json(res) };
     }
 
@@ -281,7 +284,7 @@ describe('Auth routes', () => {
       const user = await json(
         await req('/user_management/users', {
           method: 'POST',
-          body: JSON.stringify({ email: 'invited@test.com', password: 'pw' }),
+          body: JSON.stringify({ email: 'invited@test.com', password: 'correct-horse-battery' }),
         }),
       );
       const invitation = await invite('invited@test.com', org.id, 'admin');
@@ -289,7 +292,7 @@ describe('Auth routes', () => {
         await post({
           grant_type: 'password',
           email: 'invited@test.com',
-          password: 'pw',
+          password: 'correct-horse-battery',
           invitation_token: invitation.token,
         }),
       );
@@ -460,14 +463,14 @@ describe('Auth routes', () => {
   it('refresh_token grant returns new tokens and invalidates the old one after the grace period', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'refresh@test.com', password: 'pw', email_verified: true }),
+      body: JSON.stringify({ email: 'refresh@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
 
     // Authenticate to get a refresh token
     const authRes = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: 'refresh@test.com', password: 'pw' }),
+      body: JSON.stringify({ grant_type: 'password', email: 'refresh@test.com', password: 'correct-horse-battery' }),
     });
     const authBody = await json(authRes);
     const oldRefresh = authBody.refresh_token;
@@ -1089,7 +1092,7 @@ describe('Auth routes', () => {
   it('returns sealed_session: null even when client_secret is provided', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'sealed@test.com', password: 'pw', email_verified: true }),
+      body: JSON.stringify({ email: 'sealed@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -1098,7 +1101,7 @@ describe('Auth routes', () => {
       body: JSON.stringify({
         grant_type: 'password',
         email: 'sealed@test.com',
-        password: 'pw',
+        password: 'correct-horse-battery',
         client_secret: 'sk_test_secret',
       }),
     });
@@ -1112,7 +1115,11 @@ describe('Auth routes', () => {
     // shape that used to opt into sealing via `clientSecret ?? apiKey`.
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'sealed-refresh@test.com', password: 'pw', email_verified: true }),
+      body: JSON.stringify({
+        email: 'sealed-refresh@test.com',
+        password: 'correct-horse-battery',
+        email_verified: true,
+      }),
     });
 
     const authRes = await app.request('/user_management/authenticate', {
@@ -1122,7 +1129,7 @@ describe('Auth routes', () => {
         grant_type: 'password',
         client_id: 'test_client',
         email: 'sealed-refresh@test.com',
-        password: 'pw',
+        password: 'correct-horse-battery',
       }),
     });
     expect(authRes.status).toBe(200);
@@ -1223,11 +1230,14 @@ describe('Auth routes', () => {
     );
     expect(signup.email).toBe('padded@x.test');
 
-    getWorkOSStore(store).users.update(signup.user_id, { password_hash: hashPassword('pw'), email_verified: true });
+    getWorkOSStore(store).users.update(signup.user_id, {
+      password_hash: hashPassword('correct-horse-battery'),
+      email_verified: true,
+    });
     const password = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: ' padded@x.test ', password: 'pw' }),
+      body: JSON.stringify({ grant_type: 'password', email: ' padded@x.test ', password: 'correct-horse-battery' }),
     });
     expect(password.status).toBe(200);
 
@@ -1472,7 +1482,7 @@ describe('Auth routes', () => {
   it('password grant accepts form-encoded bodies', async () => {
     await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'formpass@test.com', password: 'secret', email_verified: true }),
+      body: JSON.stringify({ email: 'formpass@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -1481,7 +1491,7 @@ describe('Auth routes', () => {
       body: new URLSearchParams({
         grant_type: 'password',
         email: 'formpass@test.com',
-        password: 'secret',
+        password: 'correct-horse-battery',
       }).toString(),
     });
     // Production accepts form-encoded on every /authenticate grant (Nest's default urlencoded
@@ -1990,7 +2000,7 @@ describe('Auth routes', () => {
   it('resolves the single active organization on password, email-verification and device_code', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'multi-grant@test.com', password: 'pw', email_verified: true }),
+      body: JSON.stringify({ email: 'multi-grant@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
     const user = await json(created);
     const org = joinOrg(user.id, 'Grant Corp');
@@ -1998,7 +2008,11 @@ describe('Auth routes', () => {
     const passwordRes = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: 'multi-grant@test.com', password: 'pw' }),
+      body: JSON.stringify({
+        grant_type: 'password',
+        email: 'multi-grant@test.com',
+        password: 'correct-horse-battery',
+      }),
     });
     expect((await json(passwordRes)).organization_id).toBe(org.id);
 
@@ -2040,7 +2054,7 @@ describe('Auth routes', () => {
   it('returns organization_selection_required for a user with several active organizations', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'multi-org@test.com', password: 'pw', email_verified: true }),
+      body: JSON.stringify({ email: 'multi-org@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
     const user = await json(created);
     const first = joinOrg(user.id, 'Alpha Corp');
@@ -2049,7 +2063,7 @@ describe('Auth routes', () => {
     const res = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: 'multi-org@test.com', password: 'pw' }),
+      body: JSON.stringify({ grant_type: 'password', email: 'multi-org@test.com', password: 'correct-horse-battery' }),
     });
     expect(res.status).toBe(403);
     const body = await json(res);
@@ -2087,7 +2101,11 @@ describe('Auth routes', () => {
   it('requires the second factor before organization selection', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'mfa-multi-org@test.com', password: 'pw', email_verified: true }),
+      body: JSON.stringify({
+        email: 'mfa-multi-org@test.com',
+        password: 'correct-horse-battery',
+        email_verified: true,
+      }),
     });
     const user = await json(created);
     joinOrg(user.id, 'Gamma Corp');
@@ -2105,7 +2123,11 @@ describe('Auth routes', () => {
     const passwordRes = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: 'mfa-multi-org@test.com', password: 'pw' }),
+      body: JSON.stringify({
+        grant_type: 'password',
+        email: 'mfa-multi-org@test.com',
+        password: 'correct-horse-battery',
+      }),
     });
     expect(passwordRes.status).toBe(403);
     const challengeBody = await json(passwordRes);
@@ -2332,7 +2354,7 @@ describe('Auth routes', () => {
   it('holds an invitation until the second factor clears', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'mfa-invite@test.com', password: 'pw', email_verified: true }),
+      body: JSON.stringify({ email: 'mfa-invite@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
     const user = await json(created);
     const org = createOrg('Second Factor Corp');
@@ -2352,7 +2374,7 @@ describe('Auth routes', () => {
       body: JSON.stringify({
         grant_type: 'password',
         email: 'mfa-invite@test.com',
-        password: 'pw',
+        password: 'correct-horse-battery',
         invitation_token: invitation.token,
       }),
     });
@@ -2380,7 +2402,7 @@ describe('Auth routes', () => {
   it('reports the same error when a deferred invitation dies mid-challenge', async () => {
     const created = await req('/user_management/users', {
       method: 'POST',
-      body: JSON.stringify({ email: 'mfa-revoked@test.com', password: 'pw', email_verified: true }),
+      body: JSON.stringify({ email: 'mfa-revoked@test.com', password: 'correct-horse-battery', email_verified: true }),
     });
     const user = await json(created);
     const org = createOrg('Vanishing Corp');
@@ -2400,7 +2422,7 @@ describe('Auth routes', () => {
       body: JSON.stringify({
         grant_type: 'password',
         email: 'mfa-revoked@test.com',
-        password: 'pw',
+        password: 'correct-horse-battery',
         invitation_token: invitation.token,
       }),
     });
@@ -2436,11 +2458,12 @@ describe('Auth routes', () => {
   });
 
   it('defers an organization-less invitation until selection completes', async () => {
+    // An invitation naming no organization cannot settle the choice for a multi-org user. It is
+    // sent before the account exists, as production refuses one for an existing account.
+    const invitation = await invite('org-less-invite@test.com', null);
     const user = await createUser('org-less-invite@test.com');
     joinOrg(user.id, 'Alpha Existing');
     const beta = joinOrg(user.id, 'Beta Existing');
-    // An invitation naming no organization cannot settle the choice for a multi-org user.
-    const invitation = await invite('org-less-invite@test.com', null);
 
     const res = await signInWithMagicAuth('org-less-invite@test.com', invitation.token);
     expect(res.status).toBe(403);
@@ -3004,12 +3027,12 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   }
 
   it('emits authentication.password_succeeded with the spec payload', async () => {
-    const user = await registerUser('evt-pass@test.com', 'secret');
+    const user = await registerUser('evt-pass@test.com', 'correct-horse-battery');
 
     await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'User-Agent': 'spec-agent' },
-      body: JSON.stringify({ grant_type: 'password', email: 'evt-pass@test.com', password: 'secret' }),
+      body: JSON.stringify({ grant_type: 'password', email: 'evt-pass@test.com', password: 'correct-horse-battery' }),
     });
 
     const [event] = eventsNamed('authentication.password_succeeded');
@@ -3025,7 +3048,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('emits authentication.password_failed with a required error object', async () => {
-    await registerUser('evt-fail@test.com', 'secret');
+    await registerUser('evt-fail@test.com', 'correct-horse-battery');
 
     const res = await app.request('/user_management/authenticate', {
       method: 'POST',
@@ -3045,7 +3068,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('emits authentication.oauth_succeeded for the authorization code flow', async () => {
-    await registerUser('evt-oauth@test.com', 'secret');
+    await registerUser('evt-oauth@test.com', 'correct-horse-battery');
 
     const authRes = await app.request(
       '/user_management/authorize?redirect_uri=http://localhost:3000/callback&response_type=code',
@@ -3081,7 +3104,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('emits magic_auth.created on code request and magic_auth_succeeded on exchange', async () => {
-    const user = await registerUser('evt-magic@test.com', 'secret');
+    const user = await registerUser('evt-magic@test.com', 'correct-horse-battery');
 
     await req('/user_management/magic_auth', {
       method: 'POST',
@@ -3109,7 +3132,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('emits email_verification.created and email_verification_succeeded', async () => {
-    const user = await registerUser('evt-verify@test.com', 'secret');
+    const user = await registerUser('evt-verify@test.com', 'correct-horse-battery');
 
     const sendRes = await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' });
     const verification = await json(sendRes);
@@ -3134,12 +3157,16 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('creates sessions with spec-required fields (auth_method, status, expires_at)', async () => {
-    await registerUser('evt-session@test.com', 'secret');
+    await registerUser('evt-session@test.com', 'correct-horse-battery');
 
     await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: 'evt-session@test.com', password: 'secret' }),
+      body: JSON.stringify({
+        grant_type: 'password',
+        email: 'evt-session@test.com',
+        password: 'correct-horse-battery',
+      }),
     });
 
     const [event] = eventsNamed('session.created');
@@ -3152,12 +3179,16 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     // Production's sign-in stamps last_sign_in_at via a dedicated, silent updateWithSignIn
     // path — a raw DB write that bypasses the event-emitting update() — so a login fires
     // session.created alone, not user.updated. See https://github.com/workos/emulate/issues/55.
-    await registerUser('evt-no-user-updated@test.com', 'secret');
+    await registerUser('evt-no-user-updated@test.com', 'correct-horse-battery');
 
     await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: 'evt-no-user-updated@test.com', password: 'secret' }),
+      body: JSON.stringify({
+        grant_type: 'password',
+        email: 'evt-no-user-updated@test.com',
+        password: 'correct-horse-battery',
+      }),
     });
 
     expect(eventsNamed('session.created')).toHaveLength(1);
@@ -3165,7 +3196,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('MFA session falls back to auth_method: unknown when the pending token records no mapped primary', async () => {
-    const user = await registerUser('evt-mfa@test.com', 'secret');
+    const user = await registerUser('evt-mfa@test.com', 'correct-horse-battery');
     const ws = getWorkOSStore(store);
 
     const factor = ws.authFactors.insert({
@@ -3203,7 +3234,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('email-verification sessions report auth_method: unknown (no spec enum value)', async () => {
-    const user = await registerUser('evt-verify-session@test.com', 'secret');
+    const user = await registerUser('evt-verify-session@test.com', 'correct-horse-battery');
 
     const sendRes = await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' });
     const verification = await json(sendRes);
@@ -3224,12 +3255,16 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('token refresh rotates tokens without emitting login or session events', async () => {
-    await registerUser('evt-refresh@test.com', 'secret');
+    await registerUser('evt-refresh@test.com', 'correct-horse-battery');
 
     const loginRes = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: 'evt-refresh@test.com', password: 'secret' }),
+      body: JSON.stringify({
+        grant_type: 'password',
+        email: 'evt-refresh@test.com',
+        password: 'correct-horse-battery',
+      }),
     });
     const { refresh_token } = await json(loginRes);
 
@@ -3259,7 +3294,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
   });
 
   it('password login for an MFA-enrolled user challenges, then keys the session to the primary factor', async () => {
-    const user = await registerUser('evt-mfa-flow@test.com', 'secret');
+    const user = await registerUser('evt-mfa-flow@test.com', 'correct-horse-battery');
     const ws = getWorkOSStore(store);
     ws.authFactors.insert({
       object: 'authentication_factor',
@@ -3273,7 +3308,11 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     const challengeRes = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'password', email: 'evt-mfa-flow@test.com', password: 'secret' }),
+      body: JSON.stringify({
+        grant_type: 'password',
+        email: 'evt-mfa-flow@test.com',
+        password: 'correct-horse-battery',
+      }),
     });
     expect(challengeRes.status).toBe(403);
     const challengeBody = await json(challengeRes);

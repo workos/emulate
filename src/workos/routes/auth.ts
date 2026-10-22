@@ -17,6 +17,7 @@ import {
   formatDeviceAuthorization,
   verifyPassword,
   isExpired,
+  invitationState,
   expiresIn,
   assertAllowedRedirectUri,
   resolveResponseAuthMethod,
@@ -693,7 +694,7 @@ export function authRoutes(ctx: RouteContext): void {
     /** Resolve an invitation token, rejecting one that is unknown, expired or already used. */
     const resolveInvitation = (token: string): WorkOSInvitation => {
       const inv = ws.invitations.findOneBy('token', token);
-      if (!inv || inv.state !== 'pending' || isExpired(inv.expires_at)) {
+      if (!inv || invitationState(inv) !== 'pending') {
         throw new WorkOSApiError(
           400,
           'The invitation is invalid, expired, or has already been accepted',

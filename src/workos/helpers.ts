@@ -606,6 +606,24 @@ export function isExpired(expiresAt: string): boolean {
   return new Date(expiresAt).getTime() < Date.now();
 }
 
+/**
+ * End every session the user holds, the way `POST /user_management/sessions/revoke` ends one:
+ * the record is stamped revoked so the `session.revoked` payload its deletion emits says so.
+ * Production does this when a password is reset (`revokeByUser`), since the reset is how a user
+ * takes an account back from whoever else was signed in to it.
+ */
+export function revokeSessionsForUser(ws: WorkOSStore, userId: string): void {
+  for (const session of ws.sessions.findBy('user_id', userId)) {
+    revokeSession(ws, session.id);
+  }
+}
+
+export function revokeSession(ws: WorkOSStore, sessionId: string): void {
+  // Sessions have no onUpdate hook, so this only shapes the session.revoked payload.
+  ws.sessions.update(sessionId, { status: 'revoked', ended_at: new Date().toISOString() });
+  ws.sessions.delete(sessionId);
+}
+
 export function formatConnection(conn: WorkOSConnection): Record<string, unknown> {
   return formatEntity(conn);
 }
@@ -633,8 +651,35 @@ export function formatPipeConnection(pc: WorkOSPipeConnection): Record<string, u
   return formatEntity(pc);
 }
 
+/**
+ * How long an invitation stays open when the request names no `expires_in_days`: production's
+ * `invitation_expiry` environment setting, 7 days as created. The request may say 1 to 30.
+ */
+export const INVITATION_DEFAULT_EXPIRY_DAYS = 7;
+export const INVITATION_MIN_EXPIRY_DAYS = 1;
+export const INVITATION_MAX_EXPIRY_DAYS = 30;
+
+export function invitationExpiresIn(days: number): string {
+  return expiresIn(days * 24 * 60);
+}
+
+export type InvitationState = 'pending' | 'accepted' | 'expired' | 'revoked';
+
+/**
+ * An invitation's state, derived when it is read the way production derives it
+ * (`userland-user-invites/utils/get-invite-state.ts`): revoked wins, then accepted, then expiry
+ * by the clock, else pending. Deriving it is what lets an invitation expire on its own — a stored
+ * state could only ever be written by a request, and no request arrives at the moment one lapses.
+ */
+export function invitationState(inv: WorkOSInvitation): InvitationState {
+  if (inv.revoked_at !== null) return 'revoked';
+  if (inv.accepted_at !== null) return 'accepted';
+  if (isExpired(inv.expires_at)) return 'expired';
+  return 'pending';
+}
+
 export function formatInvitation(inv: WorkOSInvitation): Record<string, unknown> {
-  return formatEntity(inv);
+  return { ...formatEntity(inv), state: invitationState(inv) };
 }
 
 /**
@@ -715,7 +760,6 @@ export function acceptInvitation(
   eventBus: EventBus | undefined,
 ): string | null {
   ws.invitations.update(inv.id, {
-    state: 'accepted',
     accepted_at: new Date().toISOString(),
     accepted_user_id: user?.id ?? null,
   });

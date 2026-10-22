@@ -1,9 +1,15 @@
-import { type RouteContext, notFound, parseJsonBody, WorkOSApiError, parseListParams } from '../../core/index.js';
+import {
+  type RouteContext,
+  notFound,
+  parseJsonBody,
+  validationError,
+  WorkOSApiError,
+  parseListParams,
+} from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatInvitation,
   generateVerificationToken,
-  expiresIn,
   formatListResponse,
   acceptInvitation,
   provisionInvitee,
@@ -11,7 +17,13 @@ import {
   findUserByEmail,
   emailsMatch,
   requireEmailField,
+  invitationState,
+  invitationExpiresIn,
+  INVITATION_DEFAULT_EXPIRY_DAYS,
+  INVITATION_MIN_EXPIRY_DAYS,
+  INVITATION_MAX_EXPIRY_DAYS,
 } from '../helpers.js';
+import { invalidRole, undefinedRoleSlug } from '../membership-roles.js';
 import type { EventBus } from '../event-bus.js';
 import { STORE_KEYS, EVENTS } from '../constants.js';
 
@@ -29,13 +41,69 @@ export function invitationRoutes(ctx: RouteContext): void {
     // resolves a user by this email, so a typo is spent silently, enrolling no one.
     const email = requireEmailField(body.email, { requireShape: true });
 
-    // Production refuses to invite someone who already holds an active membership in the
-    // organization. An inactive or pending membership is re-invited instead (see provisionInvitee).
     const organizationId = (body.organization_id as string) ?? null;
+    if (organizationId && !ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
+    const inviterUserId = (body.inviter_user_id as string) ?? null;
+    if (inviterUserId && !ws.users.get(inviterUserId)) throw notFound('User', inviterUserId);
+
+    // Production resolves the role before anything else about the invitation: the slug must
+    // name a role of the organization or of the environment. Without an organization there is
+    // no membership to grant, so the slug is not looked at.
+    const roleSlug = (body.role_slug as string) ?? null;
+    if (organizationId && roleSlug && undefinedRoleSlug(ws, organizationId, [roleSlug])) throw invalidRole(400);
+
+    const expiresInDays = body.expires_in_days === undefined ? INVITATION_DEFAULT_EXPIRY_DAYS : body.expires_in_days;
+    if (typeof expiresInDays !== 'number' || !Number.isInteger(expiresInDays)) {
+      throw validationError('expires_in_days must be an integer', [{ field: 'expires_in_days', code: 'invalid' }]);
+    }
+    if (expiresInDays > INVITATION_MAX_EXPIRY_DAYS) {
+      throw new WorkOSApiError(
+        400,
+        `Expires in days must be less than or equal to ${INVITATION_MAX_EXPIRY_DAYS}.`,
+        'expires_in_days_too_long',
+      );
+    }
+    if (expiresInDays < INVITATION_MIN_EXPIRY_DAYS) {
+      throw new WorkOSApiError(
+        400,
+        `Expires in days must be greater than ${INVITATION_MIN_EXPIRY_DAYS}.`,
+        'expires_in_days_too_short',
+      );
+    }
+
+    const pendingInviteFor = (orgId: string | null) =>
+      ws.invitations
+        .all()
+        .some(
+          (inv) => emailsMatch(inv.email, email) && inv.organization_id === orgId && invitationState(inv) === 'pending',
+        );
+
     if (organizationId) {
+      // Production refuses a second open invitation to the same organization, and refuses to
+      // invite someone who already holds an active membership there. An inactive or pending
+      // membership is re-invited instead (see provisionInvitee).
+      if (pendingInviteFor(organizationId)) {
+        throw new WorkOSApiError(
+          400,
+          'Email already invited to organization.',
+          'email_already_invited_to_organization',
+        );
+      }
       const recipient = findUserByEmail(ws, email);
       if (recipient && liveMembershipFor(ws, organizationId, recipient.id)?.status === 'active') {
         throw new WorkOSApiError(400, 'User already a member of organization.', 'user_already_organization_member');
+      }
+    } else {
+      // An invitation to the environment alone is a sign-up link: production refuses one for
+      // an address that already has an open one, or that already has an account. (Production
+      // lets an account that only an organization invitation created through, as the invitee
+      // has not completed sign-up; the emulator records no such distinction and refuses any
+      // existing account.)
+      if (pendingInviteFor(null)) {
+        throw new WorkOSApiError(400, 'Email already invited.', 'email_already_invited');
+      }
+      if (findUserByEmail(ws, email)) {
+        throw new WorkOSApiError(400, 'User already exists.', 'user_already_exists');
       }
     }
 
@@ -43,13 +111,12 @@ export function invitationRoutes(ctx: RouteContext): void {
     const inv = ws.invitations.insert({
       object: 'invitation',
       email,
-      state: 'pending',
       token,
       accept_invitation_url: `${ctx.baseUrl}/user_management/invitations/accept?token=${token}`,
       organization_id: organizationId,
-      inviter_user_id: (body.inviter_user_id as string) ?? null,
-      role_slug: (body.role_slug as string) ?? null,
-      expires_at: expiresIn(72 * 60), // 72 hours
+      inviter_user_id: inviterUserId,
+      role_slug: roleSlug,
+      expires_at: invitationExpiresIn(expiresInDays),
       accepted_at: null,
       revoked_at: null,
       accepted_user_id: null,
@@ -91,13 +158,14 @@ export function invitationRoutes(ctx: RouteContext): void {
     return c.json(formatInvitation(inv));
   });
 
+  // Accepting and revoking want a pending invitation; production reports anything else — an
+  // expired one included — under one code.
+  const inviteNotPending = () => new WorkOSApiError(400, 'Invite is not pending.', 'invite_not_pending');
+
   app.post('/user_management/invitations/:id/accept', (c) => {
     const inv = ws.invitations.get(c.req.param('id'));
     if (!inv) throw notFound('Invite', c.req.param('id'));
-
-    if (inv.state !== 'pending') {
-      throw new WorkOSApiError(400, `Invitation is ${inv.state}`, 'invalid_invitation_state');
-    }
+    if (invitationState(inv) !== 'pending') throw inviteNotPending();
 
     // Case-insensitively: an exact match here enrolled nobody for an account stored under a
     // different case, spending the invitation and emitting invitation.accepted with no membership
@@ -112,12 +180,9 @@ export function invitationRoutes(ctx: RouteContext): void {
   app.post('/user_management/invitations/:id/revoke', (c) => {
     const inv = ws.invitations.get(c.req.param('id'));
     if (!inv) throw notFound('Invite', c.req.param('id'));
+    if (invitationState(inv) !== 'pending') throw inviteNotPending();
 
-    if (inv.state !== 'pending') {
-      throw new WorkOSApiError(400, `Invitation is ${inv.state}`, 'invalid_invitation_state');
-    }
-
-    ws.invitations.update(inv.id, { state: 'revoked', revoked_at: new Date().toISOString() });
+    ws.invitations.update(inv.id, { revoked_at: new Date().toISOString() });
     const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
     eventBus?.emit({ event: EVENTS.invitationRevoked, data: formatInvitation(ws.invitations.get(inv.id)!) });
     const updated = ws.invitations.get(inv.id)!;
@@ -128,30 +193,23 @@ export function invitationRoutes(ctx: RouteContext): void {
     const inv = ws.invitations.get(c.req.param('id'));
     if (!inv) throw notFound('Invite', c.req.param('id'));
 
+    // Resending sends the pending invitation again; it does not reopen one that has lapsed,
+    // been accepted or been revoked. Production names which under a code of its own.
+    const state = invitationState(inv);
+    if (state === 'expired') throw new WorkOSApiError(400, 'Invite has expired.', 'invite_expired');
+    if (state === 'revoked') throw new WorkOSApiError(400, 'Invite has been revoked.', 'invite_revoked');
+    if (state === 'accepted') throw new WorkOSApiError(400, 'Invite has already been accepted.', 'invite_accepted');
+
     const newToken = generateVerificationToken();
-    // Resending returns the invitation to pending, so the metadata recording how it left that
-    // state has to go with it — otherwise the response and invitation.resent both carry a
-    // pending invitation that also claims to have been accepted or revoked.
     ws.invitations.update(inv.id, {
       token: newToken,
       accept_invitation_url: `${ctx.baseUrl}/user_management/invitations/accept?token=${newToken}`,
-      expires_at: expiresIn(72 * 60),
-      state: 'pending',
-      accepted_at: null,
-      accepted_user_id: null,
-      revoked_at: null,
+      expires_at: invitationExpiresIn(INVITATION_DEFAULT_EXPIRY_DAYS),
     });
 
     const eventBus = store.getData<EventBus>(STORE_KEYS.eventBus);
     eventBus?.emit({ event: EVENTS.invitationResent, data: formatInvitation(ws.invitations.get(inv.id)!) });
     const updated = ws.invitations.get(inv.id)!;
     return c.json(formatInvitation(updated));
-  });
-
-  app.delete('/user_management/invitations/:id', (c) => {
-    const inv = ws.invitations.get(c.req.param('id'));
-    if (!inv) throw notFound('Invite', c.req.param('id'));
-    ws.invitations.delete(inv.id);
-    return c.body(null, 204);
   });
 }
