@@ -313,7 +313,7 @@ describe('Auth routes', () => {
       expect((await membershipsIn(org.id)).map((m: any) => m.user_id)).toEqual([user.id]);
     });
 
-    it('still accepts user_id, and names both ways in when neither is sent', async () => {
+    it('requires the pending token, and does not take a user_id in its place', async () => {
       const user = await createUser('by-id@test.com', { email_verified: false });
       const verification = await json(
         await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' }),
@@ -323,15 +323,64 @@ describe('Auth routes', () => {
       expect(missing.status).toBe(400);
       expect(await json(missing)).toEqual({
         error: 'invalid_request',
-        error_description: 'code and pending_authentication_token (or user_id) are required.',
+        error_description: 'code and pending_authentication_token are required.',
       });
 
-      const res = await post({
+      // Production's request schema for this grant has no user_id, so a call that leaned on one
+      // against the emulator would fail there: it is not read here either.
+      const byId = await post({
         grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
         user_id: user.id,
         code: verification.code,
       });
-      expect(res.status).toBe(200);
+      expect(byId.status).toBe(400);
+      expect(await json(byId)).toEqual({
+        error: 'invalid_request',
+        error_description: 'code and pending_authentication_token are required.',
+      });
+      expect((await json(await req(`/user_management/users/${user.id}`))).email_verified).toBe(false);
+    });
+
+    it('refuses a pending token another step issued, without consuming it', async () => {
+      const { user, body: gate } = await gatedSignIn('wrong-step@test.com');
+      const verification = await json(await req(`/user_management/email_verification/${gate.email_verification_id}`));
+      // Two organizations, so the token the gate issued would — if accepted — let the
+      // organization-selection grant mint a session for a mailbox nobody has proven.
+      joinOrg(user.id, 'Step One');
+      const second = joinOrg(user.id, 'Step Two');
+
+      const skipped = await post({
+        grant_type: 'urn:workos:oauth:grant-type:organization-selection',
+        pending_authentication_token: gate.pending_authentication_token,
+        organization_id: second.id,
+      });
+      expect(skipped.status).toBe(400);
+      // Production's body here carries the message alone: no code.
+      expect(await json(skipped)).toEqual({
+        message: 'The pending_authentication_token is not valid for this request.',
+      });
+      expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(0);
+
+      // The MFA grant will not take it either.
+      const asMfa = await post({
+        grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+        pending_authentication_token: gate.pending_authentication_token,
+        authentication_challenge_id: 'auth_challenge_whatever',
+        code: '123456',
+      });
+      expect(asMfa.status).toBe(400);
+      expect(await json(asMfa)).toEqual({
+        message: 'The pending_authentication_token is not valid for this request.',
+      });
+
+      // Neither refusal spent the token: the step it was issued for still completes.
+      const res = await post({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        pending_authentication_token: gate.pending_authentication_token,
+        code: verification.code,
+      });
+      expect(res.status).toBe(403);
+      expect((await json(res)).code).toBe('organization_selection_required');
     });
   });
 
@@ -875,14 +924,69 @@ describe('Auth routes', () => {
       error_description: 'email and password are required.',
     });
 
-    // An unrecognized grant_type fails authenticate's oneOf body validation, so the spec's code
-    // for it is invalid_request — `unsupported_grant_type` appears only under /sso/token.
-    const badGrant = await post({ grant_type: 'urn:workos:oauth:grant-type:nonsense' });
-    expect(badGrant.status).toBe(400);
-    expect(await json(badGrant)).toEqual({
+    // A grant production accepts but the emulator does not implement is the one failure left
+    // on this path, and it keeps the spec's code for this endpoint — `unsupported_grant_type`
+    // appears only under /sso/token.
+    const unimplemented = await post({ grant_type: 'urn:workos:oauth:grant-type:email-completion' });
+    expect(unimplemented.status).toBe(400);
+    expect(await json(unimplemented)).toEqual({
       error: 'invalid_request',
-      error_description: 'The grant type is not supported: urn:workos:oauth:grant-type:nonsense',
+      error_description: 'The grant type is not supported: urn:workos:oauth:grant-type:email-completion',
     });
+  });
+
+  // Production validates grant_type against its public list before any grant runs, so a name
+  // outside it is a 422 whose one error spells the list out — the body here is production's
+  // verbatim. The legacy magic-auth and email-verification names without the `:code` suffix are
+  // outside it, and were accepted here until now.
+  it('rejects a grant_type production does not list with its 422, legacy names included', async () => {
+    const post = (payload: Record<string, unknown>) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    const expected = {
+      code: 'invalid_request_parameters',
+      message: 'Validation failed',
+      errors: [
+        {
+          code: 'grant_type_required',
+          message:
+            'grant_type must be one of the following values: authorization_code, password, refresh_token, urn:workos:oauth:grant-type:magic-auth:code, urn:workos:oauth:grant-type:email-verification:code, urn:workos:oauth:grant-type:mfa-totp, urn:workos:oauth:grant-type:organization-selection, urn:workos:oauth:grant-type:radar-email-challenge:code, urn:workos:oauth:grant-type:radar-sms-challenge:code, urn:workos:oauth:grant-type:email-completion, urn:ietf:params:oauth:grant-type:device_code',
+        },
+      ],
+    };
+
+    const nonsense = await post({ grant_type: 'urn:workos:oauth:grant-type:nonsense' });
+    expect(nonsense.status).toBe(422);
+    expect(await json(nonsense)).toEqual(expected);
+
+    const user = await createUser('legacy-name@test.com');
+    const magic = await json(
+      await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email: user.email }) }),
+    );
+    const legacyMagic = await post({
+      grant_type: 'urn:workos:oauth:grant-type:magic-auth',
+      email: user.email,
+      code: magic.code,
+      // Refused before the invitation is looked at, so a bad invitation_token on a bad grant
+      // name still answers with the validation failure, as production's pipe would.
+      invitation_token: 'inv_not_a_real_token',
+    });
+    expect(legacyMagic.status).toBe(422);
+    expect(await json(legacyMagic)).toEqual(expected);
+    // Nothing ran: the code is still redeemable under the name production takes.
+    const current = await post({
+      grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
+      email: user.email,
+      code: magic.code,
+    });
+    expect(current.status).toBe(200);
+
+    const legacyVerify = await post({ grant_type: 'urn:workos:oauth:grant-type:email-verification', code: '123456' });
+    expect(legacyVerify.status).toBe(422);
+    expect(await json(legacyVerify)).toEqual(expected);
   });
 
   // A PKCE code's two adjacent failures used to answer in two envelopes: a wrong verifier
@@ -1518,6 +1622,7 @@ describe('Auth routes', () => {
       user_id: user.id,
       organization_id: null,
       auth_method: 'Password',
+      reason: 'OrganizationSelection',
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -1547,6 +1652,7 @@ describe('Auth routes', () => {
         user_id: user.id,
         organization_id: null,
         auth_method: 'Password',
+        reason: 'OrganizationSelection',
       });
 
     const select = (organizationId: string) =>
@@ -1570,6 +1676,128 @@ describe('Auth routes', () => {
     const pendingRes = await select(invitedOrg.id);
     expect(pendingRes.status).toBe(400);
     expect((await json(pendingRes)).code).toBe('organization_membership_not_found');
+  });
+
+  // --- Pending tokens are bound to the step that issued them ---
+
+  /** Sign up with a password and an enrolled factor, and take the password grant to its mfa_challenge. */
+  async function mfaGatedSignIn(email: string) {
+    const user = await json(
+      await req('/user_management/users', {
+        method: 'POST',
+        body: JSON.stringify({ email, password: 'correct-horse-battery', email_verified: true }),
+      }),
+    );
+    const ws = getWorkOSStore(store);
+    ws.authFactors.insert({
+      object: 'authentication_factor',
+      user_id: user.id,
+      type: 'totp',
+      totp: { issuer: 'Test', user: email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
+    });
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email, password: 'correct-horse-battery' }),
+    });
+    expect(res.status).toBe(403);
+    const body = await json(res);
+    expect(body.code).toBe('mfa_challenge');
+    return { user, body };
+  }
+
+  const post = (payload: Record<string, unknown>) =>
+    app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+  it('an MFA challenge token cannot be spent on organization selection to skip the second factor', async () => {
+    const { user, body: challenge } = await mfaGatedSignIn('mfa-skip@test.com');
+    joinOrg(user.id, 'Skip One');
+    const second = joinOrg(user.id, 'Skip Two');
+
+    const skipped = await post({
+      grant_type: 'urn:workos:oauth:grant-type:organization-selection',
+      pending_authentication_token: challenge.pending_authentication_token,
+      organization_id: second.id,
+    });
+    expect(skipped.status).toBe(400);
+    expect(await json(skipped)).toEqual({
+      message: 'The pending_authentication_token is not valid for this request.',
+    });
+    expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(0);
+
+    // The token survives for the grant it was issued for.
+    const stored = getWorkOSStore(store).authChallenges.get(challenge.authentication_challenge.id)!;
+    const completed = await post({
+      grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+      pending_authentication_token: challenge.pending_authentication_token,
+      authentication_challenge_id: stored.id,
+      code: stored.code,
+    });
+    expect(completed.status).toBe(403);
+    expect((await json(completed)).code).toBe('organization_selection_required');
+  });
+
+  it('an organization-selection token cannot be spent on the verification or MFA grants', async () => {
+    const user = await createUser('orgsel-token@test.com');
+    joinOrg(user.id, 'Choice One');
+    joinOrg(user.id, 'Choice Two');
+    const selection = await json(await signInWithMagicAuth('orgsel-token@test.com'));
+    expect(selection.code).toBe('organization_selection_required');
+
+    for (const payload of [
+      { grant_type: 'urn:workos:oauth:grant-type:email-verification:code', code: '123456' },
+      {
+        grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+        authentication_challenge_id: 'auth_challenge_whatever',
+        code: '123456',
+      },
+    ]) {
+      const res = await post({ ...payload, pending_authentication_token: selection.pending_authentication_token });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        message: 'The pending_authentication_token is not valid for this request.',
+      });
+    }
+    expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(0);
+  });
+
+  it('mfa-totp refuses a challenge that belongs to another user than the pending token', async () => {
+    const { user, body: challenge } = await mfaGatedSignIn('mfa-owner@test.com');
+    const { body: othersChallenge } = await mfaGatedSignIn('mfa-other@test.com');
+    const ws = getWorkOSStore(store);
+    const theirs = ws.authChallenges.get(othersChallenge.authentication_challenge.id)!;
+
+    // Production compares the challenge's factor's user with the pending token's user before it
+    // verifies the code, and consumes neither on a mismatch.
+    const res = await post({
+      grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+      pending_authentication_token: challenge.pending_authentication_token,
+      authentication_challenge_id: theirs.id,
+      code: theirs.code,
+    });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'user_mismatch',
+      message:
+        'The pending_authentication_token is associated with a different user than the authentication_challenge.',
+    });
+    expect(ws.sessions.findBy('user_id', user.id)).toHaveLength(0);
+    expect(ws.authChallenges.get(theirs.id)).toBeDefined();
+    expect(store.getData(`pending_auth:${challenge.pending_authentication_token}`)).toBeDefined();
+
+    // The right challenge still completes it.
+    const mine = ws.authChallenges.get(challenge.authentication_challenge.id)!;
+    const completed = await post({
+      grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+      pending_authentication_token: challenge.pending_authentication_token,
+      authentication_challenge_id: mine.id,
+      code: mine.code,
+    });
+    expect(completed.status).toBe(200);
   });
 
   // --- Organization resolution on fresh logins ---
@@ -2024,13 +2252,19 @@ describe('Auth routes', () => {
       code: '424242',
       expires_at: new Date(Date.now() + 600000).toISOString(),
     });
+    store.setData('pending_auth:pending_multi_grant', {
+      user_id: user.id,
+      organization_id: null,
+      auth_method: 'Password',
+      reason: 'EmailVerification',
+    });
     const verifyRes = await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
         code: verification.code,
-        user_id: user.id,
+        pending_authentication_token: 'pending_multi_grant',
       }),
     });
     expect((await json(verifyRes)).organization_id).toBe(org.id);
@@ -2209,6 +2443,58 @@ describe('Auth routes', () => {
       }),
     });
     expect((await json(switched)).organization_id).toBe(org.id);
+  });
+
+  it('switches a session only into an organization the user is an active member of', async () => {
+    const user = await createUser('switcher@test.com');
+    const home = joinOrg(user.id, 'Home Corp');
+    const signIn = await json(await signInWithMagicAuth('switcher@test.com'));
+    expect(signIn.organization_id).toBe(home.id);
+
+    const other = await createUser('someone-else@test.com');
+    const foreign = joinOrg(other.id, 'Foreign Corp');
+    const lapsed = joinOrg(user.id, 'Lapsed Corp', { status: 'inactive' });
+
+    // Production authorizes the requested organization against the session's user before it
+    // mints anything: no membership, or one that is not active, and the refresh fails
+    // OAuth-style with production's code and description.
+    for (const orgId of [foreign.id, lapsed.id]) {
+      const res = await refresh(signIn.refresh_token, { organization_id: orgId });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        error: 'organization_membership_not_found',
+        error_description: 'User is not a member of the organization.',
+      });
+    }
+    const missing = await refresh(signIn.refresh_token, { organization_id: 'org_does_not_exist' });
+    expect(missing.status).toBe(400);
+    expect(await json(missing)).toEqual({
+      error: 'organization_not_found',
+      error_description: 'Organization not found.',
+    });
+
+    // None of those refusals rotated the token: the client keeps it, and the session is still on
+    // the organization it started in.
+    const unchanged = await refresh(signIn.refresh_token);
+    expect(unchanged.status).toBe(200);
+    expect((await json(unchanged)).organization_id).toBe(home.id);
+  });
+
+  it('a valid switch mints the roles the membership holds, as a fresh login would', async () => {
+    const user = await createUser('switch-roles@test.com');
+    joinOrg(user.id, 'First Corp');
+    const signIn = await json(await signInWithMagicAuth('switch-roles@test.com'));
+    const target = joinOrg(user.id, 'Target Corp', { role: 'admin' });
+
+    const res = await refresh(signIn.refresh_token, { organization_id: target.id });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.organization_id).toBe(target.id);
+    const claims = decodeJwt(body.access_token);
+    expect(claims.org_id).toBe(target.id);
+    expect(claims.role).toBe('admin');
+    expect(claims.roles).toEqual(['admin']);
+    expect(claims.sid).toBe(decodeJwt(signIn.access_token).sid);
   });
 
   // --- invitation_token ---
@@ -2516,6 +2802,7 @@ describe('Auth routes', () => {
       user_id: user.id,
       organization_id: null,
       auth_method: 'Password',
+      reason: 'MfaChallenge',
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -2559,6 +2846,7 @@ describe('Auth routes', () => {
       user_id: user.id,
       organization_id: null,
       auth_method: 'MFA',
+      reason: 'MfaChallenge',
     });
 
     const res = await app.request('/user_management/authenticate', {
@@ -3141,13 +3429,19 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(created).toBeDefined();
     expect(created.data).toMatchObject({ user_id: user.id, email: 'evt-verify@test.com' });
 
+    store.setData('pending_auth:pending_evt_verify', {
+      user_id: user.id,
+      organization_id: null,
+      auth_method: 'Password',
+      reason: 'EmailVerification',
+    });
     await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
         code: verification.code,
-        user_id: user.id,
+        pending_authentication_token: 'pending_evt_verify',
       }),
     });
 
@@ -3213,7 +3507,12 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       code: '123456',
     });
     const pendingToken = 'pending_evt_mfa';
-    store.setData(`pending_auth:${pendingToken}`, { user_id: user.id, organization_id: null, auth_method: 'MFA' });
+    store.setData(`pending_auth:${pendingToken}`, {
+      user_id: user.id,
+      organization_id: null,
+      auth_method: 'MFA',
+      reason: 'MfaChallenge',
+    });
 
     await app.request('/user_management/authenticate', {
       method: 'POST',
@@ -3233,19 +3532,27 @@ describe('authentication events (spec-named, spec-shaped)', () => {
     expect(session.data).toMatchObject({ auth_method: 'unknown' });
   });
 
-  it('email-verification sessions report auth_method: unknown (no spec enum value)', async () => {
+  it('email-verification session falls back to auth_method: unknown when the pending token records no mapped primary', async () => {
     const user = await registerUser('evt-verify-session@test.com', 'correct-horse-battery');
 
     const sendRes = await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' });
     const verification = await json(sendRes);
 
+    // Like the MFA case above: the gate is not a primary method, so a token recording only it
+    // leaves the session on the valid 'unknown' rather than an out-of-enum value.
+    store.setData('pending_auth:pending_evt_verify_session', {
+      user_id: user.id,
+      organization_id: null,
+      auth_method: 'EmailVerification',
+      reason: 'EmailVerification',
+    });
     await app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
         code: verification.code,
-        user_id: user.id,
+        pending_authentication_token: 'pending_evt_verify_session',
       }),
     });
 

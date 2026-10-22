@@ -1444,7 +1444,9 @@ curl -X POST http://localhost:4100/user_management/authenticate \
   -d '{"grant_type":"urn:workos:oauth:grant-type:organization-selection","pending_authentication_token":"pending_...","organization_id":"org_..."}'
 ```
 
-Only `active` memberships count — an unaccepted invitation or a deactivated member is never selected. Passing `invitation_token` to the `authorization_code`, `password`, or Magic Auth grants accepts the invitation as part of the login, joining the user to the invited organization and scoping the session to it, so there is no selection step; a token that is unknown, expired, or already used is rejected with `invitation_invalid`, and one addressed to somebody else with `invitation_cannot_be_used_for_email`. Once a session exists, only an explicit `organization_id` on a refresh (`switchToOrganization`) moves it between organizations.
+Only `active` memberships count — an unaccepted invitation or a deactivated member is never selected. Passing `invitation_token` to the `authorization_code`, `password`, or Magic Auth grants accepts the invitation as part of the login, joining the user to the invited organization and scoping the session to it, so there is no selection step; a token that is unknown, expired, or already used is rejected with `invitation_invalid`, and one addressed to somebody else with `invitation_cannot_be_used_for_email`. Once a session exists, only an explicit `organization_id` on a refresh (`switchToOrganization`) moves it between organizations — and only into one the user is an active member of. A refresh naming an organization the user does not belong to, or belongs to inactively, answers `{"error": "organization_membership_not_found", "error_description": "User is not a member of the organization."}`; one naming an organization that does not exist answers `organization_not_found`. Neither rotates the token, and a switch that succeeds mints the membership's `role`, `roles` and `permissions` the way a fresh login would.
+
+A `pending_authentication_token` is good only for the step that issued it, as in production: one from `organization_selection_required` finishes on the organization-selection grant, one from `mfa_challenge` on the `mfa-totp` grant, and one from `email_verification_required` on the email-verification grant. Spending it on another answers `400` with the bare `{"message": "The pending_authentication_token is not valid for this request."}` — no `code`, which is what production sends — and leaves the token unspent for the right grant, so a challenge cannot be skipped by taking its token to the organization-selection step. The `mfa-totp` grant also refuses a challenge that belongs to a different user than the token, with `{"code": "user_mismatch", …}`.
 
 ### Email verification gates the password grant
 
@@ -1468,7 +1470,7 @@ curl -X POST http://localhost:4100/user_management/authenticate \
   -d '{"grant_type":"urn:workos:oauth:grant-type:email-verification:code","pending_authentication_token":"pending_...","code":"123456"}'
 ```
 
-The resulting session records the method that was gated (`password`), not the verification step. Driving the grant with `user_id` instead of a pending token still works, and that session reports `unknown` — there is no primary method to recover. Fixtures that sign in with a password want `email_verified: true`, in a seed file or on `POST /user_management/users`.
+The resulting session records the method that was gated (`password`), not the verification step. The pending token is the only way to name the user: production's request schema for this grant has no `user_id`, so the emulator reads none either, and a request without the token is a malformed one (`invalid_request`). Fixtures that sign in with a password want `email_verified: true`, in a seed file or on `POST /user_management/users`.
 
 ### SSO logins produce a session
 
@@ -1502,17 +1504,21 @@ The emulator issues a new refresh token on every refresh and retires the one you
 
 `POST /user_management/authenticate` does not use one error shape for every failure. Which shape you get depends on the failure, not only on the grant: any malformed request is OAuth-shaped, and among credential failures three grants are OAuth-shaped and the rest plain.
 
-| Failure                                                          | Body                                                                  | Node SDK raises           |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
-| Malformed request — missing or unrecognized parameter, any grant | `{"error": "invalid_request", "error_description": "…"}`              | `OauthException`          |
-| `authorization_code` — unknown, expired, bad verifier, user gone | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
-| `refresh_token` — unknown, expired, already exchanged, user gone | `{"error": "invalid_grant", "error_description": "…"}`                | `OauthException`          |
-| Device code — pending, expired, unknown, or user deleted         | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}` | `OauthException`          |
-| `password` — wrong password                                      | `{"code": "invalid_credentials", "message": "…"}` (400)               | `GenericServerException`  |
-| Magic Auth — wrong or expired code                               | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`         | `GenericServerException`  |
-| Step-up (MFA, org selection, email verification)                 | `{"code": "…", "message": "…"}` (403)                                 | `AuthenticationException` |
+| Failure                                                          | Body                                                                          | Node SDK raises                |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------ |
+| `grant_type` outside production's public list, legacy names too  | `{"code": "invalid_request_parameters", "message": "…", "errors": […]}` (422) | `UnprocessableEntityException` |
+| Malformed request — missing parameter, any grant                 | `{"error": "invalid_request", "error_description": "…"}`                      | `OauthException`               |
+| `authorization_code` — unknown, expired, bad verifier, user gone | `{"error": "invalid_grant", "error_description": "…"}`                        | `OauthException`               |
+| `refresh_token` — unknown, expired, already exchanged, user gone | `{"error": "invalid_grant", "error_description": "…"}`                        | `OauthException`               |
+| `refresh_token` — switch to an organization the user is not in   | `{"error": "organization_membership_not_found\|organization_not_found", …}`   | `OauthException`               |
+| Device code — pending, expired, unknown, or user deleted         | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}`         | `OauthException`               |
+| `password` — wrong password                                      | `{"code": "invalid_credentials", "message": "…"}` (400)                       | `GenericServerException`       |
+| Magic Auth — wrong or expired code                               | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`                 | `GenericServerException`       |
+| Pending token spent on a grant other than its own                | `{"message": "…"}` (400, no `code`)                                           | `GenericServerException`       |
+| `mfa-totp` — challenge belongs to another user                   | `{"code": "user_mismatch", "message": "…"}` (400)                             | `GenericServerException`       |
+| Step-up (MFA, org selection, email verification)                 | `{"code": "…", "message": "…"}` (403)                                         | `AuthenticationException`      |
 
-`password` is an RFC 6749 grant, but production fails its credentials with the plain shape, so the emulator does too — while a `password` request that omits a parameter still answers `invalid_request` OAuth-style. Both halves come from the spec, whose authenticate 400 lists `invalid_request` and `invalid_grant` only as `{error, error_description}` and `invalid_credentials` and the one-time-code errors only as `{code, message}`. An unrecognized `grant_type` is reported as `invalid_request` rather than `unsupported_grant_type`, which the spec gives to `/sso/token` alone.
+`password` is an RFC 6749 grant, but production fails its credentials with the plain shape, so the emulator does too — while a `password` request that omits a parameter still answers `invalid_request` OAuth-style. Both halves come from the spec, whose authenticate 400 lists `invalid_request` and `invalid_grant` only as `{error, error_description}` and `invalid_credentials` and the one-time-code errors only as `{code, message}`. A `grant_type` production does not list fails body validation there before any grant runs, and the emulator answers with the same 422: `invalid_request_parameters`, with one `grant_type_required` error whose message spells out the accepted list. The legacy `urn:workos:oauth:grant-type:magic-auth` and `urn:workos:oauth:grant-type:email-verification` names (without the `:code` suffix) are outside that list and fail the same way. A grant production does list but the emulator does not implement — the Radar challenges and email completion — is reported as `invalid_request` rather than `unsupported_grant_type`, which the spec gives to `/sso/token` alone.
 
 `/sso/token` is OAuth-shaped throughout, matching its spec definition.
 

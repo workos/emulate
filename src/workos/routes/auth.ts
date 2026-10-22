@@ -5,6 +5,7 @@ import {
   parseOAuthBody,
   WorkOSApiError,
   OauthApiError,
+  PlainApiError,
   generateId,
   generateUlid,
 } from '../../core/index.js';
@@ -49,13 +50,53 @@ import {
   renderCodePage,
 } from '../login-page.js';
 
+/**
+ * The step that issued a pending_authentication_token, named as production names it. A token
+ * is only good for the grant that finishes the step it was issued for: one handed out with an
+ * MFA challenge cannot be spent on the organization-selection grant to skip the second factor.
+ */
+type PendingAuthReason = 'EmailVerification' | 'MfaChallenge' | 'OrganizationSelection';
+
 interface PendingAuth {
   user_id: string;
   organization_id: string | null;
   auth_method: string;
+  reason: PendingAuthReason;
   /** Carried across an MFA challenge so the second factor doesn't drop a pending invitation. */
   invitation_token?: string | null;
 }
+
+/**
+ * The reasons each continuation grant accepts, production's table for the steps the emulator
+ * issues. Production's email-verification row also admits a profile-linking reason the
+ * emulator never mints, so it is not listed here.
+ */
+const PENDING_AUTH_REASONS_BY_GRANT: Record<string, readonly PendingAuthReason[]> = {
+  'urn:workos:oauth:grant-type:email-verification:code': ['EmailVerification'],
+  'urn:workos:oauth:grant-type:mfa-totp': ['MfaChallenge'],
+  'urn:workos:oauth:grant-type:organization-selection': ['OrganizationSelection'],
+};
+
+/**
+ * Every grant_type production's public endpoint accepts, in the order its DTO lists them. A
+ * request naming anything else — a legacy name without the `:code` suffix included — fails body
+ * validation there with a 422 whose message spells this list out, before any grant handler runs.
+ * The emulator implements most of these; the ones it does not still parse as valid grants and
+ * fail further down, as unsupported rather than unknown.
+ */
+const PUBLIC_GRANT_TYPES = [
+  'authorization_code',
+  'password',
+  'refresh_token',
+  'urn:workos:oauth:grant-type:magic-auth:code',
+  'urn:workos:oauth:grant-type:email-verification:code',
+  'urn:workos:oauth:grant-type:mfa-totp',
+  'urn:workos:oauth:grant-type:organization-selection',
+  'urn:workos:oauth:grant-type:radar-email-challenge:code',
+  'urn:workos:oauth:grant-type:radar-sms-challenge:code',
+  'urn:workos:oauth:grant-type:email-completion',
+  'urn:ietf:params:oauth:grant-type:device_code',
+] as const;
 
 /**
  * A password the interactive page has already checked, and how far past it the login has got.
@@ -86,7 +127,6 @@ interface InteractiveLogin {
 const INVITATION_TOKEN_GRANTS = new Set([
   'authorization_code',
   'password',
-  'urn:workos:oauth:grant-type:magic-auth',
   'urn:workos:oauth:grant-type:magic-auth:code',
 ]);
 
@@ -687,6 +727,19 @@ export function authRoutes(ctx: RouteContext): void {
     if (!grantType) {
       throw new OauthApiError(400, 'invalid_request', 'grant_type is required.');
     }
+    // A grant_type production does not list fails its body validation before anything else
+    // runs — before an invitation_token is looked at, before a grant handler could consume a
+    // code: a 422 whose single error names the field and spells out the list. The body is
+    // production's exactly, down to the message class-validator's IsIn composes. Legacy names
+    // without the `:code` suffix land here too, since production dropped them.
+    if (!(PUBLIC_GRANT_TYPES as readonly string[]).includes(grantType)) {
+      throw new WorkOSApiError(422, 'Validation failed', 'invalid_request_parameters', [
+        {
+          code: 'grant_type_required',
+          message: `grant_type must be one of the following values: ${PUBLIC_GRANT_TYPES.join(', ')}`,
+        },
+      ]);
+    }
 
     const requestIp = c.req.header('x-forwarded-for') ?? null;
     const requestUserAgent = c.req.header('user-agent') ?? null;
@@ -832,6 +885,7 @@ export function authRoutes(ctx: RouteContext): void {
         user_id: mfaUser.id,
         organization_id: orgId,
         auth_method: primaryMethod,
+        reason: 'MfaChallenge',
         invitation_token: invitation?.token ?? null,
       });
       const challenge = ws.authChallenges.insert({
@@ -871,6 +925,7 @@ export function authRoutes(ctx: RouteContext): void {
         user_id: unverified.id,
         organization_id: orgId,
         auth_method: primaryMethod,
+        reason: 'EmailVerification',
         invitation_token: invitation?.token ?? null,
       });
       const verification = ws.emailVerifications.insert({
@@ -892,6 +947,31 @@ export function authRoutes(ctx: RouteContext): void {
         },
         403,
       );
+    };
+
+    /**
+     * Resolve the pending_authentication_token a continuation grant presents, and hold it to the
+     * step that issued it. Production keeps a reason on every pending authentication and each
+     * grant accepts only its own: without that, a token handed out with an MFA challenge or an
+     * email-verification gate could be spent on the organization-selection grant, and the gate
+     * it was issued to enforce skipped. The token is not consumed on either failure, so the
+     * right grant can still finish the step.
+     */
+    const requirePendingAuth = (pendingToken: string, grant: string): PendingAuth => {
+      const pending = store.getData<PendingAuth>(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`);
+      if (!pending) {
+        throw new WorkOSApiError(400, 'Invalid pending authentication token', 'invalid_pending_authentication_token');
+      }
+      if (!PENDING_AUTH_REASONS_BY_GRANT[grant]?.includes(pending.reason)) {
+        // Production's body for this is the bare message, with no code; the code here is for
+        // error hooks only.
+        throw new PlainApiError(
+          400,
+          'The pending_authentication_token is not valid for this request.',
+          'pending_authentication_reason_mismatch',
+        );
+      }
+      return pending;
     };
 
     let user;
@@ -1081,8 +1161,6 @@ export function authRoutes(ctx: RouteContext): void {
         break;
       }
 
-      // Accept both old and new grant type names for magic-auth
-      case 'urn:workos:oauth:grant-type:magic-auth':
       case 'urn:workos:oauth:grant-type:magic-auth:code': {
         const code = body.code as string;
         const email = requireEmailString(body.email);
@@ -1112,34 +1190,18 @@ export function authRoutes(ctx: RouteContext): void {
         break;
       }
 
-      // Accept both old and new grant type names for email-verification
-      case 'urn:workos:oauth:grant-type:email-verification':
       case 'urn:workos:oauth:grant-type:email-verification:code': {
         const code = body.code as string;
         // The SDKs send `pending_authentication_token` and nothing else identifying the user
         // (`serializeAuthenticateWithEmailVerificationOptions` in @workos-inc/node), which is the
-        // token the password grant's gate above hands out. `user_id` stays accepted for callers
-        // already driving this grant the emulator's old way.
+        // token the gate above hands out. Production's request schema has no other way to name
+        // the user: a `user_id` is not read, so a call that relied on one here would fail there.
         const pendingToken = body.pending_authentication_token as string | undefined;
-        let pending: PendingAuth | undefined;
-        if (pendingToken) {
-          pending = store.getData<PendingAuth>(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`);
-          if (!pending) {
-            throw new WorkOSApiError(
-              400,
-              'Invalid pending authentication token',
-              'invalid_pending_authentication_token',
-            );
-          }
+        if (!code || !pendingToken) {
+          throw new OauthApiError(400, 'invalid_request', 'code and pending_authentication_token are required.');
         }
-        const userId = pending?.user_id ?? (body.user_id as string);
-        if (!code || !userId) {
-          throw new OauthApiError(
-            400,
-            'invalid_request',
-            'code and pending_authentication_token (or user_id) are required.',
-          );
-        }
+        const pending = requirePendingAuth(pendingToken, grantType);
+        const userId = pending.user_id;
 
         const ev = ws.emailVerifications.findBy('user_id', userId).find((v) => v.code === code);
         if (!ev) {
@@ -1160,20 +1222,19 @@ export function authRoutes(ctx: RouteContext): void {
         // Revalidated before the pending token is consumed, on the same rule the MFA grant
         // states: an invitation revoked mid-flow fails the request without destroying the state
         // behind it, so a retry still reports invitation_invalid.
-        const deferredInvitation = pending?.invitation_token ? resolveInvitation(pending.invitation_token) : null;
+        const deferredInvitation = pending.invitation_token ? resolveInvitation(pending.invitation_token) : null;
 
         ws.users.update(userId, { email_verified: true });
         ws.emailVerifications.delete(ev.id);
-        if (pendingToken) store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, undefined);
+        store.setData(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`, undefined);
         user = ws.users.get(userId);
-        organizationId = pending?.organization_id ?? null;
+        organizationId = pending.organization_id;
         invitation = deferredInvitation;
         // Event is authentication.email_verification_succeeded; the session records the method
         // that was gated (e.g. 'password'), since verification is a gate rather than a way to
-        // sign in. Without a pending token there is nothing to record, and the session falls
-        // back to 'unknown' as before.
+        // sign in.
         authMethod = 'EmailVerification';
-        sessionAuthMethod = pending?.auth_method;
+        sessionAuthMethod = pending.auth_method;
         break;
       }
 
@@ -1241,7 +1302,30 @@ export function authRoutes(ctx: RouteContext): void {
         // the organization the original exchange bound it to: production's replay returns before the
         // exchange hook that records the session's organization, so a replayed switch is not
         // persisted and the next plain refresh is back on the previous organization.
-        organizationId = (body.organization_id as string) ?? refreshToken.organization_id;
+        //
+        // An organization named on the request is authorized the way production authorizes it,
+        // on a replay too: it has to exist, and the session's user has to hold an active
+        // membership in it — the same membership a fresh login resolves roles from, so the
+        // token this mints carries that membership's roles. Unchecked, a refresh could move a
+        // session into any organization at all and mint an org_id claim production never would.
+        // Failed before the presented token is retired, so the client keeps it for a retry.
+        const switchTo = body.organization_id as string | undefined;
+        if (switchTo) {
+          if (!ws.organizations.get(switchTo)) {
+            throw new OauthApiError(400, 'organization_not_found', 'Organization not found.');
+          }
+          const member = ws.organizationMemberships
+            .findBy('organization_id', switchTo)
+            .some((m) => m.user_id === refreshToken.user_id && m.status === 'active');
+          if (!member) {
+            throw new OauthApiError(
+              400,
+              'organization_membership_not_found',
+              'User is not a member of the organization.',
+            );
+          }
+        }
+        organizationId = switchTo ?? refreshToken.organization_id;
 
         // Rotate within the existing session: capture it for reuse and issue a new token below —
         // no new session, no authentication event. The presented token is retired, not deleted,
@@ -1268,14 +1352,23 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
 
-        const pending = store.getData<PendingAuth>(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`);
-        if (!pending) {
-          throw new WorkOSApiError(400, 'Invalid pending authentication token', 'invalid_pending_authentication_token');
-        }
+        const pending = requirePendingAuth(pendingToken, grantType);
 
         const challenge = ws.authChallenges.get(challengeId);
         if (!challenge) {
           throw new OauthApiError(400, 'invalid_request', 'Invalid authentication challenge.');
+        }
+        // The challenge has to belong to the user the pending token is for. Production reads
+        // that user off the challenge's factor; the emulator's challenge records the factor's
+        // user when it is created, which is the same thing. Without this, a token issued to one
+        // user could be completed with any other user's challenge. Checked before the code is,
+        // as production does, and consuming nothing.
+        if (challenge.user_id !== pending.user_id) {
+          throw new WorkOSApiError(
+            400,
+            'The pending_authentication_token is associated with a different user than the authentication_challenge.',
+            'user_mismatch',
+          );
         }
         if (isExpired(challenge.expires_at)) {
           ws.authChallenges.delete(challenge.id);
@@ -1327,10 +1420,7 @@ export function authRoutes(ctx: RouteContext): void {
           );
         }
 
-        const pending = store.getData<PendingAuth>(`${STORE_KEY_PREFIXES.pendingAuth}${pendingToken}`);
-        if (!pending) {
-          throw new WorkOSApiError(400, 'Invalid pending authentication token', 'invalid_pending_authentication_token');
-        }
+        const pending = requirePendingAuth(pendingToken, grantType);
 
         const org = ws.organizations.get(orgId);
         if (!org) throw notFound('Organization', orgId);
@@ -1402,13 +1492,13 @@ export function authRoutes(ctx: RouteContext): void {
         break;
       }
 
-      // `unsupported_grant_type` appears exactly once in the spec, under /sso/token, and nowhere
-      // in authenticate's 400 — which does list `invalid_request`. The asymmetry reads as real
-      // rather than an omission: authenticate's body is a oneOf discriminated on grant_type, so
-      // an unrecognized one fails body validation rather than reaching a grant handler that could
-      // decline it. Keeping the code the spec gives us, and saying what it means in the
-      // description instead of naming a code the endpoint never returns.
       default:
+        // Only a grant production accepts but the emulator does not implement reaches here (the
+        // Radar challenges, email completion): anything outside production's list was refused
+        // above. `unsupported_grant_type` appears exactly once in the spec, under /sso/token,
+        // and nowhere in authenticate's 400 — which does list `invalid_request` — so the
+        // emulator's own limit is reported with the code the spec gives this endpoint, and the
+        // description says what it means.
         throw new OauthApiError(400, 'invalid_request', `The grant type is not supported: ${grantType}`);
     }
 
@@ -1460,6 +1550,7 @@ export function authRoutes(ctx: RouteContext): void {
           user_id: user.id,
           organization_id: null,
           auth_method: sessionAuthMethod ?? authMethod,
+          reason: 'OrganizationSelection',
           invitation_token: invitation?.token ?? null,
         });
         return c.json(

@@ -117,7 +117,7 @@ export const FEATURES: FeatureDef[] = [
     name: 'Authentication',
     tags: ['user-management.authentication', 'user-management.magic-auth'],
     notes:
-      'All grant types are hand-written rather than generated from the spec. Refresh tokens rotate on every exchange, with the documented 30-second replay grace period.',
+      "All grant types are hand-written rather than generated from the spec, and only production's public grant names are accepted: anything else is the 422 production's body validation gives. Refresh tokens rotate on every exchange, with the documented 30-second replay grace period, and a refresh can only switch into an organization the user is an active member of. A pending_authentication_token is bound to the step that issued it, so an MFA challenge or email-verification gate cannot be skipped by spending its token on another grant.",
   },
   {
     name: 'Organization Memberships',
