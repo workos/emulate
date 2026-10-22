@@ -444,7 +444,8 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     const role = roleSlug
       ? resolvePrimaryRole(ws, membership.organization_id, roleSlug)
       : ws.roles.get(roleId as string);
-    const roleRef = roleSlug ?? (roleId as string);
+    // Same truthiness test as the lookup above, so an empty role_slug beside a role_id names the id.
+    const roleRef = roleSlug || (roleId as string);
     if (!role) throw notFound('Role', roleRef);
     // Whichever way it was addressed, the role must belong to the membership's
     // organization or the environment — never to another organization.

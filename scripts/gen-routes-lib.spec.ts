@@ -444,7 +444,7 @@ describe('generateRoutes', () => {
     const output = generateRoutes(sampleRoute);
     expect(output).toContain("app.get('/organizations/:id', (c) => {");
     expect(output).toContain("ws.organizations.get(c.req.param('id'))");
-    expect(output).toContain("if (!item) throw notFound('Organization');");
+    expect(output).toContain("if (!item) throw notFound('Organization', c.req.param('id'));");
   });
 
   it('generates PUT handler', () => {

@@ -604,13 +604,13 @@ export function generateRoutes(route: ParsedRoute): string {
     } else if (op.method === 'get' && op.hasIdParam) {
       lines.push(`  app.get('${op.path}', (c) => {`);
       lines.push(`    const item = ws.${route.storeAccessor}.get(c.req.param('id'));`);
-      lines.push(`    if (!item) throw notFound('${toPascalCase(singularize(route.tag))}');`);
+      lines.push(`    if (!item) throw notFound('${toPascalCase(singularize(route.tag))}', c.req.param('id'));`);
       lines.push(`    return c.json(${route.formatterName}(item));`);
       lines.push('  });');
     } else if (op.method === 'put' && op.hasIdParam) {
       lines.push(`  app.put('${op.path}', async (c) => {`);
       lines.push(`    const item = ws.${route.storeAccessor}.get(c.req.param('id'));`);
-      lines.push(`    if (!item) throw notFound('${toPascalCase(singularize(route.tag))}');`);
+      lines.push(`    if (!item) throw notFound('${toPascalCase(singularize(route.tag))}', c.req.param('id'));`);
       lines.push('');
       lines.push('    const body = await parseJsonBody(c);');
       lines.push(`    const updated = ws.${route.storeAccessor}.update(item.id, body);`);
@@ -619,7 +619,7 @@ export function generateRoutes(route: ParsedRoute): string {
     } else if (op.method === 'patch' && op.hasIdParam) {
       lines.push(`  app.patch('${op.path}', async (c) => {`);
       lines.push(`    const item = ws.${route.storeAccessor}.get(c.req.param('id'));`);
-      lines.push(`    if (!item) throw notFound('${toPascalCase(singularize(route.tag))}');`);
+      lines.push(`    if (!item) throw notFound('${toPascalCase(singularize(route.tag))}', c.req.param('id'));`);
       lines.push('');
       lines.push('    const body = await parseJsonBody(c);');
       lines.push(`    const updated = ws.${route.storeAccessor}.update(item.id, body);`);
@@ -628,7 +628,7 @@ export function generateRoutes(route: ParsedRoute): string {
     } else if (op.method === 'delete' && op.hasIdParam) {
       lines.push(`  app.delete('${op.path}', (c) => {`);
       lines.push(`    const item = ws.${route.storeAccessor}.get(c.req.param('id'));`);
-      lines.push(`    if (!item) throw notFound('${toPascalCase(singularize(route.tag))}');`);
+      lines.push(`    if (!item) throw notFound('${toPascalCase(singularize(route.tag))}', c.req.param('id'));`);
       lines.push(`    ws.${route.storeAccessor}.delete(item.id);`);
       lines.push('    return c.body(null, 204);');
       lines.push('  });');

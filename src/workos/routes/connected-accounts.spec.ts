@@ -170,7 +170,14 @@ describe('Connected account routes', () => {
       expect((await req('/user_management/users/user_none/connected_accounts/github')).status).toBe(404);
 
       const user = await createUser('bare@test.com');
-      expect((await req(`/user_management/users/${user.id}/connected_accounts/github`)).status).toBe(404);
+      const missing = await req(`/user_management/users/${user.id}/connected_accounts/github`);
+      expect(missing.status).toBe(404);
+      // Production names the whole lookup triple as the entity id.
+      expect(await json(missing)).toEqual({
+        message: `Data Installation not found: 'slug=github userland_user_id=${user.id} organization_id=null'.`,
+        code: 'entity_not_found',
+        entity_id: `slug=github userland_user_id=${user.id} organization_id=null`,
+      });
 
       const res = await req(`/user_management/users/${user.id}/connected_accounts/github?organization_id=org_none`);
       expect(res.status).toBe(404);
@@ -366,6 +373,7 @@ describe('Connected account routes', () => {
         body: JSON.stringify({ state: 'connected' }),
       });
       expect(res.status).toBe(404);
+      expect((await json(res)).entity_id).toBe(`slug=github userland_user_id=${user.id} organization_id=null`);
     });
   });
 
@@ -377,7 +385,13 @@ describe('Connected account routes', () => {
 
       expect((await req(path, { method: 'DELETE' })).status).toBe(204);
       expect((await req(path)).status).toBe(404);
-      expect((await req(path, { method: 'DELETE' })).status).toBe(404);
+      const again = await req(path, { method: 'DELETE' });
+      expect(again.status).toBe(404);
+      expect(await json(again)).toEqual({
+        message: `Data Installation not found: 'slug=github userland_user_id=${user.id} organization_id=null'.`,
+        code: 'entity_not_found',
+        entity_id: `slug=github userland_user_id=${user.id} organization_id=null`,
+      });
 
       const events = eventsNamed('pipes.connected_account.disconnected');
       expect(events).toHaveLength(1);

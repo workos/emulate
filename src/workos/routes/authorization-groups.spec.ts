@@ -130,12 +130,28 @@ describe('Native group authorization', () => {
     expect((await request(path, 'DELETE', criteria)).status).toBe(204);
     expect(await check()).toBe(false);
     // Group criteria removal is a 404 once nothing matches; the direct route stays a 204 no-op.
-    expect((await request(path, 'DELETE', criteria)).status).toBe(404);
+    // Production's exception has no id to name here and defaults it to 'matching criteria'.
+    const nothingMatched = await request(path, 'DELETE', criteria);
+    expect(nothingMatched.status).toBe(404);
+    expect(await nothingMatched.json()).toEqual({
+      message: "Group Role Assignment not found: 'matching criteria'.",
+      code: 'entity_not_found',
+      entity_id: 'matching criteria',
+    });
     expect((await request(memberPath, 'DELETE', criteria)).status).toBe(204);
-    // An unknown role slug is a 404 on both routes.
+    // An unknown role slug is a 404 on both routes, but the group route's production exception
+    // carries no entity_id while the membership route's does.
     const unknownRole = { ...criteria, role_slug: 'missing-role' };
-    expect((await request(path, 'DELETE', unknownRole)).status).toBe(404);
-    expect((await request(memberPath, 'DELETE', unknownRole)).status).toBe(404);
+    const groupMiss = await request(path, 'DELETE', unknownRole);
+    expect(groupMiss.status).toBe(404);
+    expect(await groupMiss.json()).toEqual({ message: "Role not found: 'missing-role'.", code: 'entity_not_found' });
+    const memberMiss = await request(memberPath, 'DELETE', unknownRole);
+    expect(memberMiss.status).toBe(404);
+    expect(await memberMiss.json()).toEqual({
+      message: "Role not found: 'missing-role'.",
+      code: 'entity_not_found',
+      entity_id: 'missing-role',
+    });
   });
 
   it('removes only the shadowing organization role grant, leaving the environment role grant', async () => {
