@@ -157,7 +157,8 @@ export const FEATURES: FeatureDef[] = [
   {
     name: 'Multi-Factor Auth',
     tags: ['multi-factor-auth', 'multi-factor-auth.challenges', 'user-management.multi-factor-authentication'],
-    notes: 'TOTP codes are accepted without verifying the shared secret.',
+    notes:
+      'TOTP codes are accepted without verifying the shared secret. A factor is listed and challenged only once its enrollment challenge has been verified, and every one-time code is single-use, compared only while it is the latest issued, and locked after three wrong codes, as in production.',
   },
   {
     name: 'FGA / Authorization',
