@@ -1,4 +1,4 @@
-import { validationError } from '../core/index.js';
+import { validationFailed } from '../core/index.js';
 
 /**
  * Request-body validation for the authorization routes, reported the way production's
@@ -112,7 +112,7 @@ export function validateBody(body: Record<string, unknown>, rules: BodyRules): v
   }
 
   if (errors.length > 0) {
-    throw validationError('Validation failed', errors);
+    throw validationFailed(errors);
   }
 }
 
