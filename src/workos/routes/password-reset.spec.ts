@@ -235,7 +235,23 @@ describe('Password reset routes', () => {
       await authenticate({ grant_type: 'password', email: user.email, password: 'correct-horse-battery' }),
     );
     expect(signedIn.refresh_token).toBeDefined();
-    expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(1);
+    const ws = getWorkOSStore(store);
+    const [session] = ws.sessions.findBy('user_id', user.id);
+    expect(session).toBeDefined();
+    // An agent session delegated from that sign-in, as a user_delegated mint chains one to the
+    // backing user session; minting one for real needs a blueprint, instance and token exchange,
+    // so the row is written directly with the link the revocation walks.
+    const delegated = ws.agentInstanceSessions.insert({
+      object: 'agent_instance_session',
+      agent_instance_id: 'agent_instance_delegated',
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      revoked_at: null,
+      refresh_token: 'agent-refresh-token',
+      parent_session_id: null,
+      user_session_id: session.id,
+      permissions: [],
+      intent: null,
+    });
 
     const confirmRes = await req('/user_management/password_reset/confirm', {
       method: 'POST',
@@ -244,10 +260,11 @@ describe('Password reset routes', () => {
     expect(confirmRes.status).toBe(200);
 
     // The session is ended the way a revoke ends it, so its refresh token is refused like an
-    // unknown one and delegated agent sessions hanging off it go with it (the session's delete
-    // hook), and the old password no longer signs in.
-    expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(0);
+    // unknown one, the agent session delegated from it is revoked with it, and the old password
+    // no longer signs in.
+    expect(ws.sessions.findBy('user_id', user.id)).toHaveLength(0);
     expect(eventsNamed('session.revoked')).toHaveLength(1);
+    expect(ws.agentInstanceSessions.get(delegated.id)!.revoked_at).not.toBeNull();
     const refreshed = await authenticate({ grant_type: 'refresh_token', refresh_token: signedIn.refresh_token });
     expect(refreshed.status).toBe(400);
     expect((await json(refreshed)).error).toBe('invalid_grant');
