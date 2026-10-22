@@ -30,11 +30,13 @@ describe('Native group authorization', () => {
       resource_type_slug: 'repository',
     });
     const role = await create('/authorization/roles', {
-      slug: 'repository-reader',
+      slug: 'org-repository-reader',
       name: 'Reader',
       resource_type_slug: 'repository',
     });
-    await request('/authorization/roles/repository-reader/permissions', 'PUT', { permissions: ['repository:read'] });
+    await request('/authorization/roles/org-repository-reader/permissions', 'PUT', {
+      permissions: ['repository:read'],
+    });
     const resource = await create('/authorization/resources', {
       organization_id: organization.id,
       resource_type_slug: 'repository',
@@ -81,7 +83,7 @@ describe('Native group authorization', () => {
       id: assignment.id,
       object: 'group_role_assignment',
       group_id: group.id,
-      role: { slug: 'repository-reader' },
+      role: { slug: 'org-repository-reader' },
       resource: { id: resource.id },
     });
     expect((await request(`${path}/${assignment.id}`)).status).toBe(200);
@@ -120,7 +122,7 @@ describe('Native group authorization', () => {
     const { membership, resource, path, check } = await setup();
     const memberPath = `/authorization/organization_memberships/${membership.id}/role_assignments`;
     const criteria = {
-      role_slug: 'repository-reader',
+      role_slug: 'org-repository-reader',
       resource_type_slug: 'repository',
       resource_external_id: resource.external_id,
     };

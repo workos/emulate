@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin, seedFromConfig, getWorkOSStore } from '../index.js';
 import { validateSeedConfig } from '../config-validator.js';
+import { SLUG_MESSAGE } from '../authorization-validation.js';
 
 const apiKeys: ApiKeyMap = { sk_test_role: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_role', 'Content-Type': 'application/json' };
@@ -46,21 +47,156 @@ describe('Authorization environment role routes', () => {
     expect(res.status).toBe(201);
     expect((await json(res)).resource_type_slug).toBe('document');
 
-    // The update DTO has no scope field, so PATCH must leave it untouched
+    // The update DTO has no scope field, so production refuses a PATCH that names one
     const patched = await req('/authorization/roles/doc-editor', {
       method: 'PATCH',
       body: JSON.stringify({ name: 'Document Editor', resource_type_slug: 'folder' }),
     });
-    expect(await json(patched)).toMatchObject({ name: 'Document Editor', resource_type_slug: 'document' });
+    expect(patched.status).toBe(422);
+    expect((await json(patched)).errors).toEqual([
+      { field: 'resource_type_slug', code: 'property resource_type_slug should not exist' },
+    ]);
+    expect(await json(await req('/authorization/roles/doc-editor'))).toMatchObject({
+      name: 'Doc Editor',
+      resource_type_slug: 'document',
+    });
   });
 
-  it.each([[42], ['']])('rejects an invalid resource type %p', async (resource_type_slug) => {
+  it.each([
+    [42, 'resource_type_slug must be a string'],
+    ['', SLUG_MESSAGE],
+    ['Invalid Slug!', SLUG_MESSAGE],
+  ])('rejects an invalid resource type %p', async (resource_type_slug, code) => {
     const res = await req('/authorization/roles', {
       method: 'POST',
       body: JSON.stringify({ slug: 'bad-scope', name: 'Bad Scope', resource_type_slug }),
     });
     expect(res.status).toBe(422);
-    expect((await json(res)).errors).toEqual([{ field: 'resource_type_slug', code: 'invalid' }]);
+    expect(await json(res)).toMatchObject({
+      message: 'Validation failed',
+      errors: [{ field: 'resource_type_slug', code }],
+    });
+  });
+
+  it.each([
+    ['Invalid Slug!', SLUG_MESSAGE],
+    ['admin--role', SLUG_MESSAGE],
+    ['-leading', SLUG_MESSAGE],
+    ['org:scoped', SLUG_MESSAGE],
+    ['this-slug-is-way-too-long-and-exceeds-the-maximum', 'slug cannot be more than 48 characters'],
+    ['', 'slug should not be empty'],
+    [undefined, 'slug should not be empty'],
+    [42, 'slug must be a string'],
+  ])('rejects the slug %p the way production does', async (slug, code) => {
+    const res = await req('/authorization/roles', {
+      method: 'POST',
+      body: JSON.stringify({ slug, name: 'Admin' }),
+    });
+    expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({ message: 'Validation failed', errors: [{ field: 'slug', code }] });
+  });
+
+  it('accepts every separator production allows in an environment role slug', async () => {
+    const res = await req('/authorization/roles', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'org-billing_admin-2', name: 'Billing' }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it.each([
+    [{ slug: 'admin' }, { field: 'name', code: 'name should not be empty' }],
+    [
+      { slug: 'admin', name: 'x'.repeat(49) },
+      { field: 'name', code: 'name cannot be more than 48 characters' },
+    ],
+    [
+      { slug: 'admin', name: 'Admin', description: 'x'.repeat(151) },
+      { field: 'description', code: 'description cannot be more than 150 characters' },
+    ],
+    [
+      { slug: 'admin', name: 'Admin', description: 7 },
+      { field: 'description', code: 'description must be a string' },
+    ],
+  ])('rejects the body %j with the field error production reports', async (body, error) => {
+    const res = await req('/authorization/roles', { method: 'POST', body: JSON.stringify(body) });
+    expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({ message: 'Validation failed', errors: [error] });
+  });
+
+  it('refuses the properties the create DTO does not declare, unknown ones first', async () => {
+    const res = await req('/authorization/roles', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'default-role', name: 'Default', is_default_role: true, priority: 3 }),
+    });
+    expect(res.status).toBe(422);
+    expect((await json(res)).errors).toEqual([
+      { field: 'is_default_role', code: 'property is_default_role should not exist' },
+      { field: 'priority', code: 'property priority should not exist' },
+    ]);
+
+    // A malformed field and an unknown property are both reported, the unknown one first.
+    const both = await req('/authorization/roles', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'Bad Slug', name: 'Bad', priority: 3 }),
+    });
+    expect((await json(both)).errors).toEqual([
+      { field: 'priority', code: 'property priority should not exist' },
+      { field: 'slug', code: SLUG_MESSAGE },
+    ]);
+  });
+
+  it('appends a new role to the end of the priority order, as production does', async () => {
+    for (const slug of ['first', 'second']) {
+      await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug, name: slug }) });
+    }
+    const body = await json(await req('/authorization/roles'));
+    expect(body.data.map((r: any) => [r.slug, r.priority, r.is_default_role])).toEqual([
+      ['first', 0, false],
+      ['second', 1, false],
+    ]);
+  });
+
+  it('accepts a null description on create and clears one on update', async () => {
+    const created = await json(
+      await req('/authorization/roles', {
+        method: 'POST',
+        body: JSON.stringify({ slug: 'nullable', name: 'Nullable', description: null }),
+      }),
+    );
+    expect(created.description).toBeNull();
+
+    await req('/authorization/roles/nullable', { method: 'PATCH', body: JSON.stringify({ description: 'Set' }) });
+    const cleared = await json(
+      await req('/authorization/roles/nullable', { method: 'PATCH', body: JSON.stringify({ description: null }) }),
+    );
+    expect(cleared.description).toBeNull();
+  });
+
+  it.each([
+    [{ name: '' }, { field: 'name', code: 'name should not be empty' }],
+    [{ name: 'x'.repeat(49) }, { field: 'name', code: 'name cannot be more than 48 characters' }],
+    [
+      { name: 'Renamed', slug: 'new-slug' },
+      { field: 'slug', code: 'property slug should not exist' },
+    ],
+    [
+      { name: 'Renamed', priority: 1 },
+      { field: 'priority', code: 'property priority should not exist' },
+    ],
+  ])('rejects the update %j the way production does', async (body, error) => {
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'fixed', name: 'Fixed' }) });
+    const res = await req('/authorization/roles/fixed', { method: 'PATCH', body: JSON.stringify(body) });
+    expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({ message: 'Validation failed', errors: [error] });
+    expect((await json(await req('/authorization/roles/fixed'))).name).toBe('Fixed');
+  });
+
+  it('keeps the name when an update sends null for it', async () => {
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'kept', name: 'Kept' }) });
+    const res = await req('/authorization/roles/kept', { method: 'PATCH', body: JSON.stringify({ name: null }) });
+    expect(res.status).toBe(200);
+    expect((await json(res)).name).toBe('Kept');
   });
 
   it('preserves a seeded role resource type', async () => {
@@ -135,16 +271,16 @@ describe('Authorization environment role routes', () => {
     expect(role.description).toBe('new desc');
   });
 
-  it('deletes a role', async () => {
+  it('has no route to delete an environment role, as production has none', async () => {
     await req('/authorization/roles', {
       method: 'POST',
       body: JSON.stringify({ slug: 'del', name: 'Del' }),
     });
     const res = await req('/authorization/roles/del', { method: 'DELETE' });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(404);
 
     const getRes = await req('/authorization/roles/del');
-    expect(getRes.status).toBe(404);
+    expect(getRes.status).toBe(200);
   });
 
   it('sets and gets role permissions', async () => {
@@ -246,20 +382,40 @@ describe('Authorization environment role routes', () => {
   it('rejects malformed permission changes', async () => {
     await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'strict', name: 'Strict' }) });
 
+    // An unknown permission slug is a 422 invalid_permission_slug in production, not a 404.
     const missing = await req('/authorization/roles/strict/permissions', {
       method: 'POST',
       body: JSON.stringify({ slug: 'nope' }),
     });
-    expect(missing.status).toBe(404);
+    expect(missing.status).toBe(422);
+    expect(await json(missing)).toEqual({ message: "Permission not found: 'nope'.", code: 'invalid_permission_slug' });
 
     const noSlug = await req('/authorization/roles/strict/permissions', { method: 'POST', body: JSON.stringify({}) });
     expect(noSlug.status).toBe(422);
+    expect((await json(noSlug)).errors).toEqual([{ field: 'slug', code: 'slug should not be empty' }]);
+
+    const extra = await req('/authorization/roles/strict/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'nope', permissions: ['nope'] }),
+    });
+    expect((await json(extra)).errors).toEqual([
+      { field: 'permissions', code: 'property permissions should not exist' },
+    ]);
 
     const notArray = await req('/authorization/roles/strict/permissions', {
       method: 'PUT',
       body: JSON.stringify({ permissions: 'read' }),
     });
     expect(notArray.status).toBe(422);
+    expect((await json(notArray)).errors).toEqual([{ field: 'permissions', code: 'permissions must be an array' }]);
+
+    const notStrings = await req('/authorization/roles/strict/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['read', 7] }),
+    });
+    expect((await json(notStrings)).errors).toEqual([
+      { field: 'permissions', code: 'each value in permissions must be a string' },
+    ]);
   });
 
   it('leaves permissions intact when a replacement names an unknown slug', async () => {
@@ -274,7 +430,8 @@ describe('Authorization environment role routes', () => {
       method: 'PUT',
       body: JSON.stringify({ permissions: ['keep', 'missing'] }),
     });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(422);
+    expect(await json(res)).toEqual({ message: "Permission not found: 'missing'.", code: 'invalid_permission_slug' });
 
     const role = await json(await req('/authorization/roles/atomic'));
     expect(role.permissions).toEqual(['keep']);
@@ -312,13 +469,17 @@ describe('Authorization environment role routes', () => {
 
   it('emits role.deleted without permissions, as production does', async () => {
     await req('/authorization/permissions', { method: 'POST', body: JSON.stringify({ slug: 'gone', name: 'Gone' }) });
-    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'doomed', name: 'Doomed' }) });
+    const doomed = await json(
+      await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'doomed', name: 'Doomed' }) }),
+    );
     await req('/authorization/roles/doomed/permissions', {
       method: 'PUT',
       body: JSON.stringify({ permissions: ['gone'] }),
     });
 
-    await req('/authorization/roles/doomed', { method: 'DELETE' });
+    // No route deletes an environment role (production removes one from the dashboard), so
+    // the event comes from the store hook alone.
+    getWorkOSStore(store).roles.delete(doomed.id);
 
     const deleted = getWorkOSStore(store).events.findBy('event', 'role.deleted');
     expect(deleted).toHaveLength(1);
@@ -340,14 +501,5 @@ describe('Authorization environment role routes', () => {
     const res = await req('/authorization/roles/legacy');
     expect(res.status).toBe(200);
     expect(await json(res)).toMatchObject({ resource_type_slug: 'organization', permissions: [] });
-  });
-
-  it('creates role with default flag', async () => {
-    const res = await req('/authorization/roles', {
-      method: 'POST',
-      body: JSON.stringify({ slug: 'default-role', name: 'Default', is_default_role: true }),
-    });
-    const role = await json(res);
-    expect(role.is_default_role).toBe(true);
   });
 });

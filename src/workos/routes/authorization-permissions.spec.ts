@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin, seedFromConfig } from '../index.js';
 import { validateSeedConfig } from '../config-validator.js';
+import { PERMISSION_SLUG_MESSAGE, SLUG_MESSAGE } from '../authorization-validation.js';
 
 const apiKeys: ApiKeyMap = { sk_test_perm: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_perm', 'Content-Type': 'application/json' };
@@ -93,15 +94,87 @@ describe('Authorization permission routes', () => {
       body: JSON.stringify({ name: 'No Slug' }),
     });
     expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({
+      message: 'Validation failed',
+      errors: [{ field: 'slug', code: 'slug should not be empty' }],
+    });
   });
 
-  it.each([[42], ['']])('rejects an invalid resource type %p', async (resource_type_slug) => {
+  it.each([
+    [42, 'resource_type_slug must be a string'],
+    ['', SLUG_MESSAGE],
+    ['Document Type', SLUG_MESSAGE],
+    ['doc:type', SLUG_MESSAGE],
+  ])('rejects an invalid resource type %p', async (resource_type_slug, code) => {
     const res = await req('/authorization/permissions', {
       method: 'POST',
       body: JSON.stringify({ slug: 'invalid:scope', name: 'Invalid Scope', resource_type_slug }),
     });
     expect(res.status).toBe(422);
-    expect((await json(res)).errors).toEqual([{ field: 'resource_type_slug', code: 'invalid' }]);
+    expect((await json(res)).errors).toEqual([{ field: 'resource_type_slug', code }]);
+  });
+
+  it.each(['documents:read', 'reports.export', 'billing_admin', 'posts-write', 'documents:*', '*'])(
+    'accepts the permission slug %p',
+    async (slug) => {
+      const res = await req('/authorization/permissions', {
+        method: 'POST',
+        body: JSON.stringify({ slug, name: 'Allowed' }),
+      });
+      expect(res.status).toBe(201);
+    },
+  );
+
+  it.each([
+    ['Documents:Read', PERMISSION_SLUG_MESSAGE],
+    ['documents::read', PERMISSION_SLUG_MESSAGE],
+    [':read', PERMISSION_SLUG_MESSAGE],
+    ['documents/read', PERMISSION_SLUG_MESSAGE],
+    ['has space', PERMISSION_SLUG_MESSAGE],
+    ['a'.repeat(49), 'slug cannot be more than 48 characters'],
+    [42, 'slug must be a string'],
+  ])('rejects the permission slug %p the way production does', async (slug, code) => {
+    const res = await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug, name: 'Rejected' }),
+    });
+    expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({ message: 'Validation failed', errors: [{ field: 'slug', code }] });
+  });
+
+  it.each([
+    [{ slug: 'posts:read' }, { field: 'name', code: 'name should not be empty' }],
+    [
+      { slug: 'posts:read', name: 'x'.repeat(49) },
+      { field: 'name', code: 'name cannot be more than 48 characters' },
+    ],
+    [
+      { slug: 'posts:read', name: 'Read', description: 'x'.repeat(151) },
+      { field: 'description', code: 'description cannot be more than 150 characters' },
+    ],
+    [
+      { slug: 'posts:read', name: 'Read', system: true },
+      { field: 'system', code: 'property system should not exist' },
+    ],
+  ])('rejects the body %j with the field error production reports', async (body, error) => {
+    const res = await req('/authorization/permissions', { method: 'POST', body: JSON.stringify(body) });
+    expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({ message: 'Validation failed', errors: [error] });
+  });
+
+  it.each([
+    [{ name: '' }, { field: 'name', code: 'name should not be empty' }],
+    [{ slug: 'renamed' }, { field: 'slug', code: 'property slug should not exist' }],
+    [
+      { resource_type_slug: 'other' },
+      { field: 'resource_type_slug', code: 'property resource_type_slug should not exist' },
+    ],
+  ])('rejects the update %j the way production does', async (body, error) => {
+    await req('/authorization/permissions', { method: 'POST', body: JSON.stringify({ slug: 'fixed', name: 'Fixed' }) });
+    const res = await req('/authorization/permissions/fixed', { method: 'PATCH', body: JSON.stringify(body) });
+    expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({ message: 'Validation failed', errors: [error] });
+    expect(await json(await req('/authorization/permissions/fixed'))).toMatchObject({ slug: 'fixed', name: 'Fixed' });
   });
 
   it('lists permissions', async () => {

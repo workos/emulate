@@ -11,6 +11,12 @@ import type { WorkOSAuthorizationResource } from '../entities.js';
 import { findOrCreateOrganizationResource } from '../organization-resource.js';
 import { getWorkOSStore, type WorkOSStore } from '../store.js';
 import { formatAuthorizationResource, formatMembership, formatListResponse } from '../helpers.js';
+import {
+  RESOURCE_CREATE_RULES,
+  RESOURCE_MEMBERSHIPS_QUERY_RULES,
+  RESOURCE_UPDATE_RULES,
+  validateBody,
+} from '../authorization-validation.js';
 import { getPermissionsForMembership } from './authorization-checks.js';
 
 function findResourceByExternalId(
@@ -86,24 +92,14 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
 
   app.post('/authorization/resources', async (c) => {
     const body = await parseJsonBody(c);
+    // Production's create DTO: external_id is ASCII and at most 128 characters, name at most
+    // 48, description at most 150, and nothing else is accepted (there is no metadata).
+    validateBody(body, RESOURCE_CREATE_RULES);
 
     const resourceTypeSlug = body.resource_type_slug as string;
     const externalId = body.external_id as string;
     const organizationId = body.organization_id as string;
-    const name = body.name as string | undefined;
-
-    if (!resourceTypeSlug) {
-      throw validationError('resource_type_slug is required', [{ field: 'resource_type_slug', code: 'required' }]);
-    }
-    if (!externalId) {
-      throw validationError('external_id is required', [{ field: 'external_id', code: 'required' }]);
-    }
-    if (!organizationId) {
-      throw validationError('organization_id is required', [{ field: 'organization_id', code: 'required' }]);
-    }
-    if (!name) {
-      throw validationError('name is required', [{ field: 'name', code: 'required' }]);
-    }
+    const name = body.name as string;
 
     if (resourceTypeSlug === 'organization') {
       throw new WorkOSApiError(400, 'Cannot add resource to organization resource type', 'bad_request');
@@ -131,7 +127,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
       name,
       description: (body.description as string | null | undefined) ?? null,
       parent_resource_id: parent.id,
-      metadata: (body.metadata as Record<string, string>) ?? {},
+      metadata: {},
     });
 
     return c.json(formatAuthorizationResource(resource), 201);
@@ -142,6 +138,14 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const params = parseListParams(url);
     const organizationId = url.searchParams.get('organization_id') ?? undefined;
     const resourceTypeSlug = url.searchParams.get('resource_type_slug') ?? undefined;
+    // Production never lists an environment's resources unscoped: one of the two is required.
+    if (!organizationId && !resourceTypeSlug) {
+      throw new WorkOSApiError(
+        400,
+        'At least one of organization_id or resource_type_slug must be provided.',
+        'missing_organization_id_or_resource_type_slug',
+      );
+    }
     const resourceExternalId = url.searchParams.get('resource_external_id') ?? undefined;
     const parentResourceId = url.searchParams.get('parent_resource_id') ?? undefined;
     // This list endpoint names the pair parent_resource_type_slug +
@@ -190,8 +194,9 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     }
 
     const body = await parseJsonBody(c);
+    // Production's update DTO: name, description and the parent fields; nothing else.
+    validateBody(body, RESOURCE_UPDATE_RULES);
     const updates: Record<string, unknown> = {};
-    if ('metadata' in body) updates.metadata = body.metadata;
     if ('name' in body) updates.name = body.name ?? null;
     if ('description' in body) updates.description = body.description ?? null;
 
@@ -265,16 +270,19 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     return c.body(null, 204);
   });
 
-  // Memberships that hold a permission on a resource. Production requires
-  // permission_slug; without it (pre-0.11 emulator behavior) every membership
-  // in the resource's organization is returned.
+  // Memberships that hold a permission on a resource. Production validates the query before
+  // it resolves the resource, so a missing permission_slug is a 422 even for an unknown
+  // resource, and a slug that names no permission is a 404 rather than an empty list. `ref`
+  // is whatever the route addressed the resource by, so the 404 can name it.
   const listMembershipsForResource = (c: Context, resource: WorkOSAuthorizationResource | undefined, ref: string) => {
+    const permissionSlug = new URL(c.req.url).searchParams.get('permission_slug') ?? undefined;
+    validateBody({ permission_slug: permissionSlug }, RESOURCE_MEMBERSHIPS_QUERY_RULES);
     if (!resource) throw notFound('AuthorizationResource', ref);
+    if (!ws.permissions.findOneBy('slug', permissionSlug!)) throw notFound('Permission', permissionSlug!);
 
-    const permissionSlug = new URL(c.req.url).searchParams.get('permission_slug');
     const memberships = ws.organizationMemberships
       .findBy('organization_id', resource.organization_id)
-      .filter((m) => !permissionSlug || getPermissionsForMembership(ws, m.id, resource).has(permissionSlug));
+      .filter((m) => getPermissionsForMembership(ws, m.id, resource).has(permissionSlug!));
     return c.json({
       object: 'list',
       data: memberships.map((m) => formatMembership(m, ws)),

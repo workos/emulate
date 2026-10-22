@@ -47,12 +47,62 @@ describe('Authorization resource routes', () => {
     expect(resource.id).toMatch(/^authz_resource_/);
   });
 
-  it('rejects missing required fields', async () => {
+  it('rejects missing required fields, one error per field in the DTO order', async () => {
     const res = await req('/authorization/resources', {
       method: 'POST',
       body: JSON.stringify({ resource_type_slug: 'document' }),
     });
     expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({
+      message: 'Validation failed',
+      errors: [
+        { field: 'external_id', code: 'external_id should not be empty' },
+        { field: 'name', code: 'name should not be empty' },
+        { field: 'organization_id', code: 'organization_id should not be empty' },
+      ],
+    });
+  });
+
+  it.each([
+    [
+      { external_id: 'x'.repeat(129) },
+      { field: 'external_id', code: 'external_id cannot be more than 128 characters' },
+    ],
+    [{ external_id: 'döc-1' }, { field: 'external_id', code: 'external_id must contain only ASCII characters' }],
+    [{ name: 'x'.repeat(49) }, { field: 'name', code: 'name cannot be more than 48 characters' }],
+    [
+      { description: 'x'.repeat(151) },
+      { field: 'description', code: 'description cannot be more than 150 characters' },
+    ],
+    [{ metadata: { key: 'value' } }, { field: 'metadata', code: 'property metadata should not exist' }],
+  ])('rejects the create body %j the way production does', async (overrides, error) => {
+    const org = await createOrg('Invalid Org');
+    const res = await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({
+        resource_type_slug: 'doc',
+        external_id: 'doc-1',
+        organization_id: org.id,
+        name: 'Doc',
+        ...overrides,
+      }),
+    });
+    expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({ message: 'Validation failed', errors: [error] });
+  });
+
+  it('requires organization_id or resource_type_slug to list resources, as production does', async () => {
+    const res = await req('/authorization/resources');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      message: 'At least one of organization_id or resource_type_slug must be provided.',
+      code: 'missing_organization_id_or_resource_type_slug',
+    });
+    expect((await req('/authorization/resources?resource_external_id=doc-1')).status).toBe(400);
+
+    const org = await createOrg('Scoped List Org');
+    expect((await req(`/authorization/resources?organization_id=${org.id}`)).status).toBe(200);
+    expect((await req('/authorization/resources?resource_type_slug=doc')).status).toBe(200);
   });
 
   it('lists resources', async () => {
@@ -114,11 +164,26 @@ describe('Authorization resource routes', () => {
 
     const res = await req(`/authorization/resources/${resource.id}`, {
       method: 'PUT',
-      body: JSON.stringify({ metadata: { key: 'value' } }),
+      body: JSON.stringify({ name: 'Renamed' }),
     });
     expect(res.status).toBe(200);
     const updated = await json(res);
-    expect(updated.metadata).toEqual({ key: 'value' });
+    expect(updated.name).toBe('Renamed');
+
+    // Production's update DTO has no metadata, so a body naming it is refused
+    for (const method of ['PUT', 'PATCH']) {
+      const refused = await req(`/authorization/resources/${resource.id}`, {
+        method,
+        body: JSON.stringify({ metadata: { key: 'value' } }),
+      });
+      expect(refused.status).toBe(422);
+      expect((await json(refused)).errors).toEqual([{ field: 'metadata', code: 'property metadata should not exist' }]);
+    }
+    const tooLong = await req(`/authorization/organizations/${org.id}/resources/doc/upd1`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'x'.repeat(49) }),
+    });
+    expect((await json(tooLong)).errors).toEqual([{ field: 'name', code: 'name cannot be more than 48 characters' }]);
   });
 
   it('deletes a resource', async () => {
@@ -182,7 +247,7 @@ describe('Authorization resource routes', () => {
     });
     expect(res.status).toBe(422);
     const error = await json(res);
-    expect(error.errors).toEqual([{ field: 'name', code: 'required' }]);
+    expect(error.errors).toEqual([{ field: 'name', code: 'name should not be empty' }]);
   });
 
   it('persists name and description', async () => {
@@ -496,29 +561,39 @@ describe('Authorization resource routes', () => {
       }),
     });
 
-    const byExternalId = await json(await req('/authorization/resources?resource_external_id=proj-5'));
+    const scoped = `/authorization/resources?organization_id=${org.id}`;
+    const byExternalId = await json(await req(`${scoped}&resource_external_id=proj-5`));
     expect(byExternalId.data.map((r: any) => r.external_id)).toEqual(['proj-5']);
 
-    const byParentId = await json(await req(`/authorization/resources?parent_resource_id=${parent.id}`));
+    const byParentId = await json(await req(`${scoped}&parent_resource_id=${parent.id}`));
     expect(byParentId.data.map((r: any) => r.external_id)).toEqual(['proj-5']);
 
     const byParentExternal = await json(
-      await req('/authorization/resources?parent_resource_type_slug=workspace&parent_external_id=ws-4'),
+      await req(`${scoped}&parent_resource_type_slug=workspace&parent_external_id=ws-4`),
     );
     expect(byParentExternal.data.map((r: any) => r.external_id)).toEqual(['proj-5']);
   });
 
-  it('lists memberships for a resource', async () => {
+  it('lists memberships that hold a permission on a resource', async () => {
     const org = await createOrg('Mem Org');
-    // Create a user and membership
+    // Create a user and membership holding a role that grants the permission
     const userRes = await req('/user_management/users', {
       method: 'POST',
       body: JSON.stringify({ email: 'member@test.com' }),
     });
     const user = await json(userRes);
+    await req('/authorization/permissions', {
+      method: 'POST',
+      body: JSON.stringify({ slug: 'doc:read', name: 'Read docs' }),
+    });
+    await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug: 'reader', name: 'Reader' }) });
+    await req('/authorization/roles/reader/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: ['doc:read'] }),
+    });
     await req('/user_management/organization_memberships', {
       method: 'POST',
-      body: JSON.stringify({ organization_id: org.id, user_id: user.id }),
+      body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slug: 'reader' }),
     });
 
     // Create resource
@@ -528,10 +603,25 @@ describe('Authorization resource routes', () => {
     });
     const resource = await json(resCreate);
 
-    const res = await req(`/authorization/resources/${resource.id}/organization_memberships`);
-    expect(res.status).toBe(200);
-    const body = await json(res);
-    expect(body.data.length).toBe(1);
-    expect(body.data[0].user_id).toBe(user.id);
+    const byId = `/authorization/resources/${resource.id}/organization_memberships`;
+    const byExternalId = `/authorization/organizations/${org.id}/resources/doc/mem1/organization_memberships`;
+    for (const path of [byId, byExternalId]) {
+      const res = await req(`${path}?permission_slug=doc:read`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.data.length).toBe(1);
+      expect(body.data[0].user_id).toBe(user.id);
+
+      // Production requires the permission, and validates the query before the resource
+      const missing = await req(path);
+      expect(missing.status).toBe(422);
+      expect(await json(missing)).toMatchObject({
+        message: 'Validation failed',
+        errors: [{ field: 'permission_slug', code: 'permission_slug should not be empty' }],
+      });
+      expect((await req(`${path}?permission_slug=doc:nope`)).status).toBe(404);
+    }
+    const unknownResource = await req('/authorization/resources/authz_resource_nope/organization_memberships');
+    expect(unknownResource.status).toBe(422);
   });
 });

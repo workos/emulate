@@ -411,30 +411,33 @@ describe('Membership routes', () => {
   it('orders roles by role priority, read when the membership is, with the primary first', async () => {
     const org = await createOrg('Priority Org');
     const user = await createUser('priority@test.com');
-    for (const slug of ['editor', 'viewer']) {
+    for (const slug of ['org-editor', 'org-viewer']) {
       await req(`/authorization/organizations/${org.id}/roles`, {
         method: 'POST',
         body: JSON.stringify({ slug, name: slug }),
       });
     }
-    const prioritize = (slugs: string[]) =>
-      req(`/authorization/organizations/${org.id}/roles/priority`, { method: 'PUT', body: JSON.stringify({ slugs }) });
-    await prioritize(['viewer', 'editor']);
+    const prioritize = (role_priority_order: string[]) =>
+      req(`/authorization/organizations/${org.id}/roles/priority`, {
+        method: 'PUT',
+        body: JSON.stringify({ role_priority_order }),
+      });
+    await prioritize(['org-viewer', 'org-editor']);
 
     const created = await json(
       await req('/user_management/organization_memberships', {
         method: 'POST',
-        body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slugs: ['editor', 'viewer'] }),
+        body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slugs: ['org-editor', 'org-viewer'] }),
       }),
     );
-    expect(created.role).toEqual({ slug: 'viewer' });
-    expect(created.roles).toEqual([{ slug: 'viewer' }, { slug: 'editor' }]);
+    expect(created.role).toEqual({ slug: 'org-viewer' });
+    expect(created.roles).toEqual([{ slug: 'org-viewer' }, { slug: 'org-editor' }]);
 
     // Production resolves the priority when it serializes, not when the roles were written.
-    await prioritize(['editor', 'viewer']);
+    await prioritize(['org-editor', 'org-viewer']);
     const read = await json(await req(`/user_management/organization_memberships/${created.id}`));
-    expect(read.role).toEqual({ slug: 'editor' });
-    expect(read.roles).toEqual([{ slug: 'editor' }, { slug: 'viewer' }]);
+    expect(read.role).toEqual({ slug: 'org-editor' });
+    expect(read.roles).toEqual([{ slug: 'org-editor' }, { slug: 'org-viewer' }]);
   });
 
   it('carries role and roles on organization_membership events, without the user', async () => {

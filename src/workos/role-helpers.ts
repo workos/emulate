@@ -2,18 +2,26 @@ import type { Context } from 'hono';
 import {
   type RouteContext,
   type Store,
+  ID_PREFIXES,
   WorkOSApiError,
+  generateId,
   notFound,
-  validationError,
   parseJsonBody,
-  parseListParams,
 } from '../core/index.js';
 import type { WorkOSStore } from './store.js';
 import type { WorkOSRole, WorkOSPermission } from './entities.js';
 import type { EventBus } from './event-bus.js';
 import { getWorkOSStore } from './store.js';
-import { DEFAULT_RESOURCE_TYPE_SLUG, EVENTS, STORE_KEYS, isValidResourceTypeSlug } from './constants.js';
-import { formatRole, formatPermission, formatListResponse } from './helpers.js';
+import { DEFAULT_RESOURCE_TYPE_SLUG, EVENTS, STORE_KEYS } from './constants.js';
+import { formatRole, formatPermission } from './helpers.js';
+import { membershipRoleSlugs } from './membership-roles.js';
+import {
+  type BodyRules,
+  ROLE_PERMISSION_ADD_RULES,
+  ROLE_PERMISSIONS_SET_RULES,
+  ROLE_UPDATE_RULES,
+  validateBody,
+} from './authorization-validation.js';
 
 export function findEnvRole(ws: WorkOSStore, slug: string): WorkOSRole | undefined {
   // An environment role is unowned by definition; seeded roles can carry an
@@ -54,10 +62,16 @@ export function resolvePrimaryRole(ws: WorkOSStore, organizationId: string, slug
 export function rolesApplyingTo(ws: WorkOSStore, organizationId: string): WorkOSRole[] {
   const own = ws.roles.findBy('organization_id', organizationId);
   const shadowed = new Set(own.map((r) => r.slug));
-  const environment = ws.roles
-    .all()
-    .filter((r) => r.type === 'EnvironmentRole' && r.organization_id === null && !shadowed.has(r.slug));
+  const environment = environmentRoles(ws).filter((r) => !shadowed.has(r.slug));
   return [...environment, ...own].sort((a, b) => a.priority - b.priority);
+}
+
+/** Every environment role, in priority order: what `GET /authorization/roles` lists. */
+export function environmentRoles(ws: WorkOSStore): WorkOSRole[] {
+  return ws.roles
+    .all()
+    .filter((r) => r.type === 'EnvironmentRole' && r.organization_id === null)
+    .sort((a, b) => a.priority - b.priority);
 }
 
 export function requireEnvRole(ws: WorkOSStore, slug: string): WorkOSRole {
@@ -96,16 +110,28 @@ export function permissionsForRoles(
 }
 
 /**
+ * The permission a role-permissions body names. Production resolves the slug before it
+ * touches the role and answers an unknown one with 422 `invalid_permission_slug` (the
+ * role-permissions controllers map PermissionSlugNotFoundException onto it), not 404.
+ */
+export function requirePermissionBySlug(ws: WorkOSStore, slug: string): WorkOSPermission {
+  const permission = ws.permissions.findOneBy('slug', slug);
+  if (!permission) {
+    throw new WorkOSApiError(422, `Permission not found: '${slug}'.`, 'invalid_permission_slug');
+  }
+  return permission;
+}
+
+/**
  * Replace a role's permission set. Every slug is resolved before the join
- * table is touched, so an unknown slug answers 404 and leaves the current set
+ * table is touched, so an unknown slug answers 422 and leaves the current set
  * intact rather than half-applied. Returns whether the set actually changed,
  * which is what decides whether a role.updated event is due, as in production.
  */
 export function replaceRolePermissions(ws: WorkOSStore, roleId: string, permissionSlugs: string[]): boolean {
   const next = new Map<string, WorkOSPermission>();
   for (const permSlug of permissionSlugs) {
-    const perm = ws.permissions.findOneBy('slug', permSlug);
-    if (!perm) throw notFound('Permission', permSlug);
+    const perm = requirePermissionBySlug(ws, permSlug);
     next.set(perm.id, perm);
   }
 
@@ -133,18 +159,70 @@ export function emitRolePermissionsUpdated(store: Store, ws: WorkOSStore, role: 
   });
 }
 
+/**
+ * Whether any membership still holds the role, which is what production's
+ * `userRolesService.findAllByRoleId` answers before an organization role may be deleted:
+ * a membership's organization-level roles (held by slug, which resolves to this role
+ * because an organization role shadows an environment role) and resource-scoped
+ * assignments, the ones derived from a native group's grant included.
+ */
+export function roleHasAssignments(ws: WorkOSStore, role: WorkOSRole): boolean {
+  if (ws.roleAssignments.findBy('role_id', role.id).length > 0) return true;
+  if (role.organization_id === null) return false;
+  return ws.organizationMemberships
+    .findBy('organization_id', role.organization_id)
+    .some((m) => membershipRoleSlugs(ws, m).includes(role.slug));
+}
+
+/**
+ * The priority a newly created role takes: production appends it to the end of the
+ * priority order, so it sorts after every role that already exists.
+ */
+export function nextRolePriority(ws: WorkOSStore): number {
+  return ws.roles.all().reduce((max, r) => Math.max(max, r.priority), -1) + 1;
+}
+
+const SLUG_SUFFIX_LENGTH = 6;
+const MAX_GENERATED_SLUG_LENGTH = 48;
+const MAX_NAME_SLUG_LENGTH = MAX_GENERATED_SLUG_LENGTH - SLUG_SUFFIX_LENGTH - 1;
+
+/**
+ * The slug production generates for an organization role created without one
+ * (api-services/src/roles/slug-generation.ts): the name slugified, cut to fit, and the last
+ * six characters of the role's ULID appended in lowercase. It does not carry the `org-`
+ * prefix an explicit slug must.
+ */
+export function generateRoleSlug(name: string, roleId: string): string {
+  const nameSlug = name
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9_-]/g, '')
+    .replace(/[-_]{2,}/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, MAX_NAME_SLUG_LENGTH)
+    .replace(/[-_]+$/, '');
+  const suffix = roleId.slice(-SLUG_SUFFIX_LENGTH).toLowerCase();
+  return nameSlug ? `${nameSlug}-${suffix}` : suffix;
+}
+
 export interface RoleRouteConfig {
   pathPrefix: string;
   roleType: 'EnvironmentRole' | 'OrganizationRole';
+  /** Resolves the role a write names: an organization route only ever writes its own roles. */
   requireRole: (ws: WorkOSStore, c: Context) => WorkOSRole;
-  findRole: (ws: WorkOSStore, c: Context, slug: string) => WorkOSRole | undefined;
-  /** Narrows the paged GET to the roles table rows it serves. Unused when listRoles is set. */
-  listFilter?: (c: Context) => (r: WorkOSRole) => boolean;
   /**
-   * The whole list the GET answers with, when production's list is not a filtered page of
-   * the roles table: the spec's RoleList is unpaged and in priority order. Replaces listFilter.
+   * Resolves the role a GET names. Defaults to requireRole; production's organization GET
+   * also answers the environment roles that apply to the organization.
    */
-  listRoles?: (ws: WorkOSStore, c: Context) => WorkOSRole[];
+  readRole?: (ws: WorkOSStore, c: Context) => WorkOSRole;
+  findRole: (ws: WorkOSStore, c: Context, slug: string) => WorkOSRole | undefined;
+  /** The body rules production's create DTO enforces for this role type. */
+  createRules: BodyRules;
+  /** The slug a validated create body gives the role; `roleId` is the id the role will take. */
+  slugFor: (body: Record<string, unknown>, roleId: string) => string;
+  /** The whole list the GET answers with: the spec's RoleList is unpaged and in priority order. */
+  listRoles: (ws: WorkOSStore, c: Context) => WorkOSRole[];
   insertDefaults: (c: Context) => Partial<WorkOSRole>;
   duplicateMessage: string;
   /** Spec error code for a taken slug: `role_slug_conflict` or `organization_role_slug_conflict`. */
@@ -158,27 +236,15 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
   const { pathPrefix } = config;
 
   app.post(pathPrefix, async (c) => {
+    // The validation pipe runs before the organization is resolved, so a malformed body
+    // is a 422 even for an unknown organization.
+    const body = await parseJsonBody(c);
+    validateBody(body, config.createRules);
     config.validateBeforeCreate?.(ws, c);
 
-    const body = await parseJsonBody(c);
-    const slug = body.slug as string;
     const name = body.name as string;
-    const resourceTypeSlug = body.resource_type_slug;
-
-    if (!slug || typeof slug !== 'string') {
-      throw validationError('slug is required', [{ field: 'slug', code: 'required' }]);
-    }
-    if (!name || typeof name !== 'string') {
-      throw validationError('name is required', [{ field: 'name', code: 'required' }]);
-    }
-    // Resource types are not modeled by the emulator (no registry, no endpoint),
-    // so any non-empty slug is accepted, and a role's permissions are not checked
-    // against its scope. Production requires a defined type and matching scopes.
-    if (!isValidResourceTypeSlug(resourceTypeSlug)) {
-      throw validationError('resource_type_slug must be a non-empty string', [
-        { field: 'resource_type_slug', code: 'invalid' },
-      ]);
-    }
+    const id = generateId(ID_PREFIXES.role);
+    const slug = config.slugFor(body, id);
 
     const existing = config.findRole(ws, c, slug);
     if (existing) {
@@ -186,74 +252,61 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
       throw new WorkOSApiError(409, config.duplicateMessage, config.duplicateCode);
     }
 
+    // Resource types are not modeled by the emulator (no registry, no endpoint), so any
+    // well-formed slug is accepted, and a role's permissions are not checked against its
+    // scope. Production requires a defined type and matching scopes.
     const defaults = config.insertDefaults(c);
     const role = ws.roles.insert({
+      id,
       object: 'role',
       slug,
       name,
-      description: (body.description as string) ?? null,
+      description: (body.description as string | null | undefined) ?? null,
       type: config.roleType,
       organization_id: defaults.organization_id ?? null,
-      is_default_role: Boolean(body.is_default_role),
-      priority: typeof body.priority === 'number' ? body.priority : 0,
-      resource_type_slug: resourceTypeSlug ?? DEFAULT_RESOURCE_TYPE_SLUG,
+      // Production's role carries no default flag or numeric priority of its own: the
+      // default role lives on the role config, and a new role joins the end of the
+      // priority order. Both stay seed-only here.
+      is_default_role: false,
+      priority: nextRolePriority(ws),
+      resource_type_slug: (body.resource_type_slug as string | undefined) ?? DEFAULT_RESOURCE_TYPE_SLUG,
     });
 
     return c.json(formatRole(role, ws), 201);
   });
 
-  app.get(pathPrefix, (c) => {
-    if (config.listRoles) {
-      return c.json({
-        object: 'list',
-        data: config.listRoles(ws, c).map((r) => formatRole(r, ws)),
-        list_metadata: { before: null, after: null },
-      });
-    }
-
-    const url = new URL(c.req.url);
-    const params = parseListParams(url);
-
-    const result = ws.roles.list({
-      ...params,
-      filter: config.listFilter?.(c),
-    });
-
-    return c.json(formatListResponse(result, (r) => formatRole(r, ws)));
-  });
+  app.get(pathPrefix, (c) =>
+    c.json({
+      object: 'list',
+      data: config.listRoles(ws, c).map((r) => formatRole(r, ws)),
+      list_metadata: { before: null, after: null },
+    }),
+  );
 
   app.get(`${pathPrefix}/:slug`, (c) => {
-    const role = config.requireRole(ws, c);
+    const role = (config.readRole ?? config.requireRole)(ws, c);
     return c.json(formatRole(role, ws));
   });
 
-  // The spec (and every SDK) updates a role with PATCH; there is no PUT.
+  // The spec (and every SDK) updates a role with PATCH; there is no PUT. Only the name and
+  // description are updatable; production refuses any other property, the slug included.
   app.patch(`${pathPrefix}/:slug`, async (c) => {
+    const body = await parseJsonBody(c);
+    validateBody(body, ROLE_UPDATE_RULES);
     const role = config.requireRole(ws, c);
 
-    const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
-    if ('name' in body) updates.name = body.name;
-    if ('description' in body) updates.description = body.description ?? null;
-    if ('is_default_role' in body) updates.is_default_role = Boolean(body.is_default_role);
-    if ('priority' in body) updates.priority = body.priority;
+    // A null name keeps the current one, as production's `payload.name ?? role.name` does.
+    if (typeof body.name === 'string') updates.name = body.name;
+    if (body.description !== undefined) updates.description = body.description ?? null;
 
     const updated = ws.roles.update(role.id, updates);
     return c.json(formatRole(updated!, ws));
   });
 
-  app.delete(`${pathPrefix}/:slug`, (c) => {
-    const role = config.requireRole(ws, c);
-
-    // The role row goes first so the deleted event, emitted from the collection
-    // hook, can still resolve the role's permissions; the joins cascade after.
-    ws.roles.delete(role.id);
-    ws.rolePermissions.deleteBy('role_id', role.id);
-    ws.roleAssignments.deleteBy('role_id', role.id);
-    ws.groupRoleAssignments.deleteBy('role_id', role.id);
-
-    return c.body(null, 204);
-  });
+  // No DELETE here: production has no route that deletes an environment role (its
+  // controller is @Post, @Get, @Get(':slug') and @Patch(':slug') only), so the organization
+  // role routes register their own, with production's conflict rules.
 
   // Not in the spec — production inlines permission slugs on the role instead.
   // Kept as the only way to read the full permission objects for a role.
@@ -270,30 +323,21 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
 
   // Spec: PUT replaces the whole set, POST attaches one; both answer with the role.
   app.put(`${pathPrefix}/:slug/permissions`, async (c) => {
+    const body = await parseJsonBody(c);
+    validateBody(body, ROLE_PERMISSIONS_SET_RULES);
     const role = config.requireRole(ws, c);
 
-    const body = await parseJsonBody(c);
-    const permissionSlugs = body.permissions;
-    if (!Array.isArray(permissionSlugs) || permissionSlugs.some((slug) => typeof slug !== 'string')) {
-      throw validationError('permissions must be an array of slugs', [{ field: 'permissions', code: 'invalid' }]);
-    }
-
-    if (replaceRolePermissions(ws, role.id, permissionSlugs as string[])) {
+    if (replaceRolePermissions(ws, role.id, body.permissions as string[])) {
       emitRolePermissionsUpdated(store, ws, role);
     }
     return c.json(formatRole(role, ws));
   });
 
   app.post(`${pathPrefix}/:slug/permissions`, async (c) => {
-    const role = config.requireRole(ws, c);
-
     const body = await parseJsonBody(c);
-    const slug = body.slug;
-    if (!slug || typeof slug !== 'string') {
-      throw validationError('slug is required', [{ field: 'slug', code: 'required' }]);
-    }
-    const permission = ws.permissions.findOneBy('slug', slug);
-    if (!permission) throw notFound('Permission', slug);
+    validateBody(body, ROLE_PERMISSION_ADD_RULES);
+    const role = config.requireRole(ws, c);
+    const permission = requirePermissionBySlug(ws, body.slug as string);
 
     // Re-attaching is a no-op rather than a duplicate join row, and emits nothing.
     const attached = ws.rolePermissions.findBy('role_id', role.id).some((rp) => rp.permission_id === permission.id);

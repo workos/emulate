@@ -215,12 +215,20 @@ describe('Authorization check + role assignment routes', () => {
   it('prefers the organization role when its slug collides with an environment role', async () => {
     const { membership, org } = await setup();
 
-    // 'admin-role' already exists as an environment role (created first in setup)
-    const orgRoleRes = await req(`/authorization/organizations/${org.id}/roles`, {
-      method: 'POST',
-      body: JSON.stringify({ slug: 'admin-role', name: 'Org Admin' }),
+    // 'admin-role' already exists as an environment role (created first in setup). The API
+    // requires an org- prefix on a new organization role, so one that shadows an unprefixed
+    // environment slug is seeded (or legacy) data: insert it directly.
+    const orgRole = getWorkOSStore(store).roles.insert({
+      object: 'role',
+      slug: 'admin-role',
+      name: 'Org Admin',
+      description: null,
+      type: 'OrganizationRole',
+      organization_id: org.id,
+      is_default_role: false,
+      priority: 0,
+      resource_type_slug: 'organization',
     });
-    const orgRole = await json(orgRoleRes);
 
     const res = await req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
       method: 'POST',
@@ -548,10 +556,19 @@ describe('Authorization check + role assignment routes', () => {
   it('prefers an organization role over an environment role with the same slug', async () => {
     const { org, membership } = await setupWithResource();
 
-    // Org-scoped 'editor' role with narrower permissions than the environment 'editor'
-    await req(`/authorization/organizations/${org.id}/roles`, {
-      method: 'POST',
-      body: JSON.stringify({ slug: 'editor', name: 'Org Editor' }),
+    // Org-scoped 'editor' role with narrower permissions than the environment 'editor'. The
+    // API requires an org- prefix on a new organization role, so one that shadows an
+    // unprefixed environment slug is seeded (or legacy) data: insert it directly.
+    getWorkOSStore(store).roles.insert({
+      object: 'role',
+      slug: 'editor',
+      name: 'Org Editor',
+      description: null,
+      type: 'OrganizationRole',
+      organization_id: org.id,
+      is_default_role: false,
+      priority: 0,
+      resource_type_slug: 'organization',
     });
     await req(`/authorization/organizations/${org.id}/roles/editor/permissions`, {
       method: 'PUT',
@@ -875,7 +892,8 @@ describe('Authorization check + role assignment routes', () => {
     expect(filtered.data.length).toBe(1);
     expect(filtered.data[0].user_id).toBe(user.id);
 
-    const unfiltered = await json(await req(`/authorization/resources/${resource.id}/organization_memberships`));
-    expect(unfiltered.data.length).toBe(2);
+    // Production requires the permission: the route answers "who holds this on the resource?"
+    const unfiltered = await req(`/authorization/resources/${resource.id}/organization_memberships`);
+    expect(unfiltered.status).toBe(422);
   });
 });

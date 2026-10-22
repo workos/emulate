@@ -1,15 +1,9 @@
-import {
-  type RouteContext,
-  WorkOSApiError,
-  notFound,
-  validationError,
-  parseJsonBody,
-  parseListParams,
-} from '../../core/index.js';
+import { type RouteContext, WorkOSApiError, notFound, parseJsonBody, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatPermission, formatListResponse } from '../helpers.js';
-import { DEFAULT_RESOURCE_TYPE_SLUG, isValidResourceTypeSlug } from '../constants.js';
+import { DEFAULT_RESOURCE_TYPE_SLUG } from '../constants.js';
 import { removePermissionFromAgentBlueprints } from '../agent-sessions.js';
+import { PERMISSION_CREATE_RULES, PERMISSION_UPDATE_RULES, validateBody } from '../authorization-validation.js';
 
 export function authorizationPermissionRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -17,23 +11,11 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
 
   app.post('/authorization/permissions', async (c) => {
     const body = await parseJsonBody(c);
+    // The slug and its resource type follow production's patterns and lengths; resource
+    // types themselves are not modeled by the emulator (no registry, no endpoint), so any
+    // well-formed type slug is accepted where production requires a defined type.
+    validateBody(body, PERMISSION_CREATE_RULES);
     const slug = body.slug as string;
-    const name = body.name as string;
-    const resourceTypeSlug = body.resource_type_slug;
-
-    if (!slug || typeof slug !== 'string') {
-      throw validationError('slug is required', [{ field: 'slug', code: 'required' }]);
-    }
-    if (!name || typeof name !== 'string') {
-      throw validationError('name is required', [{ field: 'name', code: 'required' }]);
-    }
-    // Resource types are not modeled by the emulator (no registry, no endpoint),
-    // so any non-empty slug is accepted. Production requires a defined type.
-    if (!isValidResourceTypeSlug(resourceTypeSlug)) {
-      throw validationError('resource_type_slug must be a non-empty string', [
-        { field: 'resource_type_slug', code: 'invalid' },
-      ]);
-    }
 
     const existing = ws.permissions.findOneBy('slug', slug);
     if (existing) {
@@ -44,9 +26,9 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
     const permission = ws.permissions.insert({
       object: 'permission',
       slug,
-      name,
-      description: (body.description as string) ?? null,
-      resource_type_slug: resourceTypeSlug ?? DEFAULT_RESOURCE_TYPE_SLUG,
+      name: body.name as string,
+      description: (body.description as string | null | undefined) ?? null,
+      resource_type_slug: (body.resource_type_slug as string | undefined) ?? DEFAULT_RESOURCE_TYPE_SLUG,
     });
 
     return c.json(formatPermission(permission), 201);
@@ -67,16 +49,18 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
     return c.json(formatPermission(permission));
   });
 
-  // The spec (and every SDK) updates a permission with PATCH; there is no PUT.
+  // The spec (and every SDK) updates a permission with PATCH; there is no PUT. Only the name
+  // and description are updatable; production refuses any other property, the slug included.
   app.patch('/authorization/permissions/:slug', async (c) => {
+    const body = await parseJsonBody(c);
+    validateBody(body, PERMISSION_UPDATE_RULES);
     const slug = c.req.param('slug');
     const permission = ws.permissions.findOneBy('slug', slug);
     if (!permission) throw notFound('Permission', slug);
 
-    const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
-    if ('name' in body) updates.name = body.name;
-    if ('description' in body) updates.description = body.description ?? null;
+    if (typeof body.name === 'string') updates.name = body.name;
+    if (body.description !== undefined) updates.description = body.description ?? null;
 
     const updated = ws.permissions.update(permission.id, updates);
     return c.json(formatPermission(updated!));
