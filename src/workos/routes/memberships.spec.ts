@@ -548,11 +548,11 @@ describe('Membership routes', () => {
       await createRole('env-role');
       await req(`/authorization/organizations/${other.id}/roles`, {
         method: 'POST',
-        body: JSON.stringify({ slug: 'other-org-role', name: 'Other' }),
+        body: JSON.stringify({ slug: 'org-other-role', name: 'Other' }),
       });
       await req(`/authorization/organizations/${org.id}/roles`, {
         method: 'POST',
-        body: JSON.stringify({ slug: 'own-org-role', name: 'Own' }),
+        body: JSON.stringify({ slug: 'org-own-role', name: 'Own' }),
       });
 
       const create = (role_slugs: string[]) =>
@@ -560,14 +560,14 @@ describe('Membership routes', () => {
           method: 'POST',
           body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slugs }),
         });
-      expect((await create(['other-org-role'])).status).toBe(422);
-      const res = await create(['member', 'admin', 'env-role', 'own-org-role']);
+      expect((await create(['org-other-role'])).status).toBe(422);
+      const res = await create(['member', 'admin', 'env-role', 'org-own-role']);
       expect(res.status).toBe(201);
       expect((await json(res)).roles.map((r: { slug: string }) => r.slug).sort()).toEqual([
         'admin',
         'env-role',
         'member',
-        'own-org-role',
+        'org-own-role',
       ]);
     });
   });

@@ -133,11 +133,11 @@ describe('Invitation routes', () => {
       expect((await invite({ email: 'admin@test.com', organization_id: org.id, role_slug: 'admin' })).status).toBe(201);
       await req(`/authorization/organizations/${org.id}/roles`, {
         method: 'POST',
-        body: JSON.stringify({ slug: 'auditor', name: 'Auditor' }),
+        body: JSON.stringify({ slug: 'org-auditor', name: 'Auditor' }),
       });
-      expect((await invite({ email: 'auditor@test.com', organization_id: org.id, role_slug: 'auditor' })).status).toBe(
-        201,
-      );
+      expect(
+        (await invite({ email: 'auditor@test.com', organization_id: org.id, role_slug: 'org-auditor' })).status,
+      ).toBe(201);
     });
 
     it('holds expires_in_days to 1..30 and defaults to 7 days', async () => {
