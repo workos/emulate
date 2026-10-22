@@ -479,7 +479,12 @@ export function authRoutes(ctx: RouteContext): void {
         // The code compared is the user's latest, as at the grant and the confirm endpoint: one
         // sent since this page sent its own — by email_verification/send, or by another login's
         // gate — has retired the page's, exactly as it retires an API login's.
-        let latest = latestOneTimeCode(ws.emailVerifications.findBy('user_id', user.id));
+        // Only a code sent to the user's current address counts: a code proves the inbox it was
+        // sent to, so one issued before the address changed verifies nothing, as at the grant and
+        // the confirm endpoint.
+        let latest = latestOneTimeCode(
+          ws.emailVerifications.findBy('user_id', user.id).filter((v) => emailsMatch(v.email, user.email)),
+        );
         let error: string | undefined;
         if (latest && unspentCode !== null) {
           // The email-verification grant's verdict on the code, and its failure on the event:
@@ -1219,7 +1224,11 @@ export function authRoutes(ctx: RouteContext): void {
         if (!magicUser) throw notFound('User', email);
         // Production's 404 here names the email factor it could not find for the user: a user
         // never sent a code has no such factor, which is what no record means in the emulator.
-        const magicAuth = latestOneTimeCode(ws.magicAuths.findBy('user_id', magicUser.id));
+        // Only a code sent to the user's current address counts: production keys the email factor
+        // by the address, so a code issued before the address changed proves nothing about the new one.
+        const magicAuth = latestOneTimeCode(
+          ws.magicAuths.findBy('user_id', magicUser.id).filter((ma) => emailsMatch(ma.email, magicUser.email)),
+        );
         if (!magicAuth) throw notFound('Authentication Factor', magicUser.id);
 
         const outcome = verifyOneTimeCode(ws.magicAuths, magicAuth, code);
@@ -1253,7 +1262,14 @@ export function authRoutes(ctx: RouteContext): void {
 
         // The user's latest verification code is the one compared, as with Magic Auth: an
         // earlier code is invalid, and a user never sent one has nothing to verify against.
-        const ev = latestOneTimeCode(ws.emailVerifications.findBy('user_id', userId));
+        // Only a code sent to the user's current address counts, as with Magic Auth and the confirm
+        // endpoint: a code issued before the address changed verifies nothing.
+        const evUser = ws.users.get(userId);
+        const ev = latestOneTimeCode(
+          ws.emailVerifications
+            .findBy('user_id', userId)
+            .filter((v) => evUser !== undefined && emailsMatch(v.email, evUser.email)),
+        );
         if (!ev) throw notFound('Authentication Factor', userId);
         const outcome = verifyOneTimeCode(ws.emailVerifications, ev, code);
         if (outcome !== 'valid') {

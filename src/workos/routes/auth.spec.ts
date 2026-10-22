@@ -1144,6 +1144,16 @@ describe('Auth routes', () => {
     expect((await magicAuth('no-code@test.com', '123456')).status).toBe(404);
   });
 
+  // A code proves the inbox it was sent to: once the address changes, a code issued to the old
+  // one has nothing to verify against the new one, as the confirm endpoint already holds.
+  it('does not let a code sent to a previous address sign in the changed one', async () => {
+    const user = await createUser('before@test.com');
+    const code = await magicAuthCode('before@test.com');
+    getWorkOSStore(store).users.update(user.id, { email: 'after@test.com' });
+    expect((await magicAuth('after@test.com', code)).status).toBe(404);
+    expect((await magicAuth('before@test.com', code)).status).toBe(404);
+  });
+
   it('refuses a redeemed magic auth code as one_time_code_previously_used, before the code is compared', async () => {
     await createUser('reuse@test.com');
     const code = await magicAuthCode('reuse@test.com');
