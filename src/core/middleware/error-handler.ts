@@ -19,6 +19,12 @@ export class WorkOSApiError extends Error {
     message: string,
     public code: string,
     public errors?: ApiErrorItem[],
+    /**
+     * Body fields beyond `message`, `code` and `errors`, spread into the rendered body: production's
+     * `ConnectionAlreadyExistsForOrganizationException` carries the `organization_id`, for one,
+     * and a few of its entity-not-found sites an `entity_type`.
+     */
+    public extra?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'WorkOSApiError';
@@ -57,8 +63,6 @@ export class OauthApiError extends WorkOSApiError {
  * template (an agent session's wording, an `entity_type` field) and are otherwise left alone.
  */
 export class EntityNotFoundError extends WorkOSApiError {
-  readonly extra?: Record<string, unknown>;
-
   constructor(
     readonly entityType: string,
     readonly entityId?: string,
@@ -68,9 +72,10 @@ export class EntityNotFoundError extends WorkOSApiError {
       404,
       opts.message ?? (entityId === undefined ? `${entityType} not found` : `${entityType} not found: '${entityId}'.`),
       'entity_not_found',
+      undefined,
+      opts.extra,
     );
     this.name = 'EntityNotFoundError';
-    this.extra = opts.extra;
   }
 }
 
@@ -137,10 +142,8 @@ export function createApiErrorHandler(): ErrorHandler {
         message: err.message,
         code: err.code,
       };
-      if (err instanceof EntityNotFoundError) {
-        if (err.entityId !== undefined) body.entity_id = err.entityId;
-        Object.assign(body, err.extra);
-      }
+      if (err instanceof EntityNotFoundError && err.entityId !== undefined) body.entity_id = err.entityId;
+      Object.assign(body, err.extra);
       if (err.errors) {
         body.errors = err.errors;
       }

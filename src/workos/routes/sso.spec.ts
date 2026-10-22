@@ -5,7 +5,7 @@ import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
 import type { Store } from '../../core/index.js';
 import { formatSSOProfile } from '../helpers.js';
-import type { WorkOSSSOProfile } from '../entities.js';
+import type { WorkOSConnectionType, WorkOSSSOProfile } from '../entities.js';
 
 const apiKeys: ApiKeyMap = { sk_test_sso: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_sso', 'Content-Type': 'application/json' };
@@ -41,7 +41,7 @@ describe('SSO routes', () => {
           name: 'Test SSO',
           organization_id: org.id,
           connection_type: 'GenericSAML',
-          domains: ['sso.example.com'],
+          saml_options: { idp_metadata_url: 'https://idp.example.com/metadata' },
         }),
       }),
     );
@@ -52,7 +52,7 @@ describe('SSO routes', () => {
     const { conn } = await createOrgWithConnection();
 
     const res = await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback&state=abc`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback&state=abc`,
     );
     expect(res.status).toBe(302);
     const location = res.headers.get('location')!;
@@ -61,25 +61,26 @@ describe('SSO routes', () => {
     expect(url.searchParams.get('state')).toBe('abc');
   });
 
-  it('sso authorize resolves a social provider to that connection type', async () => {
-    const org = await json(
-      await req('/organizations', {
-        method: 'POST',
-        body: JSON.stringify({ name: 'Social Org' }),
-      }),
-    );
-    await req('/connections', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: 'Google',
-        organization_id: org.id,
-        connection_type: 'GoogleOAuth',
-        domains: ['gmail.example.com'],
-      }),
+  /**
+   * An OAuth connection is environment-level in production and never created through
+   * `POST /connections`, which refuses the type; the seed is how the emulator binds one to an
+   * organization, and how a connection gets domains at all.
+   */
+  function seedConnection(orgName: string, connectionType: WorkOSConnectionType, domains: string[]) {
+    seedFromConfig(store, 'http://localhost:0', {
+      organizations: [{ name: orgName }],
+      connections: [
+        { name: `${orgName} ${connectionType}`, organization: orgName, connection_type: connectionType, domains },
+      ],
     });
+    return getWorkOSStore(store).organizations.findOneBy('name', orgName)!;
+  }
+
+  it('sso authorize resolves a social provider to that connection type', async () => {
+    seedConnection('Social Org', 'GoogleOAuth', ['gmail.example.com']);
 
     const res = await app.request(
-      '/sso/authorize?provider=GoogleOAuth&redirect_uri=http://localhost:3000/callback&state=abc',
+      '/sso/authorize?client_id=client_x&provider=GoogleOAuth&redirect_uri=http://localhost:3000/callback&state=abc',
     );
     expect(res.status).toBe(302);
     const url = new URL(res.headers.get('location')!);
@@ -87,23 +88,24 @@ describe('SSO routes', () => {
     expect(url.searchParams.get('state')).toBe('abc');
   });
 
-  async function createProviderConnection(orgName: string, provider: string, domains: string[]) {
-    const org = await json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name: orgName }) }));
-    await req('/connections', {
-      method: 'POST',
-      body: JSON.stringify({ name: provider, organization_id: org.id, connection_type: provider, domains }),
-    });
-    return org;
-  }
+  const createProviderConnection = (orgName: string, provider: WorkOSConnectionType, domains: string[]) =>
+    seedConnection(orgName, provider, domains);
 
   async function authorizedOrganization(query: string) {
-    const authRes = await app.request(`/sso/authorize?${query}&redirect_uri=http://localhost:3000/callback`);
+    const authRes = await app.request(
+      `/sso/authorize?client_id=client_x&${query}&redirect_uri=http://localhost:3000/callback`,
+    );
     expect(authRes.status).toBe(302);
     const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
     const tokenRes = await app.request('/sso/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        client_id: 'client_x',
+        client_secret: 'sk_test_sso',
+      }),
     });
     return (await json(tokenRes)).profile.organization_id;
   }
@@ -111,7 +113,7 @@ describe('SSO routes', () => {
   // The spec's domain_hint pre-fills Microsoft's tenant field; it is not a selector. A provider
   // login that carries one must not 404 because no connection happens to claim the domain.
   it('treats domain_hint as a hint when a provider is named', async () => {
-    const org = await createProviderConnection('Microsoft Org', 'MicrosoftOAuth', []);
+    const org = createProviderConnection('Microsoft Org', 'MicrosoftOAuth', []);
 
     expect(await authorizedOrganization('provider=MicrosoftOAuth&domain_hint=acme.com')).toBe(org.id);
   });
@@ -121,8 +123,8 @@ describe('SSO routes', () => {
   // whatever case either side was written — and what it leaves ambiguous is refused rather
   // than resolved to whichever organization came first.
   it('selects among same-type provider connections by domain_hint, and refuses to guess', async () => {
-    const acme = await createProviderConnection('Acme', 'GoogleOAuth', ['Acme.com']);
-    const globex = await createProviderConnection('Globex', 'GoogleOAuth', ['globex.com']);
+    const acme = createProviderConnection('Acme', 'GoogleOAuth', ['Acme.com']);
+    const globex = createProviderConnection('Globex', 'GoogleOAuth', ['globex.com']);
 
     expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=GLOBEX.com')).toBe(globex.id);
     expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=acme.com')).toBe(acme.id);
@@ -130,13 +132,15 @@ describe('SSO routes', () => {
     expect(await authorizedOrganization('domain_hint=ACME.com')).toBe(acme.id);
 
     const refused = async (query: string) => {
-      const res = await app.request(`/sso/authorize?${query}&redirect_uri=http://localhost:3000/callback`);
+      const res = await app.request(
+        `/sso/authorize?client_id=client_x&${query}&redirect_uri=http://localhost:3000/callback`,
+      );
       expect(res.status).toBe(400);
       expect((await json(res)).code).toBe('invalid_request');
     };
     await refused('provider=GoogleOAuth');
     // Nothing stops two organizations claiming one domain, so the hint alone can be ambiguous too.
-    await createProviderConnection('Acme Shadow', 'GenericSAML', ['acme.com']);
+    createProviderConnection('Acme Shadow', 'GenericSAML', ['acme.com']);
     await refused('domain_hint=acme.com');
   });
 
@@ -148,7 +152,7 @@ describe('SSO routes', () => {
 
     for (const hint of ['Person%40sso.example.com', 'person%40sso.example.com', 'PERSON%40SSO.EXAMPLE.COM']) {
       const res = await app.request(
-        `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=${hint}`,
+        `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=${hint}`,
       );
       expect(res.status).toBe(302);
     }
@@ -172,14 +176,14 @@ describe('SSO routes', () => {
           name: 'Other SSO',
           organization_id: org2.id,
           connection_type: 'GenericSAML',
-          domains: ['sso.example.com'],
+          saml_options: { idp_metadata_url: 'https://idp.example.com/metadata' },
         }),
       }),
     );
 
     for (const id of [conn.id, conn2.id, conn.id, conn2.id]) {
       await app.request(
-        `/sso/authorize?connection=${id}&redirect_uri=http://localhost:3000/callback&login_hint=shared%40sso.example.com`,
+        `/sso/authorize?client_id=client_x&connection=${id}&redirect_uri=http://localhost:3000/callback&login_hint=shared%40sso.example.com`,
       );
     }
 
@@ -192,7 +196,7 @@ describe('SSO routes', () => {
     /** Start SSO through `conn` and return the code the redirect carries. */
     async function ssoCode(connId: string, loginHint?: string) {
       const res = await app.request(
-        `/sso/authorize?connection=${connId}&redirect_uri=http://localhost:3000/callback` +
+        `/sso/authorize?client_id=client_x&connection=${connId}&redirect_uri=http://localhost:3000/callback` +
           (loginHint ? `&login_hint=${encodeURIComponent(loginHint)}` : ''),
       );
       return new URL(res.headers.get('location')!).searchParams.get('code')!;
@@ -335,7 +339,7 @@ describe('SSO routes', () => {
 
     // Get code
     const authRes = await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
     );
     const location = authRes.headers.get('location')!;
     const code = new URL(location).searchParams.get('code')!;
@@ -347,6 +351,8 @@ describe('SSO routes', () => {
       body: JSON.stringify({
         grant_type: 'authorization_code',
         code,
+        client_id: 'client_x',
+        client_secret: 'sk_test_sso',
       }),
     });
     expect(tokenRes.status).toBe(200);
@@ -392,13 +398,18 @@ describe('SSO routes', () => {
     async function issueToken() {
       const { conn } = await createOrgWithConnection();
       const authRes = await app.request(
-        `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+        `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
       );
       const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
       const tokenRes = await app.request('/sso/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ grant_type: 'authorization_code', code }),
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code,
+          client_id: 'client_x',
+          client_secret: 'sk_test_sso',
+        }),
       });
       return (await json(tokenRes)) as { access_token: string; expires_in: number };
     }
@@ -475,9 +486,165 @@ describe('SSO routes', () => {
 
   it('returns 404 when no active connection found', async () => {
     const res = await app.request(
-      '/sso/authorize?connection=conn_nonexistent&redirect_uri=http://localhost:3000/callback',
+      '/sso/authorize?client_id=client_x&connection=conn_nonexistent&redirect_uri=http://localhost:3000/callback',
     );
     expect(res.status).toBe(404);
+  });
+
+  // Production sends a `validating` connection to the IdP exactly as it sends an active one
+  // (`SsoInitiator.initiateConnectionSignIn`), and the first IdP response it accepts is what
+  // turns the connection active (`saml-response-handler.ts`, `openid-connect.controller.ts`),
+  // announcing `connection.activated` then and not at creation.
+  it('signs in through a validating connection, and that first login activates it', async () => {
+    const { conn } = await createOrgWithConnection();
+    expect(conn.state).toBe('validating');
+    const ws = getWorkOSStore(store);
+    expect(ws.events.all().filter((e) => e.event === 'connection.activated')).toHaveLength(0);
+
+    const res = await app.request(
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+    );
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get('location')!).searchParams.get('code')).toBeTruthy();
+
+    expect((await json(await req(`/connections/${conn.id}`))).state).toBe('active');
+    const activated = ws.events.all().filter((e) => e.event === 'connection.activated');
+    expect(activated).toHaveLength(1);
+    expect(activated[0].data).toMatchObject({ id: conn.id, state: 'active' });
+
+    // Once is all it takes: the next login finds an active connection and announces nothing.
+    await app.request(
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+    );
+    expect(ws.events.all().filter((e) => e.event === 'connection.activated')).toHaveLength(1);
+  });
+
+  // An inactive connection is a redirect back to the app, not a 404: production's
+  // `InactiveConnection` case sends `connection_unlinked` to the `redirect_uri` with the
+  // selector's description, the `state`, and the docs page as `error_uri`.
+  it('redirects to the app with connection_unlinked for an inactive connection', async () => {
+    seedFromConfig(store, 'http://localhost:0', {
+      organizations: [{ name: 'Dormant' }],
+      connections: [{ name: 'Dormant SSO', organization: 'Dormant', state: 'inactive', domains: ['dormant.test'] }],
+    });
+    const ws = getWorkOSStore(store);
+    const org = ws.organizations.findOneBy('name', 'Dormant')!;
+    const conn = ws.connections.findOneBy('organization_id', org.id)!;
+
+    const expectUnlinked = async (query: string, description: string) => {
+      const res = await app.request(
+        `/sso/authorize?client_id=client_x&${query}&redirect_uri=http://localhost:3000/callback&state=s1`,
+      );
+      expect(res.status).toBe(302);
+      const url = new URL(res.headers.get('location')!);
+      expect(url.origin + url.pathname).toBe('http://localhost:3000/callback');
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        error: 'connection_unlinked',
+        error_description: description,
+        state: 's1',
+        error_uri: 'https://workos.com/docs/reference/sso/get-authorization-url/error-codes',
+      });
+    };
+
+    await expectUnlinked(`connection=${conn.id}`, `The connection '${conn.id}' is inactive.`);
+    await expectUnlinked(
+      `organization=${org.id}`,
+      `The connection associated with the organization ID '${org.id}' is inactive.`,
+    );
+    await expectUnlinked(
+      'domain_hint=dormant.test',
+      "The connection associated with the domain 'dormant.test' is inactive.",
+    );
+    // Nothing was minted for the refused login.
+    expect(ws.ssoAuthorizations.all()).toHaveLength(0);
+  });
+
+  // `client_id` is how production finds the environment, so a request without one fails before
+  // anything else is looked at — on WorkOS's own error page, as `client_id_invalid`, never on
+  // the app's callback. The emulator has no error page, so the same code and words come back as
+  // a 400, the way its `invalid_redirect_uri` does.
+  it('refuses an authorization request without a client_id', async () => {
+    const { conn } = await createOrgWithConnection();
+
+    const res = await app.request(`/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`);
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({ message: 'Missing or invalid client_id.', code: 'client_id_invalid' });
+
+    // Checked before the redirect_uri, which production only reads once it knows the client.
+    const noRedirect = await app.request(`/sso/authorize?connection=${conn.id}`);
+    expect((await json(noRedirect)).code).toBe('client_id_invalid');
+  });
+
+  // Production's SSOTokenGuard requires both credentials and checks the secret against the
+  // environment's API keys before the handler sees the code: a wrong one is 400
+  // `invalid_client` with no event, since nothing was authenticated.
+  it('requires client credentials on the token exchange, and refuses a wrong secret', async () => {
+    const { conn } = await createOrgWithConnection();
+    const authRes = await app.request(
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+    );
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const exchange = (body: Record<string, unknown>) =>
+      app.request('/sso/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'authorization_code', code, ...body }),
+      });
+
+    const noClient = await exchange({});
+    expect(noClient.status).toBe(400);
+    expect(await json(noClient)).toEqual({ error: 'invalid_request', error_description: 'client_id is required.' });
+
+    const noSecret = await exchange({ client_id: 'client_x' });
+    expect(noSecret.status).toBe(400);
+    expect(await json(noSecret)).toEqual({ error: 'invalid_request', error_description: 'client_secret is required.' });
+
+    const wrongSecret = await exchange({ client_id: 'client_x', client_secret: 'sk_test_someone_else' });
+    expect(wrongSecret.status).toBe(400);
+    expect(await json(wrongSecret)).toEqual({ error: 'invalid_client', error_description: 'Invalid client secret.' });
+    expect(
+      getWorkOSStore(store)
+        .events.all()
+        .filter((e) => e.event === 'authentication.sso_failed'),
+    ).toHaveLength(0);
+
+    // The code survived the refusals: the guard runs before the code is consumed.
+    const ok = await exchange({ client_id: 'client_x', client_secret: 'sk_test_sso' });
+    expect(ok.status).toBe(200);
+    // The token is minted for the client that redeemed the code.
+    const [, payload] = ((await json(ok)).access_token as string).split('.');
+    expect(JSON.parse(Buffer.from(payload, 'base64url').toString()).aud).toBe('client_x');
+  });
+
+  // Production's AuthorizationCodesService mints every SSO code with a five-minute TTL.
+  it('expires an authorization code after five minutes', async () => {
+    const { conn } = await createOrgWithConnection();
+    const start = new Date('2026-01-01T00:00:00Z');
+    setSystemTime(start);
+    try {
+      const authRes = await app.request(
+        `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+      );
+      const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+      const stored = getWorkOSStore(store).ssoAuthorizations.findOneBy('code', code)!;
+      expect(new Date(stored.expires_at).getTime() - start.getTime()).toBe(5 * 60 * 1000);
+
+      setSystemTime(new Date(start.getTime() + 5 * 60 * 1000 + 1));
+      const res = await app.request('/sso/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code,
+          client_id: 'client_x',
+          client_secret: 'sk_test_sso',
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect((await json(res)).error).toBe('invalid_grant');
+    } finally {
+      setSystemTime();
+    }
   });
 
   it('jwks endpoint returns keys', async () => {
@@ -500,7 +667,7 @@ describe('SSO routes', () => {
     const { conn } = await createOrgWithConnection();
 
     const res = await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=https://evil.example.com/callback`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=https://evil.example.com/callback`,
     );
     expect(res.status).toBe(400);
     const body = await json(res);
@@ -536,7 +703,7 @@ describe('SSO interactive auth', () => {
           name: 'Test SSO',
           organization_id: org.id,
           connection_type: 'GenericSAML',
-          domains: ['sso.example.com'],
+          saml_options: { idp_metadata_url: 'https://idp.example.com/metadata' },
         }),
       }),
     );
@@ -547,7 +714,7 @@ describe('SSO interactive auth', () => {
     const { conn } = await createOrgWithConnection();
 
     const res = await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback&state=abc`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback&state=abc`,
     );
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -562,7 +729,7 @@ describe('SSO interactive auth', () => {
     const { conn } = await createOrgWithConnection();
 
     const res = await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=alice@sso.example.com`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=alice@sso.example.com`,
     );
     const html = await res.text();
     expect(html).toContain('value="alice@sso.example.com"');
@@ -572,6 +739,7 @@ describe('SSO interactive auth', () => {
     const { conn } = await createOrgWithConnection();
 
     const formBody = new URLSearchParams({
+      client_id: 'client_x',
       email: 'test@sso.example.com',
       redirect_uri: 'http://localhost:3000/callback',
       state: 'xyz',
@@ -594,6 +762,7 @@ describe('SSO interactive auth', () => {
     const { conn } = await createOrgWithConnection();
 
     const formBody = new URLSearchParams({
+      client_id: 'client_x',
       email: 'alice@sso.example.com',
       redirect_uri: 'http://localhost:3000/callback',
       connection: conn.id,
@@ -609,7 +778,12 @@ describe('SSO interactive auth', () => {
     const tokenRes = await app.request('/sso/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        client_id: 'client_x',
+        client_secret: 'sk_test_sso',
+      }),
     });
     expect(tokenRes.status).toBe(200);
     const body = await json(tokenRes);
@@ -649,7 +823,7 @@ describe('SSO authentication events', () => {
           name: 'Events SSO',
           organization_id: org.id,
           connection_type: 'GenericSAML',
-          domains: ['sso-events.example.com'],
+          saml_options: { idp_metadata_url: 'https://idp.example.com/metadata' },
         }),
       }),
     );
@@ -660,14 +834,19 @@ describe('SSO authentication events', () => {
     const { org, conn } = await createOrgWithConnection();
 
     const authRes = await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
     );
     const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
 
     await app.request('/sso/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        client_id: 'client_x',
+        client_secret: 'sk_test_sso',
+      }),
     });
 
     const [event] = eventsNamed('authentication.sso_succeeded');
@@ -694,13 +873,18 @@ describe('SSO authentication events', () => {
     );
 
     const authRes = await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=federated%40sso-events.example.com`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=federated%40sso-events.example.com`,
     );
     const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
     await app.request('/sso/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        client_id: 'client_x',
+        client_secret: 'sk_test_sso',
+      }),
     });
 
     const [event] = eventsNamed('authentication.sso_succeeded');
@@ -711,7 +895,12 @@ describe('SSO authentication events', () => {
     const res = await app.request('/sso/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'authorization_code', code: 'sso_bogus' }),
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code: 'sso_bogus',
+        client_id: 'client_x',
+        client_secret: 'sk_test_sso',
+      }),
     });
     expect(res.status).toBe(400);
     // The response is OAuth-shaped, but the event's error object keeps the spec's
@@ -739,7 +928,7 @@ describe('SSO authentication events', () => {
     const { org, conn } = await createOrgWithConnection();
 
     const authRes = await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback`,
     );
     const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
 
@@ -750,7 +939,12 @@ describe('SSO authentication events', () => {
     const res = await app.request('/sso/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        client_id: 'client_x',
+        client_secret: 'sk_test_sso',
+      }),
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({
@@ -813,7 +1007,7 @@ describe('SSO authentication events', () => {
   it('single logout accepts the token param and the logout_url it issues', async () => {
     const { conn } = await createOrgWithConnection();
     await app.request(
-      `/sso/authorize?connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=bye%40sso.example.com`,
+      `/sso/authorize?client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback&login_hint=bye%40sso.example.com`,
     );
     const profile = getWorkOSStore(store).ssoProfiles.all()[0];
 

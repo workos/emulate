@@ -31,14 +31,19 @@ describe('User identities', () => {
   /** Walk /sso/authorize → /sso/token for `email` through the seeded connection. */
   async function ssoLogin(email: string) {
     const authorize = await fetch(
-      `${emulator!.url}/sso/authorize?redirect_uri=http://localhost:3000/callback&domain_hint=acme.test&login_hint=${encodeURIComponent(email)}`,
+      `${emulator!.url}/sso/authorize?client_id=client_x&redirect_uri=http://localhost:3000/callback&domain_hint=acme.test&login_hint=${encodeURIComponent(email)}`,
       { redirect: 'manual' },
     );
     const code = new URL(authorize.headers.get('location')!).searchParams.get('code');
     const token = await fetch(`${emulator!.url}/sso/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        client_id: 'client_x',
+        client_secret: emulator!.apiKey,
+      }),
     });
     return (await token.json()) as any;
   }

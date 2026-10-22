@@ -39,6 +39,7 @@ import type {
   WorkOSAuthenticationFactor,
   WorkOSIdentity,
   WorkOSConnection,
+  WorkOSConnectionType,
   WorkOSSSOProfile,
   WorkOSPipeConnection,
   WorkOSInvitation,
@@ -626,6 +627,64 @@ export function revokeSession(ws: WorkOSStore, sessionId: string): void {
 
 export function formatConnection(conn: WorkOSConnection): Record<string, unknown> {
   return formatEntity(conn);
+}
+
+/**
+ * The types production's one-connection-per-organization count leaves out
+ * (`ConnectionCreator.isAtConnectionLimit`, `api/src/connections/connection-creator.ts`). They
+ * are environment-level there — an OAuth or Magic Link connection never belongs to an
+ * organization — so they never count against the one SSO connection an organization may hold.
+ * The emulator lets a seed bind one to an organization, and keeps the same exemption.
+ */
+const CONNECTION_LIMIT_EXEMPT_TYPES: ReadonlySet<WorkOSConnectionType> = new Set<WorkOSConnectionType>([
+  'AppleOAuth',
+  'GitHubOAuth',
+  'GoogleOAuth',
+  'MicrosoftOAuth',
+  'MagicLink',
+]);
+
+export function countsTowardConnectionLimit(type: WorkOSConnectionType): boolean {
+  return !CONNECTION_LIMIT_EXEMPT_TYPES.has(type);
+}
+
+/**
+ * The organization's SSO connections — the ones production counts toward its limit of one per
+ * organization. Deleted connections are gone from the store, which is production's exclusion of
+ * the `Deleting` state.
+ */
+export function organizationSsoConnections(ws: WorkOSStore, organizationId: string): WorkOSConnection[] {
+  return ws.connections
+    .findBy('organization_id', organizationId)
+    .filter((cn) => countsTowardConnectionLimit(cn.connection_type));
+}
+
+/**
+ * The types `GET /connections` leaves out. Production's listing passes `excludeOauth`,
+ * `excludeMagicLink` and `excludeTestIdp` (`api/src/connections/connections.controller.ts`);
+ * the OAuth set is `api-services/src/connections/oauth-connection-types.ts`, narrowed here to
+ * the members the spec's `connection_type` enum has.
+ */
+const UNLISTED_CONNECTION_TYPES: ReadonlySet<WorkOSConnectionType> = new Set<WorkOSConnectionType>([
+  'AppleOAuth',
+  'BitbucketOAuth',
+  'GitHubOAuth',
+  'GitLabOAuth',
+  'GoogleOAuth',
+  'IntuitOAuth',
+  'LinkedInOAuth',
+  'MicrosoftOAuth',
+  'SalesforceOAuth',
+  'SlackOAuth',
+  'VercelMarketplaceOAuth',
+  'VercelOAuth',
+  'XeroOAuth',
+  'MagicLink',
+  'TestIdp',
+]);
+
+export function isListedConnectionType(type: WorkOSConnectionType): boolean {
+  return !UNLISTED_CONNECTION_TYPES.has(type);
 }
 
 /**

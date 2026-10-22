@@ -178,7 +178,9 @@ describe('redirect host validation (default: localhost only)', () => {
   });
 
   it('rejects a non-localhost SSO redirect_uri', async () => {
-    const res = await app.request('/sso/authorize?connection=conn_missing&redirect_uri=https://app.example.test/cb');
+    const res = await app.request(
+      '/sso/authorize?client_id=client_x&connection=conn_missing&redirect_uri=https://app.example.test/cb',
+    );
     expect(res.status).toBe(400);
     expect((await json(res)).code).toBe('invalid_redirect_uri');
   });
@@ -284,7 +286,9 @@ describe('redirect host validation (configured hosts)', () => {
 
   it('gets past the redirect check on the SSO endpoint', async () => {
     const { app } = createTestApp(['app.example.test']);
-    const res = await app.request('/sso/authorize?connection=conn_missing&redirect_uri=https://app.example.test/cb');
+    const res = await app.request(
+      '/sso/authorize?client_id=client_x&connection=conn_missing&redirect_uri=https://app.example.test/cb',
+    );
     // The host is accepted, so the request fails on the missing connection instead.
     expect(res.status).toBe(404);
     expect((await json(res)).code).toBe('connection_not_found');
@@ -447,7 +451,7 @@ describe('redirect host validation (interactive mode)', () => {
 
   const paths = [
     '/user_management/authorize?redirect_uri=https://app.example.test/cb',
-    '/sso/authorize?connection=conn_x&redirect_uri=https://app.example.test/cb',
+    '/sso/authorize?client_id=client_x&connection=conn_x&redirect_uri=https://app.example.test/cb',
   ];
 
   it('refuses a disallowed host at the GET rather than rendering a login page', async () => {

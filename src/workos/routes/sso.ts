@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import {
+  type ApiKeyMap,
   type RouteContext,
   parseJsonBody,
   WorkOSApiError,
@@ -7,6 +8,7 @@ import {
   NestNotFoundError,
   generateId,
   notFound,
+  isApiKeyEntryExpired,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
@@ -18,6 +20,7 @@ import {
   findUserByEmail,
   emailsMatch,
   linkOAuthIdentity,
+  organizationSsoConnections,
 } from '../helpers.js';
 import type { WorkOSConnection, WorkOSConnectionType } from '../entities.js';
 import type { EventBus } from '../event-bus.js';
@@ -46,6 +49,20 @@ const OAUTH_CONNECTION_TYPES = new Set<WorkOSConnectionType>([
  */
 const SSO_TOKEN_TTL_SECONDS = 300;
 
+/**
+ * Lifetime of the code `/sso/authorize` hands back, in minutes. Production's
+ * `AuthorizationCodesService` (`api-services/src/authorization-codes/authorization-codes.service.ts`)
+ * mints every SSO authorization code with `AUTHORIZATION_CODE_TTL_IN_MINUTES = 5`.
+ */
+const SSO_CODE_TTL_MINUTES = 5;
+
+/**
+ * The `error_uri` production attaches to every error it redirects back to the app with: its
+ * `SsoErrorHandler.authorizationUrlErrorCodesReference`, the docs page for the authorization
+ * URL's error codes.
+ */
+const SSO_ERROR_CODES_REFERENCE = 'https://workos.com/docs/reference/sso/get-authorization-url/error-codes';
+
 interface SSOAuthorizeParams {
   redirectUri: string;
   state: string | null;
@@ -54,6 +71,13 @@ interface SSOAuthorizeParams {
   domainHint: string | null;
   provider: string | null;
   email: string | null;
+}
+
+/** The connection a selector resolved to, with the selector's own words for an error about it. */
+interface ResolvedConnection {
+  connection: WorkOSConnection | undefined;
+  /** Production's description of the selector when the connection it names is inactive. */
+  inactiveDescription: string;
 }
 
 export function ssoRoutes(ctx: RouteContext): void {
@@ -65,15 +89,17 @@ export function ssoRoutes(ctx: RouteContext): void {
     cn.domains.some((d) => d.domain.trim().toLowerCase() === domain.trim().toLowerCase());
 
   /**
-   * The one active connection a selector names, or a refusal. The chosen connection supplies
-   * the organization the profile and code are minted under, so picking whichever organization
-   * was created first would authenticate the user into the wrong tenant.
+   * The one connection a selector names, or a refusal. The chosen connection supplies the
+   * organization the profile and code are minted under, so picking whichever organization was
+   * created first would authenticate the user into the wrong tenant. State is not a tiebreaker:
+   * production resolves the selector first and only then looks at the state, which is how an
+   * inactive connection gets reported as inactive rather than as missing.
    */
   function theOnly(candidates: WorkOSConnection[], selector: string): WorkOSConnection | undefined {
     if (candidates.length > 1) {
       throw new WorkOSApiError(
         400,
-        `Multiple active connections match ${selector}; select one with connection or organization`,
+        `Multiple connections match ${selector}; select one with connection or organization`,
         'invalid_request',
       );
     }
@@ -89,33 +115,90 @@ export function ssoRoutes(ctx: RouteContext): void {
    * that 404s a provider it does not name.
    */
   function findProviderConnection(provider: string, domainHint: string | null): WorkOSConnection | undefined {
-    const ofType = ws.connections.all().filter((cn) => cn.state === 'active' && cn.connection_type === provider);
+    const ofType = ws.connections.all().filter((cn) => cn.connection_type === provider);
     const hinted = domainHint ? ofType.filter((cn) => claimsDomain(cn, domainHint)) : [];
     return theOnly(hinted.length > 0 ? hinted : ofType, `provider ${provider}`);
   }
 
-  function resolveAndRedirect(c: any, params: SSOAuthorizeParams) {
-    const { redirectUri, state, connectionId, organizationId, domainHint, provider, email: loginHint } = params;
+  /**
+   * Which connection the request's selector names, in production's precedence. The
+   * descriptions are production's own, from `SsoController.handleInitiateSsoError`'s
+   * `InactiveConnection` case (`api/src/sso/sso.controller.ts`).
+   */
+  function resolveConnection(params: SSOAuthorizeParams): ResolvedConnection {
+    const { connectionId, organizationId, domainHint, provider } = params;
+
+    if (connectionId) {
+      return {
+        connection: ws.connections.get(connectionId),
+        inactiveDescription: `The connection '${connectionId}' is inactive.`,
+      };
+    }
+    if (organizationId) {
+      // The organization's SSO connection — there is at most one — and, failing that, whatever
+      // the seed bound to it, since the emulator lets an organization hold an OAuth connection.
+      const held = ws.connections.findBy('organization_id', organizationId);
+      return {
+        connection: organizationSsoConnections(ws, organizationId)[0] ?? held[0],
+        inactiveDescription: `The connection associated with the organization ID '${organizationId}' is inactive.`,
+      };
+    }
+    if (provider) {
+      return {
+        connection: findProviderConnection(provider, domainHint),
+        inactiveDescription: `The connection associated with the OAuth provider '${provider}' is inactive.`,
+      };
+    }
+    if (domainHint) {
+      return {
+        connection: theOnly(
+          ws.connections.all().filter((cn) => claimsDomain(cn, domainHint)),
+          `domain_hint ${domainHint}`,
+        ),
+        inactiveDescription: `The connection associated with the domain '${domainHint}' is inactive.`,
+      };
+    }
+    return { connection: undefined, inactiveDescription: '' };
+  }
+
+  /**
+   * Production's answer to an authorization it cannot complete once the app's `redirect_uri`
+   * is known: a redirect back to it carrying `error`, `error_description`, the `state` and an
+   * `error_uri` (`fromErrorToQueryParameters`, `api/src/sso/sso-error-redirector.ts`). The app
+   * sees the failure on its own callback, which is where an SDK's callback handler reads it.
+   */
+  function redirectWithError(
+    c: Context,
+    redirectUri: string,
+    state: string | null,
+    error: string,
+    description: string,
+  ) {
+    const redirect = new URL(redirectUri);
+    redirect.searchParams.set('error_description', description);
+    redirect.searchParams.set('error', error);
+    if (state) redirect.searchParams.set('state', state);
+    redirect.searchParams.set('error_uri', SSO_ERROR_CODES_REFERENCE);
+    return c.redirect(redirect.toString());
+  }
+
+  function resolveAndRedirect(c: Context, params: SSOAuthorizeParams) {
+    const { redirectUri, state, email: loginHint } = params;
 
     assertAllowedRedirectUri(redirectUri, store);
 
-    let connection: WorkOSConnection | undefined;
+    const { connection, inactiveDescription } = resolveConnection(params);
 
-    if (connectionId) {
-      connection = ws.connections.get(connectionId);
-    } else if (organizationId) {
-      connection = ws.connections.findBy('organization_id', organizationId).find((cn) => cn.state === 'active');
-    } else if (provider) {
-      connection = findProviderConnection(provider, domainHint);
-    } else if (domainHint) {
-      connection = theOnly(
-        ws.connections.all().filter((cn) => cn.state === 'active' && claimsDomain(cn, domainHint)),
-        `domain_hint ${domainHint}`,
-      );
+    if (!connection) {
+      throw new WorkOSApiError(404, 'No active connection found', 'connection_not_found');
     }
 
-    if (!connection || connection.state !== 'active') {
-      throw new WorkOSApiError(404, 'No active connection found', 'connection_not_found');
+    // Production's `SsoInitiator.initiateConnectionSignIn` sends a `validating` connection to
+    // the IdP exactly as it sends an active one — validating is what a connection is until its
+    // first login proves the configuration — and refuses an `inactive` one by redirecting to
+    // the app with `connection_unlinked`.
+    if (connection.state === 'inactive') {
+      return redirectWithError(c, redirectUri, state, 'connection_unlinked', inactiveDescription);
     }
 
     const email = loginHint ?? `user@${connection.domains[0]?.domain ?? 'example.com'}`;
@@ -143,6 +226,14 @@ export function ssoRoutes(ctx: RouteContext): void {
       });
     }
 
+    // The IdP has answered, as far as the emulator is concerned: this is where production's
+    // SAML and OIDC response handlers (`saml-response-handler.ts`, `openid-connect.controller.ts`)
+    // turn a `validating` connection `active` on the first response they accept, and the store
+    // hook announces `connection.activated` for it, the same way the first real login does.
+    if (connection.state === 'validating') {
+      ws.connections.update(connection.id, { state: 'active' });
+    }
+
     const authCode = ws.ssoAuthorizations.insert({
       code: generateId('sso_code'),
       connection_id: connection.id,
@@ -150,7 +241,7 @@ export function ssoRoutes(ctx: RouteContext): void {
       profile_id: profile.id,
       redirect_uri: redirectUri,
       state,
-      expires_at: expiresIn(10),
+      expires_at: expiresIn(SSO_CODE_TTL_MINUTES),
     });
 
     const redirect = new URL(redirectUri);
@@ -159,8 +250,26 @@ export function ssoRoutes(ctx: RouteContext): void {
     return c.redirect(redirect.toString());
   }
 
+  /**
+   * `client_id` is the first thing production reads from an authorization request: it is how
+   * the environment is found, so a request without one (or with one that names no application)
+   * fails before the `redirect_uri` is even looked at, and fails without redirecting anywhere —
+   * `SsoInitiator.initiateSso` returns `InvalidClient`, which the controller sends to WorkOS's
+   * own error page with `client_id_invalid` and "Missing or invalid client_id." (the
+   * `response_type` the DTO also declares is not validated at runtime: the query is bound
+   * without a pipe). The emulator has no error page and registers no AuthKit clients, so it
+   * refuses an absent id with the same code and words, as a 400 like its `invalid_redirect_uri`,
+   * and takes any id that is present.
+   */
+  function assertClientId(clientId: string | null | undefined): void {
+    if (!clientId) {
+      throw new WorkOSApiError(400, 'Missing or invalid client_id.', 'client_id_invalid');
+    }
+  }
+
   app.get('/sso/authorize', (c) => {
     const url = new URL(c.req.url);
+    const clientId = url.searchParams.get('client_id');
     const redirectUri = url.searchParams.get('redirect_uri');
     const state = url.searchParams.get('state');
     const connectionId = url.searchParams.get('connection');
@@ -168,6 +277,8 @@ export function ssoRoutes(ctx: RouteContext): void {
     const domainHint = url.searchParams.get('domain_hint');
     const provider = url.searchParams.get('provider');
     const loginHint = url.searchParams.get('login_hint');
+
+    assertClientId(clientId);
 
     if (!redirectUri) {
       throw new WorkOSApiError(400, 'Missing required parameter: redirect_uri', 'invalid_request');
@@ -180,7 +291,7 @@ export function ssoRoutes(ctx: RouteContext): void {
 
     const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
     if (interactive) {
-      const hiddenFields: Record<string, string> = { redirect_uri: redirectUri };
+      const hiddenFields: Record<string, string> = { client_id: clientId as string, redirect_uri: redirectUri };
       if (state) hiddenFields.state = state;
       if (connectionId) hiddenFields.connection = connectionId;
       if (organizationId) hiddenFields.organization = organizationId;
@@ -211,6 +322,7 @@ export function ssoRoutes(ctx: RouteContext): void {
 
   app.post('/sso/authorize', async (c) => {
     const form = await c.req.parseBody();
+    assertClientId(form.client_id as string | undefined);
     const redirectUri = form.redirect_uri as string;
     if (!redirectUri) {
       throw new WorkOSApiError(400, 'Missing required parameter: redirect_uri', 'invalid_request');
@@ -250,6 +362,27 @@ export function ssoRoutes(ctx: RouteContext): void {
     }
     if (!code) {
       throw new OauthApiError(400, 'invalid_request', 'code is required.');
+    }
+
+    // The client's credentials, checked before the code the way production's `SSOTokenGuard`
+    // (`api/src/auth/guards/sso-token.guard.ts`) runs before the handler. Both are required
+    // there; the `client_secret` is an API key of the environment, looked up with
+    // `keysService.findActiveByToken`, so here it is a key of the emulator's allow-list — the
+    // same keys that authenticate `Authorization: Bearer` — and an unknown or expired one is
+    // production's 400 `invalid_client` / "Invalid client secret.", with no event: nothing has
+    // been authenticated yet. The `client_id` is only required to be present, as it is on every
+    // other endpoint here — the emulator registers no AuthKit clients to check it against.
+    const clientId = body.client_id as string | undefined;
+    const clientSecret = body.client_secret as string | undefined;
+    if (!clientId) {
+      throw new OauthApiError(400, 'invalid_request', 'client_id is required.');
+    }
+    if (!clientSecret) {
+      throw new OauthApiError(400, 'invalid_request', 'client_secret is required.');
+    }
+    const apiKey = (store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {})[clientSecret];
+    if (!apiKey || isApiKeyEntryExpired(apiKey)) {
+      throw new OauthApiError(400, 'invalid_client', 'Invalid client secret.');
     }
 
     const auth = ws.ssoAuthorizations.findOneBy('code', code);
@@ -307,7 +440,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     const accessToken = jwt.sign(
       {
         sub: profile.id,
-        aud: (body.client_id as string) ?? 'workos-emulate',
+        aud: clientId,
         org_id: auth.organization_id,
       },
       { expiresIn: SSO_TOKEN_TTL_SECONDS },

@@ -69,6 +69,8 @@ import {
   formatMembershipEvent,
   formatGroup,
   formatConnection,
+  countsTowardConnectionLimit,
+  organizationSsoConnections,
   formatSession,
   formatInvitation,
   formatRole,
@@ -727,16 +729,33 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       const org = ws.organizations.findOneBy('name', connConfig.organization);
       if (!org) continue;
 
+      // One SSO connection per organization, as `POST /connections` enforces: a seed that
+      // declares two would stand up a tenant production cannot have, and every flow built on
+      // it would pass here and fail there. OAuth and Magic Link connections are exempt, as
+      // they are from production's count — they are environment-level there.
+      const connectionType = connConfig.connection_type ?? 'GenericSAML';
+      const [held] = organizationSsoConnections(ws, org.id);
+      if (held && countsTowardConnectionLimit(connectionType)) {
+        throw new Error(
+          `workos seed config: organization ${JSON.stringify(org.name)} already has a connection: ` +
+            `${JSON.stringify(held.name)} and ${JSON.stringify(connConfig.name)} both belong to it, ` +
+            'and production allows one SSO connection per organization',
+        );
+      }
+
       const domains = (connConfig.domains ?? []).map((d) => ({
         object: 'connection_domain' as const,
         id: generateId('conn_domain'),
         domain: d,
       }));
 
+      // A seeded connection keeps its declared state and defaults to `active`, unlike one the
+      // API creates: a seed stands for a connection that was set up and verified before the
+      // suite began. `domains` is seed-only too — the create endpoint has no such field.
       const conn = ws.connections.insert({
         object: 'connection',
         organization_id: org.id,
-        connection_type: connConfig.connection_type ?? 'GenericSAML',
+        connection_type: connectionType,
         name: connConfig.name,
         state: connConfig.state ?? 'active',
         domains,
@@ -763,12 +782,23 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
   }
 
   if (config.directories) {
-    // First declaration wins: two directories in one organization can list the same
-    // person, and last-write-wins would make their access depend on array order.
-    const rolesApplied = new Set<string>();
     for (const dirConfig of config.directories) {
       const org = ws.organizations.findOneBy('name', dirConfig.organization);
       if (!org) continue;
+
+      // One directory per organization. Production's `DirectoryCreator.create`
+      // (`api/src/directories/directory-creator.ts`) refuses a second with
+      // `directory_already_exists_for_organization` under the same per-team flag as the
+      // connection rule, and there is no create endpoint here to say so at request time —
+      // the seed is the only way a directory comes into being, so the seed is where it fails.
+      const [held] = ws.directories.findBy('organization_id', org.id);
+      if (held) {
+        throw new Error(
+          `workos seed config: organization ${JSON.stringify(org.name)} already has a directory: ` +
+            `${JSON.stringify(held.name)} and ${JSON.stringify(dirConfig.name)} both belong to it, ` +
+            'and production allows one directory per organization',
+        );
+      }
 
       const directory = ws.directories.insert({
         object: 'directory',
@@ -851,16 +881,11 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         const authKitUser = findUserByEmail(ws, u.email);
         const membership = authKitUser ? liveMembershipFor(ws, org.id, authKitUser.id) : undefined;
         if (membership) {
-          // Write only what changes: a later directory re-listing an already-managed person
-          // with no role to give would otherwise bump `updated_at` and emit an
-          // `organization_membership.updated` that says nothing.
-          const updates: Partial<WorkOSOrganizationMembership> = {};
-          if (!membership.directory_managed) updates.directory_managed = true;
-          if (role && !rolesApplied.has(membership.id)) {
-            rolesApplied.add(membership.id);
-            Object.assign(updates, membershipRoleFields(ws, membership.organization_id, [role]));
-          }
-          if (Object.keys(updates).length > 0) ws.organizationMemberships.update(membership.id, updates);
+          // Claimed exactly once: the organization has this one directory, and the validator
+          // refuses a directory that lists the same person twice.
+          const updates: Partial<WorkOSOrganizationMembership> = { directory_managed: true };
+          if (role) Object.assign(updates, membershipRoleFields(ws, membership.organization_id, [role]));
+          ws.organizationMemberships.update(membership.id, updates);
         }
       }
     }

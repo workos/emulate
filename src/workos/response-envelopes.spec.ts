@@ -118,10 +118,15 @@ const CASES: readonly EnvelopeCase[] = [
     // its own rather than sharing one with another case.
     request: async (app, f) => {
       const authorize = await app.request(
-        `/sso/authorize?connection=${f.connectionId}&redirect_uri=http://localhost:3000/callback`,
+        `/sso/authorize?client_id=${f.clientId}&connection=${f.connectionId}&redirect_uri=http://localhost:3000/callback`,
       );
       const code = new URL(authorize.headers.get('location')!).searchParams.get('code');
-      return post('/sso/token', { grant_type: 'authorization_code', code })(app);
+      return post('/sso/token', {
+        grant_type: 'authorization_code',
+        code,
+        client_id: f.clientId,
+        client_secret: API_KEY,
+      })(app);
     },
   },
   {

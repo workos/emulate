@@ -84,6 +84,7 @@ describe('Interactive Auth Mode', () => {
 
   it('should handle POST request to complete SSO login', async () => {
     const formData = new URLSearchParams();
+    formData.append('client_id', 'test');
     formData.append('email', 'test@example.com');
     formData.append('redirect_uri', 'http://localhost:3000/callback');
     formData.append('state', 'test_state');
