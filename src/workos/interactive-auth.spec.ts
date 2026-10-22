@@ -418,7 +418,7 @@ describe('Interactive Auth Mode with the password step', () => {
     expect(emulator.store.getData(loginKey(tokenIn(await next.text())))).toBeDefined();
   });
 
-  it('sweeps the verification an abandoned email page was waiting on, along with its token', async () => {
+  it("sweeps an abandoned email page's token but leaves the user's code, which a later login may hold", async () => {
     const ws = getWorkOSStore(emulator.store);
     const token = tokenIn(await (await submit({ email: 'unverified@example.com', password: 'correct-horse' })).text());
     expect(token).not.toBe('');
@@ -427,10 +427,11 @@ describe('Interactive Auth Mode with the password step', () => {
     const stored = emulator.store.getData<{ expires_at: string }>(loginKey(token));
     emulator.store.setData(loginKey(token), { ...stored, expires_at: new Date(Date.now() - 1000).toISOString() });
 
-    // The sweep at the next mint takes the record the gate was waiting on along with the token.
+    // The sweep at the next mint takes the token. The code is the user's one current code, not
+    // the login's — issuing another replaces it — so it is left for whichever login verifies it.
     expect((await submit({ email: 'multi@example.com', password: 'correct-horse' })).status).toBe(200);
     expect(emulator.store.getData(loginKey(token))).toBeUndefined();
-    expect(ws.emailVerifications.get(verificationId)).toBeUndefined();
+    expect(ws.emailVerifications.get(verificationId)).toBeDefined();
   });
 
   it('sweeps the challenge an abandoned one-time-code page was waiting on, along with its token', async () => {

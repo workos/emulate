@@ -354,12 +354,13 @@ export function authRoutes(ctx: RouteContext): void {
     // The token `login` is stored under, once a page after the password has needed one.
     let loginToken: string | null = null;
     /**
-     * Drop the record an expired login's open gate was waiting on: the email_verification or
-     * authentication_challenge only that login could have redeemed. Otherwise every abandoned
-     * gated login would keep one such record for the emulator's lifetime after its token went.
+     * Drop the challenge an expired login's second-factor gate was waiting on: only that login
+     * could have redeemed it, and otherwise every abandoned gated login would keep one for the
+     * emulator's lifetime after its token went. The email code is not the login's to drop: it
+     * is the user's one current code, replaced whenever another is issued, and a newer login
+     * may be waiting on the very record an older login sent.
      */
     const releaseGate = (stale: InteractiveLogin) => {
-      if (stale.email_verification_id) ws.emailVerifications.delete(stale.email_verification_id);
       if (stale.challenge_id) ws.authChallenges.delete(stale.challenge_id);
     };
     /**
