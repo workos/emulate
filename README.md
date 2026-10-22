@@ -1145,6 +1145,48 @@ Errors use production's stable codes: `invalid_request` (400) for a malformed bo
 Agent Registration (`/agents/registrations`, claim attempts, credential validation) is not
 implemented.
 
+### Audit Logs
+
+`POST /audit_logs/events` takes production's ingestion body — `organization_id` beside an `event`
+whose `action` is the bare action name — and answers `200 {"success": true}`, which is all
+production answers. The event is stored, but no endpoint reads it back: production has none
+either, exports being its read path.
+
+```json
+{
+  "organization_id": "org_01HXYZ",
+  "event": {
+    "action": "user.signed_in",
+    "occurred_at": "2026-02-02T16:35:39.317Z",
+    "actor": { "id": "user_123", "type": "user", "name": "Jon Smith" },
+    "targets": [{ "id": "team_456", "type": "team" }],
+    "context": { "location": "1.1.1.1", "user_agent": "Chrome/104.0.0.0" },
+    "metadata": { "plan": "enterprise" }
+  }
+}
+```
+
+An `Idempotency-Key` header dedupes a retried request the way production does: the key is paired
+with a hash of the event, so a replay with the same key and body stores nothing new, while the
+same key on a different body is a different event. The Node SDK sends a fresh key on every
+`createEvent` call, so only its own retries collide.
+
+Rejections carry production's bodies. A body that does not fit the DTO is a 422
+`{"message": "Validation failed", "errors": [...]}` with one entry per failing field, named by its
+dotted path and class-validator's message — `{"field": "event.targets.0.id", "code": "id must be a
+string"}` — and no top-level `code`. An `organization_id` the emulator does not have is a 404
+`{"message": "Organization not found: 'org_x'.", "code": "entity_not_found", "entity_id": "org_x"}`.
+An `occurred_at` before `2018-10-01T00:00:00.000Z` or more than 24 hours ahead is a 400
+`invalid_audit_log`: production's partitioned storage holds nothing outside that window and
+refuses the event rather than acknowledge one it would lose.
+
+What is not modeled: production checks every event against the schema registered for its action
+in the dashboard — the action must exist at that `version`, the target types must match, metadata
+keys and values are constrained — and 400s with `invalid_audit_log` when it does not. The emulator
+keeps no registry (`POST /audit_logs/actions/{name}/schemas` records a schema, but nothing consults
+it), so any action, target type and metadata are accepted. The audit log trail is always enabled.
+Exports resolve to a placeholder URL rather than a CSV of the stored events.
+
 ## Widgets
 
 `POST /widgets/token` mints the session token the `@workos-inc/widgets` components authenticate

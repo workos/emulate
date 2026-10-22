@@ -58,7 +58,6 @@ import type {
   WorkOSDirectoryUser,
   WorkOSDirectoryGroup,
   WorkOSAuditLogAction,
-  WorkOSAuditLogEvent,
   WorkOSAuditLogExport,
   WorkOSFeatureFlag,
   WorkOSConnectApplication,
@@ -1303,10 +1302,6 @@ export function formatDirectoryGroup(g: WorkOSDirectoryGroup): Record<string, un
 
 export function formatAuditLogAction(a: WorkOSAuditLogAction): Record<string, unknown> {
   return formatEntity(a);
-}
-
-export function formatAuditLogEvent(e: WorkOSAuditLogEvent): Record<string, unknown> {
-  return formatEntity(e);
 }
 
 export function formatAuditLogExport(ex: WorkOSAuditLogExport): Record<string, unknown> {

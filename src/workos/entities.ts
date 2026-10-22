@@ -520,14 +520,45 @@ export interface WorkOSAuditLogAction extends Entity {
   condition: string | null;
 }
 
+/** The `actor` of an ingested event, as `AuditLogEventActorDto` takes it. */
+export interface WorkOSAuditLogEventActor {
+  id: string;
+  type: string;
+  name?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+/** One of an ingested event's `targets`, as `AuditLogEventTargetDto` takes it. */
+export interface WorkOSAuditLogEventTarget {
+  id: string;
+  type: string;
+  name?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+/** The `context` of an ingested event: where it happened, as `AuditLogEventContextDto` takes it. */
+export interface WorkOSAuditLogEventContext {
+  location: string;
+  user_agent?: string | null;
+}
+
+/**
+ * An ingested audit log event, kept the way production keeps the validated `event` body it was
+ * sent: `action` is the bare action name, `version` has been defaulted, and `idempotency_key` is
+ * what a retried request is matched against. Nothing serves it back out — production has no
+ * read endpoint for events either; exports are the read path.
+ */
 export interface WorkOSAuditLogEvent extends Entity {
   object: 'audit_log_event';
   organization_id: string;
-  action: { name: string; type: string; id: string };
-  actor: Record<string, unknown>;
-  targets: Array<Record<string, unknown>>;
-  metadata: Record<string, unknown> | null;
+  action: string;
   occurred_at: string;
+  actor: WorkOSAuditLogEventActor;
+  targets: WorkOSAuditLogEventTarget[];
+  context: WorkOSAuditLogEventContext;
+  metadata?: Record<string, unknown> | null;
+  version: number;
+  idempotency_key: string;
 }
 
 export interface WorkOSAuditLogExport extends Entity {

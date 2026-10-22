@@ -252,6 +252,7 @@ export function getWorkOSStore(store: Store): WorkOSStore {
     ]),
     auditLogEvents: store.collection<WorkOSAuditLogEvent>('workos.audit_log_events', ID_PREFIXES.audit_log_event, [
       'organization_id',
+      'idempotency_key',
     ]),
     auditLogExports: store.collection<WorkOSAuditLogExport>('workos.audit_log_exports', ID_PREFIXES.audit_log_export, [
       'organization_id',

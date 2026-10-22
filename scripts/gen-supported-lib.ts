@@ -163,7 +163,8 @@ export const FEATURES: FeatureDef[] = [
   {
     name: 'Audit Logs',
     tags: ['audit-logs'],
-    notes: 'Events are stored and queryable. Export generation is not implemented.',
+    notes:
+      "Events are ingested with production's `{organization_id, event}` body, validated the way its DTO validates them, and stored under their idempotency key. No action schemas are registered, so any action, target type and metadata are accepted. Export generation is not implemented.",
   },
   {
     name: 'Vault',

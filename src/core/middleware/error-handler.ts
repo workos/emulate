@@ -7,6 +7,11 @@ export class WorkOSApiError extends Error {
     message: string,
     public code: string,
     public errors?: Array<{ field?: string; code: string; message?: string }>,
+    /**
+     * Body fields beyond `message`, `code` and `errors`, spread into the rendered body: production's
+     * `EntityNotFoundException` carries the missing `entity_id`, for one.
+     */
+    public extra?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'WorkOSApiError';
@@ -103,6 +108,7 @@ export function createApiErrorHandler(): ErrorHandler {
       if (err.errors) {
         body.errors = err.errors;
       }
+      Object.assign(body, err.extra);
       return c.json(body, err.status as ContentfulStatusCode);
     }
 
