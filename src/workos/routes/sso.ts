@@ -1,5 +1,13 @@
 import type { Context } from 'hono';
-import { type RouteContext, parseJsonBody, WorkOSApiError, OauthApiError, generateId } from '../../core/index.js';
+import {
+  type RouteContext,
+  parseJsonBody,
+  WorkOSApiError,
+  OauthApiError,
+  NestNotFoundError,
+  generateId,
+  notFound,
+} from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatSSOProfile,
@@ -368,9 +376,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     }
 
     const profile = ws.ssoProfiles.get(profileId);
-    if (!profile) {
-      throw new WorkOSApiError(404, 'Profile not found', 'not_found');
-    }
+    if (!profile) throw notFound('Profile', profileId);
 
     return c.json(formatSSOProfile(profile));
   });
@@ -453,9 +459,9 @@ export function ssoRoutes(ctx: RouteContext): void {
     }
 
     const profile = ws.ssoProfiles.get(profileId);
-    if (!profile) {
-      throw new WorkOSApiError(404, 'Profile not found', 'not_found');
-    }
+    // Production throws a bare `new NotFoundException()` here (api sso.controller.ts,
+    // logout/authorize): the body is `{message: 'Not Found'}` and nothing else.
+    if (!profile) throw new NestNotFoundError();
 
     const logoutToken = generateId('sso_logout');
     store.setData(`${STORE_KEY_PREFIXES.ssoLogout}${logoutToken}`, profile.id);

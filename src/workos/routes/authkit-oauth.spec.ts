@@ -468,7 +468,12 @@ describe('AuthKit OAuth resource indicators', () => {
       headers: apiHeaders,
     });
     expect(again.status).toBe(404);
-    expect((await json(again)).message).toBe(`AuthKit OAuth resource not found: '${created.id}'.`);
+    // Production raises a bare Nest NotFoundException with a string message here, so the body
+    // carries Nest's `error` and no `code`.
+    expect(await json(again)).toEqual({
+      message: `AuthKit OAuth resource not found: '${created.id}'.`,
+      error: 'Not Found',
+    });
   });
 
   it('refuses a duplicate with the spec message, and a malformed uri', async () => {

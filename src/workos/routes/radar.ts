@@ -1,4 +1,4 @@
-import { type RouteContext, notFound, parseJsonBody, parseListParams } from '../../core/index.js';
+import { type RouteContext, NestNotFoundError, parseJsonBody, parseListParams } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatRadarAttempt, formatListResponse } from '../helpers.js';
 
@@ -17,7 +17,9 @@ export function radarRoutes(ctx: RouteContext): void {
   // Get attempt
   app.get('/radar/attempts/:id', (c) => {
     const attempt = ws.radarAttempts.get(c.req.param('id'));
-    if (!attempt) throw notFound('RadarAttempt');
+    // Production has no GET for an attempt; its PUT answers an unknown id with a bare Nest
+    // NotFoundException('Radar attempt not found') (api radar-standalone controller).
+    if (!attempt) throw new NestNotFoundError('Radar attempt not found', 'Not Found');
     return c.json(formatRadarAttempt(attempt));
   });
 

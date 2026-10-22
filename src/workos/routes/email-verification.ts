@@ -8,13 +8,13 @@ export function emailVerificationRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/email_verification/:id', (c) => {
     const ev = ws.emailVerifications.get(c.req.param('id'));
-    if (!ev) throw notFound('Email Verification');
+    if (!ev) throw notFound('Email Verification', c.req.param('id'));
     return c.json(formatEmailVerification(ev));
   });
 
   app.post('/user_management/users/:id/email_verification/send', (c) => {
     const user = ws.users.get(c.req.param('id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('id'));
 
     const ev = ws.emailVerifications.insert({
       object: 'email_verification',
@@ -29,7 +29,7 @@ export function emailVerificationRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/users/:id/email_verification/confirm', async (c) => {
     const user = ws.users.get(c.req.param('id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('id'));
 
     const body = await parseJsonBody(c);
     const code = body.code as string | undefined;

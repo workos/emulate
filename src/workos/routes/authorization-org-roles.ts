@@ -1,4 +1,4 @@
-import { type RouteContext, notFound, validationError, parseJsonBody } from '../../core/index.js';
+import { type RouteContext, EntityNotFoundError, notFound, validationError, parseJsonBody } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatRole } from '../helpers.js';
 import {
@@ -30,7 +30,7 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
 
     for (let i = 0; i < slugs.length; i++) {
       const role = rolesBySlug.get(slugs[i]!);
-      if (!role) throw notFound('Role');
+      if (!role) throw notFound('Organization Role', slugs[i]!);
       ws.roles.update(role.id, { priority: i });
     }
 
@@ -57,7 +57,7 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
     // so an unknown one answers 404 rather than the environment's roles.
     listRoles: (ws, c) => {
       const orgId = c.req.param('orgId')!;
-      if (!ws.organizations.get(orgId)) throw notFound('Organization');
+      if (!ws.organizations.get(orgId)) throw notFound('Organization', orgId);
       return rolesApplyingTo(ws, orgId);
     },
     insertDefaults: (c) => ({ organization_id: c.req.param('orgId')! }),
@@ -65,7 +65,7 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
     duplicateCode: 'organization_role_slug_conflict',
     validateBeforeCreate: (ws, c) => {
       const org = ws.organizations.get(c.req.param('orgId')!);
-      if (!org) throw notFound('Organization');
+      if (!org) throw notFound('Organization', c.req.param('orgId')!);
     },
   });
 
@@ -73,11 +73,19 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
   app.delete(`${prefix}/:slug/permissions/:permissionSlug`, (c) => {
     const role = requireOrgRole(ws, c.req.param('orgId'), c.req.param('slug'));
 
-    const perm = ws.permissions.findOneBy('slug', c.req.param('permissionSlug'));
-    if (!perm) throw notFound('Permission');
+    const permissionSlug = c.req.param('permissionSlug');
+    const perm = ws.permissions.findOneBy('slug', permissionSlug);
+    // The one production 404 that adds `entity_type` and words the message differently
+    // (api authorization-organization-role-permissions controller, on PermissionSlugNotFoundException).
+    if (!perm) {
+      throw new EntityNotFoundError('Permission', permissionSlug, {
+        message: `Permission '${permissionSlug}' not found.`,
+        extra: { entity_type: 'Permission' },
+      });
+    }
 
     const rp = ws.rolePermissions.findBy('role_id', role.id).find((rp) => rp.permission_id === perm.id);
-    if (!rp) throw notFound('RolePermission');
+    if (!rp) throw notFound('RolePermission', permissionSlug);
 
     ws.rolePermissions.delete(rp.id);
     emitRolePermissionsUpdated(store, ws, role);

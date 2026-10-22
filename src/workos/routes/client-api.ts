@@ -33,8 +33,8 @@ export function clientApiRoutes(ctx: RouteContext): void {
     // something that cannot be looked up. `/widgets/token` skips this check; the spec
     // documents 404 on this route, so it is answered here. Membership is deliberately not
     // checked: pairing any user with any organization is how a test sets up a scenario.
-    if (!ws.organizations.get(organizationId)) throw notFound('Organization');
-    if (!ws.users.get(userId)) throw notFound('User');
+    if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
+    if (!ws.users.get(userId)) throw notFound('User', userId);
 
     const token = jwt.sign(
       { sub: userId, org_id: organizationId, aud: CLIENT_API_TOKEN_AUDIENCE },

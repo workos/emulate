@@ -1332,7 +1332,7 @@ export function authRoutes(ctx: RouteContext): void {
         }
 
         const org = ws.organizations.get(orgId);
-        if (!org) throw notFound('Organization');
+        if (!org) throw notFound('Organization', orgId);
 
         // Production only scopes a session to an organization the user actually belongs to.
         // Unvalidated, a client could select any organization id and receive a token whose

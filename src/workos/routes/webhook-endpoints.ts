@@ -38,13 +38,13 @@ export function webhookEndpointRoutes(ctx: RouteContext): void {
 
   app.get('/webhook_endpoints/:id', (c) => {
     const ep = ws.webhookEndpoints.get(c.req.param('id'));
-    if (!ep) throw notFound('WebhookEndpoint');
+    if (!ep) throw notFound('Webhook Endpoint', c.req.param('id'));
     return c.json(formatWebhookEndpoint(ep));
   });
 
   app.put('/webhook_endpoints/:id', async (c) => {
     const ep = ws.webhookEndpoints.get(c.req.param('id'));
-    if (!ep) throw notFound('WebhookEndpoint');
+    if (!ep) throw notFound('Webhook Endpoint', c.req.param('id'));
 
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
@@ -66,7 +66,7 @@ export function webhookEndpointRoutes(ctx: RouteContext): void {
 
   app.delete('/webhook_endpoints/:id', (c) => {
     const ep = ws.webhookEndpoints.get(c.req.param('id'));
-    if (!ep) throw notFound('WebhookEndpoint');
+    if (!ep) throw notFound('Webhook Endpoint', c.req.param('id'));
     ws.webhookEndpoints.delete(ep.id);
     return c.body(null, 204);
   });

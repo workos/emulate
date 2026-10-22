@@ -188,7 +188,11 @@ describe('Authorization org role routes', () => {
     const res = await req('/authorization/organizations/org_does_not_exist/roles');
 
     expect(res.status).toBe(404);
-    expect((await json(res)).message).toBe('Organization not found');
+    expect(await json(res)).toEqual({
+      message: "Organization not found: 'org_does_not_exist'.",
+      code: 'entity_not_found',
+      entity_id: 'org_does_not_exist',
+    });
   });
 
   it('gets an org role by slug', async () => {

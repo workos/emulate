@@ -8,7 +8,7 @@ export function magicAuthRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/magic_auth/:id', (c) => {
     const ma = ws.magicAuths.get(c.req.param('id'));
-    if (!ma) throw notFound('Magic Auth');
+    if (!ma) throw notFound('MagicAuth', c.req.param('id'));
     return c.json(formatMagicAuth(ma));
   });
 

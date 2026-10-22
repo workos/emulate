@@ -58,8 +58,8 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
           { field: 'organization_id', code: 'invalid' },
         ]);
       }
-      if (!ws.users.get(body.user_id)) throw notFound('User');
-      if (organizationId && !ws.organizations.get(organizationId)) throw notFound('Organization');
+      if (!ws.users.get(body.user_id)) throw notFound('User', body.user_id);
+      if (organizationId && !ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
       let account = findConnectedAccount(ws, body.user_id, slug, organizationId);
       if (!account) return c.json({ active: false, error: 'not_installed' });

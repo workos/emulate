@@ -37,14 +37,14 @@ export function directoryRoutes(ctx: RouteContext): void {
   // Get directory
   app.get('/directories/:id', (c) => {
     const dir = ws.directories.get(c.req.param('id'));
-    if (!dir) throw notFound('Directory');
+    if (!dir) throw notFound('Directory', c.req.param('id'));
     return c.json(formatDirectory(dir));
   });
 
   // Delete directory (cascade users + groups)
   app.delete('/directories/:id', (c) => {
     const dir = ws.directories.get(c.req.param('id'));
-    if (!dir) throw notFound('Directory');
+    if (!dir) throw notFound('Directory', c.req.param('id'));
 
     // Hand each membership back to whatever still has a claim on it: a surviving directory
     // in the same organization owns the role it maps, and with no survivor the membership
@@ -122,7 +122,7 @@ export function directoryRoutes(ctx: RouteContext): void {
   // Get directory user
   app.get('/directory_users/:id', (c) => {
     const user = ws.directoryUsers.get(c.req.param('id'));
-    if (!user) throw notFound('DirectoryUser');
+    if (!user) throw notFound('Directory User', c.req.param('id'));
     return c.json(formatDirectoryUser(user));
   });
 
@@ -152,7 +152,7 @@ export function directoryRoutes(ctx: RouteContext): void {
   // Get directory group
   app.get('/directory_groups/:id', (c) => {
     const group = ws.directoryGroups.get(c.req.param('id'));
-    if (!group) throw notFound('DirectoryGroup');
+    if (!group) throw notFound('Directory Group', c.req.param('id'));
     return c.json(formatDirectoryGroup(group));
   });
 }

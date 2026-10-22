@@ -61,7 +61,7 @@ function resolveParentResource(
       );
     }
     const parent = ws.authorizationResources.get(parentId);
-    if (!parent || parent.organization_id !== organizationId) throw notFound('Resource');
+    if (!parent || parent.organization_id !== organizationId) throw notFound('AuthorizationResource', parentId);
     return parent;
   }
 
@@ -73,7 +73,7 @@ function resolveParentResource(
       ]);
     }
     const parent = findResourceByExternalId(ws, organizationId, parentTypeSlug, parentExternalId);
-    if (!parent) throw notFound('Resource');
+    if (!parent) throw notFound('AuthorizationResource', parentExternalId);
     return parent;
   }
 
@@ -117,7 +117,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     }
 
     const organization = ws.organizations.get(organizationId);
-    if (!organization) throw notFound('Organization');
+    if (!organization) throw notFound('Organization', organizationId);
     // Absent (or null) parent fields put the resource under the organization's implicit
     // root, which production also resolves with find-or-create at this point.
     const parent =
@@ -172,12 +172,14 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
   app.get('/authorization/resources/:resource_id', (c) => {
     const resourceId = c.req.param('resource_id');
     const resource = ws.authorizationResources.get(resourceId);
-    if (!resource) throw notFound('AuthorizationResource');
+    if (!resource) throw notFound('AuthorizationResource', resourceId);
     return c.json(formatAuthorizationResource(resource));
   });
 
-  const updateResource = async (c: Context, resource: WorkOSAuthorizationResource | undefined) => {
-    if (!resource) throw notFound('AuthorizationResource');
+  // `ref` is whatever the route addressed the resource by — its id or its external id — so the
+  // 404 can name it.
+  const updateResource = async (c: Context, resource: WorkOSAuthorizationResource | undefined, ref: string) => {
+    if (!resource) throw notFound('AuthorizationResource', ref);
     const resourceId = resource.id;
     if (resource.resource_type_slug === 'organization') {
       throw new WorkOSApiError(
@@ -217,15 +219,16 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     return c.json(formatAuthorizationResource(updated!));
   };
   app.put('/authorization/resources/:resource_id', (c) =>
-    updateResource(c, ws.authorizationResources.get(c.req.param('resource_id'))),
+    updateResource(c, ws.authorizationResources.get(c.req.param('resource_id')), c.req.param('resource_id')),
   );
   app.patch('/authorization/resources/:resource_id', (c) =>
-    updateResource(c, ws.authorizationResources.get(c.req.param('resource_id'))),
+    updateResource(c, ws.authorizationResources.get(c.req.param('resource_id')), c.req.param('resource_id')),
   );
   app.patch('/authorization/organizations/:orgId/resources/:type_slug/:external_id', (c) => {
     return updateResource(
       c,
       findResourceByExternalId(ws, c.req.param('orgId'), c.req.param('type_slug'), c.req.param('external_id')),
+      c.req.param('external_id'),
     );
   });
 
@@ -235,7 +238,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
   app.delete('/authorization/resources/:resource_id', (c) => {
     const resourceId = c.req.param('resource_id');
     const resource = ws.authorizationResources.get(resourceId);
-    if (!resource) throw notFound('AuthorizationResource');
+    if (!resource) throw notFound('AuthorizationResource', resourceId);
 
     if (resource.resource_type_slug === 'organization') {
       throw new WorkOSApiError(400, 'Cannot mark organization resource as deleting.', 'bad_request');
@@ -265,8 +268,8 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
   // Memberships that hold a permission on a resource. Production requires
   // permission_slug; without it (pre-0.11 emulator behavior) every membership
   // in the resource's organization is returned.
-  const listMembershipsForResource = (c: Context, resource: WorkOSAuthorizationResource | undefined) => {
-    if (!resource) throw notFound('AuthorizationResource');
+  const listMembershipsForResource = (c: Context, resource: WorkOSAuthorizationResource | undefined, ref: string) => {
+    if (!resource) throw notFound('AuthorizationResource', ref);
 
     const permissionSlug = new URL(c.req.url).searchParams.get('permission_slug');
     const memberships = ws.organizationMemberships
@@ -281,7 +284,11 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
 
   // Memberships with access to a resource (by resource ID)
   app.get('/authorization/resources/:resource_id/organization_memberships', (c) => {
-    return listMembershipsForResource(c, ws.authorizationResources.get(c.req.param('resource_id')));
+    return listMembershipsForResource(
+      c,
+      ws.authorizationResources.get(c.req.param('resource_id')),
+      c.req.param('resource_id'),
+    );
   });
 
   // Get resource by type + external ID within an org
@@ -293,7 +300,7 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     const resource = ws.authorizationResources
       .findBy('organization_id', orgId)
       .find((r) => r.resource_type_slug === typeSlug && r.external_id === externalId);
-    if (!resource) throw notFound('AuthorizationResource');
+    if (!resource) throw notFound('AuthorizationResource', externalId);
     return c.json(formatAuthorizationResource(resource));
   });
 
@@ -305,6 +312,6 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
       c.req.param('type_slug'),
       c.req.param('external_id'),
     );
-    return listMembershipsForResource(c, resource);
+    return listMembershipsForResource(c, resource, c.req.param('external_id'));
   });
 }

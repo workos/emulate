@@ -73,7 +73,7 @@ export function featureFlagRoutes(ctx: RouteContext): void {
 
   const flagBySlug = (slug: string): WorkOSFeatureFlag => {
     const flag = ws.featureFlags.findOneBy('slug', slug);
-    if (!flag) throw notFound('FeatureFlag');
+    if (!flag) throw notFound('Flag', slug);
     return flag;
   };
 
@@ -129,8 +129,8 @@ export function featureFlagRoutes(ctx: RouteContext): void {
 
     // The spec answers 404 for a user or organization that does not exist, not just for an
     // unknown flag, so a typo'd id cannot masquerade as a silently ineffective target.
-    if (kind === 'user' && !ws.users.get(resourceId)) throw notFound('User');
-    if (kind === 'organization' && !ws.organizations.get(resourceId)) throw notFound('Organization');
+    if (kind === 'user' && !ws.users.get(resourceId)) throw notFound('User', resourceId);
+    if (kind === 'organization' && !ws.organizations.get(resourceId)) throw notFound('Organization', resourceId);
 
     const existing = ws.flagTargets.findBy('flag_slug', flag.slug).find((t) => t.resource_id === resourceId);
     if (existing) return { flag, changed: false, previous: undefined };
@@ -167,8 +167,8 @@ export function featureFlagRoutes(ctx: RouteContext): void {
     // The same existence checks the create route runs. Without them a typo'd id is swallowed
     // as a successful removal, so a test asserting "the target is gone" passes against the
     // emulator and fails against production, which 404s.
-    if (kind === 'user' && !ws.users.get(resourceId)) throw notFound('User');
-    if (kind === 'organization' && !ws.organizations.get(resourceId)) throw notFound('Organization');
+    if (kind === 'user' && !ws.users.get(resourceId)) throw notFound('User', resourceId);
+    if (kind === 'organization' && !ws.organizations.get(resourceId)) throw notFound('Organization', resourceId);
 
     const target = ws.flagTargets.findBy('flag_slug', flag.slug).find((t) => t.resource_id === resourceId);
     // Idempotent: the spec's 404 covers an unknown flag, user or organization, not a target
@@ -219,13 +219,13 @@ export function featureFlagRoutes(ctx: RouteContext): void {
 
   app.get('/organizations/:organizationId/feature-flags', (c) => {
     const orgId = c.req.param('organizationId');
-    if (!ws.organizations.get(orgId)) throw notFound('Organization');
+    if (!ws.organizations.get(orgId)) throw notFound('Organization', orgId);
     return c.json(listEnabled(c.req.url, [orgId]));
   });
 
   app.get('/user_management/users/:userId/feature-flags', (c) => {
     const userId = c.req.param('userId');
-    if (!ws.users.get(userId)) throw notFound('User');
+    if (!ws.users.get(userId)) throw notFound('User', userId);
     // Documented as including "any organizations that the user is a member of", so every org
     // membership contributes its targets — unlike the org-scoped access token claim.
     return c.json(listEnabled(c.req.url, [userId, ...organizationIdsForUser(ws, userId)]));

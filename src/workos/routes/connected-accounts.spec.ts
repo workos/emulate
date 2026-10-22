@@ -174,7 +174,11 @@ describe('Connected account routes', () => {
 
       const res = await req(`/user_management/users/${user.id}/connected_accounts/github?organization_id=org_none`);
       expect(res.status).toBe(404);
-      expect((await json(res)).message).toBe('Organization not found');
+      expect(await json(res)).toEqual({
+        message: "Organization not found: 'org_none'.",
+        code: 'entity_not_found',
+        entity_id: 'org_none',
+      });
     });
   });
 

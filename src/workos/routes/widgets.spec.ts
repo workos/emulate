@@ -253,7 +253,7 @@ describe('Widget routes', () => {
         body: JSON.stringify({ name: 'Orphan', permissions: [] }),
       });
       expect(res.status).toBe(404);
-      expect((await json(res)).message).toBe('Organization not found');
+      expect((await json(res)).message).toBe("Organization not found: 'org_missing'.");
       expect(ws.apiKeyRecords.all()).toHaveLength(0);
     });
 
@@ -403,7 +403,11 @@ describe('Widget routes', () => {
 
       const del = await wreq(`/_widgets/ApiKeys/${other.id}`, { method: 'DELETE' });
       expect(del.status).toBe(404);
-      expect((await json(del)).message).toBe('ApiKey not found');
+      expect(await json(del)).toEqual({
+        message: `API Key not found: '${other.id}'.`,
+        code: 'entity_not_found',
+        entity_id: other.id,
+      });
       const expire = await wreq(`/_widgets/ApiKeys/${other.id}/expire`, {
         method: 'POST',
         body: JSON.stringify({ expiresAt: null }),

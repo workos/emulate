@@ -8,7 +8,7 @@ export function userFeatureRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/users/:user_id/authorized_applications', (c) => {
     const user = ws.users.get(c.req.param('user_id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('user_id'));
 
     const apps = ws.authorizedApplications.findBy('user_id', user.id);
     return c.json({
@@ -20,10 +20,17 @@ export function userFeatureRoutes(ctx: RouteContext): void {
 
   app.delete('/user_management/users/:user_id/authorized_applications/:application_id', (c) => {
     const user = ws.users.get(c.req.param('user_id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('user_id'));
 
     const appItem = ws.authorizedApplications.get(c.req.param('application_id'));
-    if (!appItem || appItem.user_id !== user.id) throw notFound('Authorized Application');
+    // Production names the pair it looked up, not a single id
+    // (api application-consents/authorized-applications.controller.ts).
+    if (!appItem || appItem.user_id !== user.id) {
+      throw notFound(
+        'Authorized Application',
+        `(user: ${c.req.param('user_id')}, application: ${c.req.param('application_id')})`,
+      );
+    }
 
     ws.authorizedApplications.delete(appItem.id);
     return c.body(null, 204);
@@ -31,7 +38,7 @@ export function userFeatureRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/users/:user_id/data_providers', (c) => {
     const user = ws.users.get(c.req.param('user_id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('user_id'));
 
     const pipes = ws.pipeConnections.findBy('user_id', user.id);
     return c.json({

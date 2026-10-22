@@ -62,13 +62,13 @@ export function rolesApplyingTo(ws: WorkOSStore, organizationId: string): WorkOS
 
 export function requireEnvRole(ws: WorkOSStore, slug: string): WorkOSRole {
   const role = findEnvRole(ws, slug);
-  if (!role) throw notFound('Role');
+  if (!role) throw notFound('Role', slug);
   return role;
 }
 
 export function requireOrgRole(ws: WorkOSStore, orgId: string, slug: string): WorkOSRole {
   const role = findOrgRole(ws, orgId, slug);
-  if (!role) throw notFound('Role');
+  if (!role) throw notFound('Organization Role', slug);
   return role;
 }
 
@@ -105,7 +105,7 @@ export function replaceRolePermissions(ws: WorkOSStore, roleId: string, permissi
   const next = new Map<string, WorkOSPermission>();
   for (const permSlug of permissionSlugs) {
     const perm = ws.permissions.findOneBy('slug', permSlug);
-    if (!perm) throw notFound('Permission');
+    if (!perm) throw notFound('Permission', permSlug);
     next.set(perm.id, perm);
   }
 
@@ -293,7 +293,7 @@ export function registerRoleRoutes(ctx: RouteContext, config: RoleRouteConfig): 
       throw validationError('slug is required', [{ field: 'slug', code: 'required' }]);
     }
     const permission = ws.permissions.findOneBy('slug', slug);
-    if (!permission) throw notFound('Permission');
+    if (!permission) throw notFound('Permission', slug);
 
     // Re-attaching is a no-op rather than a duplicate join row, and emits nothing.
     const attached = ws.rolePermissions.findBy('role_id', role.id).some((rp) => rp.permission_id === permission.id);

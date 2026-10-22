@@ -55,7 +55,7 @@ export function connectRoutes(ctx: RouteContext): void {
 
   const requireApplication = (ref: string): WorkOSConnectApplication => {
     const application = findApplication(ref);
-    if (!application) throw notFound('ConnectApplication');
+    if (!application) throw notFound('Application', ref);
     return application;
   };
 
@@ -288,7 +288,7 @@ export function connectRoutes(ctx: RouteContext): void {
   // Revoke client secret
   app.delete('/connect/client_secrets/:id', (c) => {
     const secret = ws.clientSecrets.get(c.req.param('id'));
-    if (!secret) throw notFound('ClientSecret');
+    if (!secret) throw notFound('ApplicationCredential', c.req.param('id'));
     ws.clientSecrets.delete(secret.id);
     return c.body(null, 204);
   });

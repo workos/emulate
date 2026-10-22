@@ -34,14 +34,14 @@ export function legacyMfaRoutes(ctx: RouteContext): void {
   // Get factor
   app.get('/auth/factors/:id', (c) => {
     const factor = ws.authFactors.get(c.req.param('id'));
-    if (!factor) throw notFound('AuthenticationFactor');
+    if (!factor) throw notFound('Authentication Factor', c.req.param('id'));
     return c.json(formatAuthFactor(factor));
   });
 
   // Delete factor
   app.delete('/auth/factors/:id', (c) => {
     const factor = ws.authFactors.get(c.req.param('id'));
-    if (!factor) throw notFound('AuthenticationFactor');
+    if (!factor) throw notFound('Authentication Factor', c.req.param('id'));
     ws.authFactors.delete(factor.id);
     return c.body(null, 204);
   });
@@ -49,7 +49,7 @@ export function legacyMfaRoutes(ctx: RouteContext): void {
   // Create challenge
   app.post('/auth/factors/:id/challenge', async (c) => {
     const factor = ws.authFactors.get(c.req.param('id'));
-    if (!factor) throw notFound('AuthenticationFactor');
+    if (!factor) throw notFound('Authentication Factor', c.req.param('id'));
 
     const code = generateCode();
     const challenge = ws.authChallenges.insert({
@@ -66,7 +66,7 @@ export function legacyMfaRoutes(ctx: RouteContext): void {
   // Verify challenge
   app.post('/auth/challenges/:id/verify', async (c) => {
     const challenge = ws.authChallenges.get(c.req.param('id'));
-    if (!challenge) throw notFound('AuthenticationChallenge');
+    if (!challenge) throw notFound('Authentication Challenge', c.req.param('id'));
 
     if (isExpired(challenge.expires_at)) {
       ws.authChallenges.delete(challenge.id);

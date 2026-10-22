@@ -1,4 +1,10 @@
-import { type RouteContext, parseJsonBody, WorkOSApiError, validationError } from '../../core/index.js';
+import {
+  type RouteContext,
+  parseJsonBody,
+  NestNotFoundError,
+  WorkOSApiError,
+  validationError,
+} from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatRedirectUri, formatCorsOrigin } from '../helpers.js';
 import { STORE_KEYS } from '../constants.js';
@@ -53,8 +59,10 @@ export function configRoutes(ctx: RouteContext): void {
   // template or it does not, and an empty one would render to no claims anyway.
   app.get('/user_management/jwt_template', (c) => {
     const template = store.getData<WorkOSJwtTemplate>(STORE_KEYS.jwtTemplate);
+    // Production: `new NotFoundException({ message: 'JWT template not found for this environment.' })`
+    // (api jwt-templates controller) — a message and nothing else.
     if (!template) {
-      throw new WorkOSApiError(404, 'JWT template not found', 'not_found');
+      throw new NestNotFoundError('JWT template not found for this environment.');
     }
     return c.json(template);
   });

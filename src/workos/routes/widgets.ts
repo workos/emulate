@@ -200,7 +200,7 @@ export function widgetRoutes(ctx: RouteContext): void {
   // cannot trip the client's token-refresh path.
   const findOrganizationApiKey = (c: Context<WorkOSAppEnv>, apiKeyId: string): WorkOSApiKey => {
     const record = ws.apiKeyRecords.get(apiKeyId);
-    if (!record || apiKeyOrganizationId(record) !== widgetAuth(c).organizationId) throw notFound('ApiKey');
+    if (!record || apiKeyOrganizationId(record) !== widgetAuth(c).organizationId) throw notFound('API Key', apiKeyId);
     return record;
   };
 
@@ -219,7 +219,7 @@ export function widgetRoutes(ctx: RouteContext): void {
     // The token names the organization but nothing checked it exists — a token can be minted
     // for any id, and the org may have been deleted since. Issuing a key here would create a
     // live credential no organization route can reach, so refuse as the public route does.
-    if (!ws.organizations.get(organizationId)) throw notFound('Organization');
+    if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
     const body = await parseJsonBody(c);
 
     const name = typeof body.name === 'string' ? body.name.trim() : '';

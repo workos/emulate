@@ -63,7 +63,7 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
   app.get('/authorization/permissions/:slug', (c) => {
     const slug = c.req.param('slug');
     const permission = ws.permissions.findOneBy('slug', slug);
-    if (!permission) throw notFound('Permission');
+    if (!permission) throw notFound('Permission', slug);
     return c.json(formatPermission(permission));
   });
 
@@ -71,7 +71,7 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
   app.patch('/authorization/permissions/:slug', async (c) => {
     const slug = c.req.param('slug');
     const permission = ws.permissions.findOneBy('slug', slug);
-    if (!permission) throw notFound('Permission');
+    if (!permission) throw notFound('Permission', slug);
 
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
@@ -85,7 +85,7 @@ export function authorizationPermissionRoutes(ctx: RouteContext): void {
   app.delete('/authorization/permissions/:slug', (c) => {
     const slug = c.req.param('slug');
     const permission = ws.permissions.findOneBy('slug', slug);
-    if (!permission) throw notFound('Permission');
+    if (!permission) throw notFound('Permission', slug);
 
     // Cascade: remove from all role-permission joins and every agent blueprint ceiling
     ws.rolePermissions.deleteBy('permission_id', permission.id);

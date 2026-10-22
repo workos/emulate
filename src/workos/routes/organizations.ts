@@ -91,13 +91,13 @@ export function organizationRoutes(ctx: RouteContext): void {
 
   app.get('/organizations/:id', (c) => {
     const org = ws.organizations.get(c.req.param('id'));
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', c.req.param('id'));
     return c.json(formatOrganization(org, ws));
   });
 
   app.get('/organizations/:id/authorized_applications', (c) => {
     const org = ws.organizations.get(c.req.param('id'));
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', c.req.param('id'));
 
     // An organization's authorized applications are the ones granted by its
     // members. The spec item carries a `user_id`, so we filter the shared
@@ -114,13 +114,13 @@ export function organizationRoutes(ctx: RouteContext): void {
 
   app.get('/organizations/external_id/:external_id', (c) => {
     const org = ws.organizations.findOneBy('external_id', c.req.param('external_id'));
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', c.req.param('external_id'));
     return c.json(formatOrganization(org, ws));
   });
 
   app.put('/organizations/:id', async (c) => {
     const org = ws.organizations.get(c.req.param('id'));
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', c.req.param('id'));
 
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
@@ -171,7 +171,7 @@ export function organizationRoutes(ctx: RouteContext): void {
 
   app.delete('/organizations/:id', (c) => {
     const org = ws.organizations.get(c.req.param('id'));
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', c.req.param('id'));
 
     ws.organizationDomains.deleteBy('organization_id', org.id);
     ws.itContacts.deleteBy('organization_id', org.id);

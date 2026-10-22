@@ -19,7 +19,7 @@ export function organizationDomainRoutes(ctx: RouteContext): void {
     }
 
     const org = ws.organizations.get(organizationId);
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', organizationId);
 
     const existing = ws.organizationDomains.findBy('organization_id', organizationId).find((d) => d.domain === domain);
     if (existing) {
@@ -41,20 +41,20 @@ export function organizationDomainRoutes(ctx: RouteContext): void {
 
   app.get('/organization_domains/:id', (c) => {
     const domain = ws.organizationDomains.get(c.req.param('id'));
-    if (!domain) throw notFound('Organization Domain');
+    if (!domain) throw notFound('Organization Domain', c.req.param('id'));
     return c.json(formatDomain(domain));
   });
 
   app.delete('/organization_domains/:id', (c) => {
     const domain = ws.organizationDomains.get(c.req.param('id'));
-    if (!domain) throw notFound('Organization Domain');
+    if (!domain) throw notFound('Organization Domain', c.req.param('id'));
     ws.organizationDomains.delete(domain.id);
     return c.body(null, 204);
   });
 
   app.post('/organization_domains/:id/verify', (c) => {
     const domain = ws.organizationDomains.get(c.req.param('id'));
-    if (!domain) throw notFound('Organization Domain');
+    if (!domain) throw notFound('Organization Domain', c.req.param('id'));
 
     const updated = ws.organizationDomains.update(domain.id, {
       state: 'verified',

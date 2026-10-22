@@ -18,7 +18,7 @@ export function passwordResetRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/password_reset/:id', (c) => {
     const pr = ws.passwordResets.get(c.req.param('id'));
-    if (!pr) throw notFound('Password Reset');
+    if (!pr) throw notFound('Password Reset', c.req.param('id'));
     return c.json(formatPasswordReset(pr));
   });
 
@@ -32,7 +32,7 @@ export function passwordResetRoutes(ctx: RouteContext): void {
     // Case-insensitively, like every other lookup by email: an account Magic Auth created as
     // 'User@x.test' must not be unresettable by the address the caller actually has.
     const user = findUserByEmail(ws, email);
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', email);
 
     const token = generateVerificationToken();
     const pr = ws.passwordResets.insert({
@@ -75,7 +75,7 @@ export function passwordResetRoutes(ctx: RouteContext): void {
     const user = ws.users.get(pr.user_id);
     if (!user) {
       ws.passwordResets.delete(pr.id);
-      throw notFound('User');
+      throw notFound('User', pr.user_id);
     }
 
     ws.users.update(pr.user_id, {

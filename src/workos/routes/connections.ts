@@ -18,7 +18,7 @@ export function connectionRoutes(ctx: RouteContext): void {
       throw notFound('Organization');
     }
     const org = ws.organizations.get(organizationId);
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', organizationId);
 
     const domains = domainsList.map((d) => ({
       object: 'connection_domain' as const,
@@ -60,13 +60,13 @@ export function connectionRoutes(ctx: RouteContext): void {
 
   app.get('/connections/:id', (c) => {
     const conn = ws.connections.get(c.req.param('id'));
-    if (!conn) throw notFound('Connection');
+    if (!conn) throw notFound('Connection', c.req.param('id'));
     return c.json(formatConnection(conn));
   });
 
   app.delete('/connections/:id', (c) => {
     const conn = ws.connections.get(c.req.param('id'));
-    if (!conn) throw notFound('Connection');
+    if (!conn) throw notFound('Connection', c.req.param('id'));
 
     for (const auth of ws.ssoAuthorizations.all()) {
       if (auth.connection_id === conn.id) {

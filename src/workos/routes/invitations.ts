@@ -81,19 +81,19 @@ export function invitationRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/invitations/by_token/:token', (c) => {
     const inv = ws.invitations.findOneBy('token', c.req.param('token'));
-    if (!inv) throw notFound('Invitation');
+    if (!inv) throw notFound('Invite', c.req.param('token'));
     return c.json(formatInvitation(inv));
   });
 
   app.get('/user_management/invitations/:id', (c) => {
     const inv = ws.invitations.get(c.req.param('id'));
-    if (!inv) throw notFound('Invitation');
+    if (!inv) throw notFound('Invite', c.req.param('id'));
     return c.json(formatInvitation(inv));
   });
 
   app.post('/user_management/invitations/:id/accept', (c) => {
     const inv = ws.invitations.get(c.req.param('id'));
-    if (!inv) throw notFound('Invitation');
+    if (!inv) throw notFound('Invite', c.req.param('id'));
 
     if (inv.state !== 'pending') {
       throw new WorkOSApiError(400, `Invitation is ${inv.state}`, 'invalid_invitation_state');
@@ -111,7 +111,7 @@ export function invitationRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/invitations/:id/revoke', (c) => {
     const inv = ws.invitations.get(c.req.param('id'));
-    if (!inv) throw notFound('Invitation');
+    if (!inv) throw notFound('Invite', c.req.param('id'));
 
     if (inv.state !== 'pending') {
       throw new WorkOSApiError(400, `Invitation is ${inv.state}`, 'invalid_invitation_state');
@@ -126,7 +126,7 @@ export function invitationRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/invitations/:id/resend', (c) => {
     const inv = ws.invitations.get(c.req.param('id'));
-    if (!inv) throw notFound('Invitation');
+    if (!inv) throw notFound('Invite', c.req.param('id'));
 
     const newToken = generateVerificationToken();
     // Resending returns the invitation to pending, so the metadata recording how it left that
@@ -150,7 +150,7 @@ export function invitationRoutes(ctx: RouteContext): void {
 
   app.delete('/user_management/invitations/:id', (c) => {
     const inv = ws.invitations.get(c.req.param('id'));
-    if (!inv) throw notFound('Invitation');
+    if (!inv) throw notFound('Invite', c.req.param('id'));
     ws.invitations.delete(inv.id);
     return c.body(null, 204);
   });

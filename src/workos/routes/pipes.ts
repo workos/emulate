@@ -59,20 +59,20 @@ export function pipeRoutes(ctx: RouteContext): void {
 
   app.get('/pipes/connections/:id', (c) => {
     const conn = ws.pipeConnections.get(c.req.param('id'));
-    if (!conn) throw notFound('Pipe connection');
+    if (!conn) throw notFound('Pipe connection', c.req.param('id'));
     return c.json(formatPipeConnection(conn));
   });
 
   app.delete('/pipes/connections/:id', (c) => {
     const conn = ws.pipeConnections.get(c.req.param('id'));
-    if (!conn) throw notFound('Pipe connection');
+    if (!conn) throw notFound('Pipe connection', c.req.param('id'));
     ws.pipeConnections.delete(conn.id);
     return c.body(null, 204);
   });
 
   app.post('/pipes/connections/:id/access_token', (c) => {
     const conn = ws.pipeConnections.get(c.req.param('id'));
-    if (!conn) throw notFound('Pipe connection');
+    if (!conn) throw notFound('Pipe connection', c.req.param('id'));
     if (conn.status !== 'connected') {
       return c.json(
         {

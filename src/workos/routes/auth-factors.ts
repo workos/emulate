@@ -17,7 +17,7 @@ export function authFactorRoutes(ctx: RouteContext): void {
   app.post('/user_management/users/:userlandUserId/auth_factors', async (c) => {
     const userId = c.req.param('userlandUserId');
     const user = ws.users.get(userId);
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', userId);
 
     const body = await parseJsonBody(c);
     const type = (body.type as string) ?? 'totp';
@@ -60,7 +60,7 @@ export function authFactorRoutes(ctx: RouteContext): void {
   app.get('/user_management/users/:userlandUserId/auth_factors', (c) => {
     const userId = c.req.param('userlandUserId');
     const user = ws.users.get(userId);
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', userId);
 
     const factors = ws.authFactors.findBy('user_id', user.id);
     return c.json({

@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import {
   type RouteContext,
+  EntityNotFoundError,
   WorkOSApiError,
   cursorPaginate,
   notFound,
@@ -21,6 +22,13 @@ import {
 import { resolvePrimaryRole } from '../role-helpers.js';
 import { membershipRoleSlugs } from '../membership-roles.js';
 import { findOrCreateOrganizationResource } from '../organization-resource.js';
+
+// An unknown role slug on a group role assignment is production's
+// GroupRoleAssignmentRoleNotFoundException (api authorization/exceptions): the entity_not_found
+// message without an `entity_id`.
+function groupRoleNotFound(slug: string): EntityNotFoundError {
+  return new EntityNotFoundError('Role', undefined, { message: `Role not found: '${slug}'.` });
+}
 
 // The resource itself plus every ancestor reachable through parent_resource_id.
 // Role assignments on an ancestor grant their permissions on all descendants.
@@ -115,7 +123,7 @@ function resolveResourceTarget(
 
   if (resourceId) {
     const resource = ws.authorizationResources.get(resourceId);
-    if (!resource || resource.organization_id !== organizationId) throw notFound('Resource');
+    if (!resource || resource.organization_id !== organizationId) throw notFound('AuthorizationResource', resourceId);
     return resource;
   }
 
@@ -128,7 +136,7 @@ function resolveResourceTarget(
     const resource = ws.authorizationResources
       .findBy('external_id', resourceExternalId)
       .find((r) => r.resource_type_slug === resourceTypeSlug && r.organization_id === organizationId);
-    if (!resource) throw notFound('Resource');
+    if (!resource) throw notFound('AuthorizationResource', resourceExternalId);
     return resource;
   }
 
@@ -152,7 +160,7 @@ function resolveGroupResourceTarget(
   const resource = resolveResourceTarget(ws, body, group.organization_id);
   if (resource) return resource;
   const organization = ws.organizations.get(group.organization_id);
-  if (!organization) throw notFound('Organization');
+  if (!organization) throw notFound('Organization', group.organization_id);
   return findOrCreateOrganizationResource(ws, organization);
 }
 
@@ -164,7 +172,7 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
   app.post('/authorization/organization_memberships/:id/check', async (c) => {
     const membershipId = c.req.param('id');
     const membership = ws.organizationMemberships.get(membershipId);
-    if (!membership) throw notFound('OrganizationMembership');
+    if (!membership) throw notFound('UserOrganizationMembership', membershipId);
 
     const body = await parseJsonBody(c);
     // permission_slug is the production field (what the SDKs send);
@@ -189,7 +197,7 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
   app.get('/authorization/organization_memberships/:id/resources', (c) => {
     const membershipId = c.req.param('id');
     const membership = ws.organizationMemberships.get(membershipId);
-    if (!membership) throw notFound('OrganizationMembership');
+    if (!membership) throw notFound('UserOrganizationMembership', membershipId);
 
     const url = new URL(c.req.url);
     const params = parseListParams(url);
@@ -233,14 +241,19 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
   // Effective permissions for a membership on a resource: the membership's
   // organization-wide roles plus role assignments scoped to the resource or
   // any of its ancestors.
+  // `resourceRef` is whatever the route addressed the resource by — its id or its external id —
+  // so the 404 can name it.
   const listEffectivePermissions = (
     c: Context,
     membershipId: string,
     resource: WorkOSAuthorizationResource | undefined,
+    resourceRef: string,
   ) => {
     const membership = ws.organizationMemberships.get(membershipId);
-    if (!membership) throw notFound('OrganizationMembership');
-    if (!resource || resource.organization_id !== membership.organization_id) throw notFound('Resource');
+    if (!membership) throw notFound('UserOrganizationMembership', membershipId);
+    if (!resource || resource.organization_id !== membership.organization_id) {
+      throw notFound('AuthorizationResource', resourceRef);
+    }
 
     const permSlugs = getPermissionsForMembership(ws, membershipId, resource);
 
@@ -267,26 +280,26 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
               r.organization_id === membership.organization_id,
           )
       : undefined;
-    return listEffectivePermissions(c, c.req.param('id'), resource);
+    return listEffectivePermissions(c, c.req.param('id'), resource, c.req.param('externalId'));
   });
 
   // Production controller variant addressing the resource by id
   app.get('/authorization/organization_memberships/:id/resources/:resourceId/permissions', (c) => {
     const resource = ws.authorizationResources.get(c.req.param('resourceId'));
-    return listEffectivePermissions(c, c.req.param('id'), resource);
+    return listEffectivePermissions(c, c.req.param('id'), resource, c.req.param('resourceId'));
   });
 
   // Resource-centric route used by the Node SDK's listEffectivePermissions()
   app.get('/authorization/resources/:resourceId/organization_memberships/:membershipId/permissions', (c) => {
     const resource = ws.authorizationResources.get(c.req.param('resourceId'));
-    return listEffectivePermissions(c, c.req.param('membershipId'), resource);
+    return listEffectivePermissions(c, c.req.param('membershipId'), resource, c.req.param('resourceId'));
   });
 
   // List role assignments for a membership
   app.get('/authorization/organization_memberships/:id/role_assignments', (c) => {
     const membershipId = c.req.param('id');
     const membership = ws.organizationMemberships.get(membershipId);
-    if (!membership) throw notFound('OrganizationMembership');
+    if (!membership) throw notFound('UserOrganizationMembership', membershipId);
 
     const url = new URL(c.req.url);
     const params = parseListParams(url);
@@ -308,8 +321,8 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
   });
 
   // Resource-centered grant listings include native group-derived assignments.
-  const listResourceAssignments = (c: Context, resource: WorkOSAuthorizationResource | undefined) => {
-    if (!resource) throw notFound('Resource');
+  const listResourceAssignments = (c: Context, resource: WorkOSAuthorizationResource | undefined, ref: string) => {
+    if (!resource) throw notFound('AuthorizationResource', ref);
     const url = new URL(c.req.url);
     const roleSlug = url.searchParams.get('role_slug');
     const assignments = ws.organizationMemberships
@@ -321,7 +334,11 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     return c.json(formatListResponse(cursorPaginate(assignments, parseListParams(url)), formatRoleAssignment));
   };
   app.get('/authorization/resources/:resourceId/role_assignments', (c) => {
-    return listResourceAssignments(c, ws.authorizationResources.get(c.req.param('resourceId')));
+    return listResourceAssignments(
+      c,
+      ws.authorizationResources.get(c.req.param('resourceId')),
+      c.req.param('resourceId'),
+    );
   });
   app.get('/authorization/organizations/:orgId/resources/:resourceTypeSlug/:externalId/role_assignments', (c) => {
     const resource = ws.authorizationResources
@@ -330,11 +347,11 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
         (row) =>
           row.resource_type_slug === c.req.param('resourceTypeSlug') && row.external_id === c.req.param('externalId'),
       );
-    return listResourceAssignments(c, resource);
+    return listResourceAssignments(c, resource, c.req.param('externalId'));
   });
   app.get('/authorization/groups/:groupId/role_assignments', (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group) throw notFound('Group');
+    if (!group) throw notFound('Group', c.req.param('groupId'));
     const result = ws.groupRoleAssignments.list({
       ...parseListParams(new URL(c.req.url)),
       filter: (assignment) => assignment.group_id === group.id,
@@ -344,17 +361,19 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
   app.get('/authorization/groups/:groupId/role_assignments/:assignmentId', (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
     const assignment = ws.groupRoleAssignments.get(c.req.param('assignmentId'));
-    if (!group || !assignment || assignment.group_id !== group.id) throw notFound('GroupRoleAssignment');
+    if (!group || !assignment || assignment.group_id !== group.id) {
+      throw notFound('Group Role Assignment', c.req.param('assignmentId'));
+    }
     return c.json(formatGroupRoleAssignment(assignment));
   });
   app.post('/authorization/groups/:groupId/role_assignments', async (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group) throw notFound('Group');
+    if (!group) throw notFound('Group', c.req.param('groupId'));
     const body = await parseJsonBody(c);
     if (typeof body.role_slug !== 'string' || !body.role_slug)
       throw validationError('role_slug is required', [{ field: 'role_slug', code: 'required' }]);
     const role = resolvePrimaryRole(ws, group.organization_id, body.role_slug);
-    if (!role) throw notFound('Role');
+    if (!role) throw groupRoleNotFound(body.role_slug);
     const resource = resolveGroupResourceTarget(ws, body, group);
     if (
       ws.groupRoleAssignments
@@ -381,25 +400,29 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
   app.delete('/authorization/groups/:groupId/role_assignments/:assignmentId', (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
     const assignment = ws.groupRoleAssignments.get(c.req.param('assignmentId'));
-    if (!group || !assignment || assignment.group_id !== group.id) throw notFound('GroupRoleAssignment');
+    if (!group || !assignment || assignment.group_id !== group.id) {
+      throw notFound('Group Role Assignment', c.req.param('assignmentId'));
+    }
     ws.groupRoleAssignments.delete(assignment.id);
     return c.body(null, 204);
   });
   app.delete('/authorization/groups/:groupId/role_assignments', async (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group) throw notFound('Group');
+    if (!group) throw notFound('Group', c.req.param('groupId'));
     const body = await parseJsonBody(c);
     if (typeof body.role_slug !== 'string' || !body.role_slug)
       throw validationError('role_slug is required', [{ field: 'role_slug', code: 'required' }]);
     // Production resolves the slug first (an unknown role is a 404) and then
     // "returns 404 when no matching active assignment is found".
     const role = resolvePrimaryRole(ws, group.organization_id, body.role_slug);
-    if (!role) throw notFound('Role');
+    if (!role) throw groupRoleNotFound(body.role_slug);
     const resource = resolveGroupResourceTarget(ws, body, group);
     const matching = ws.groupRoleAssignments
       .findBy('group_id', group.id)
       .filter((assignment) => assignment.role_id === role.id && assignment.resource_id === resource.id);
-    if (matching.length === 0) throw notFound('GroupRoleAssignment');
+    // Production's criteria delete has no id to name, so its exception defaults the entity id to
+    // the literal 'matching criteria' (api-services group-role-assignment-not-found.exception.ts).
+    if (matching.length === 0) throw notFound('Group Role Assignment', 'matching criteria');
     for (const assignment of matching) ws.groupRoleAssignments.delete(assignment.id);
     return c.body(null, 204);
   });
@@ -407,7 +430,7 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
   app.post('/authorization/organization_memberships/:id/role_assignments', async (c) => {
     const membershipId = c.req.param('id');
     const membership = ws.organizationMemberships.get(membershipId);
-    if (!membership) throw notFound('OrganizationMembership');
+    if (!membership) throw notFound('UserOrganizationMembership', membershipId);
 
     const body = await parseJsonBody(c);
     const roleSlug = body.role_slug as string | undefined;
@@ -421,11 +444,12 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     const role = roleSlug
       ? resolvePrimaryRole(ws, membership.organization_id, roleSlug)
       : ws.roles.get(roleId as string);
-    if (!role) throw notFound('Role');
+    const roleRef = roleSlug ?? (roleId as string);
+    if (!role) throw notFound('Role', roleRef);
     // Whichever way it was addressed, the role must belong to the membership's
     // organization or the environment — never to another organization.
     if (role.organization_id !== null && role.organization_id !== membership.organization_id) {
-      throw notFound('Role');
+      throw notFound('Role', roleRef);
     }
 
     const resource = resolveResourceTarget(ws, body, membership.organization_id);
@@ -449,11 +473,11 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     const assignmentId = c.req.param('assignmentId');
 
     const membership = ws.organizationMemberships.get(membershipId);
-    if (!membership) throw notFound('OrganizationMembership');
+    if (!membership) throw notFound('UserOrganizationMembership', membershipId);
 
     const assignment = ws.roleAssignments.get(assignmentId);
     if (!assignment || assignment.organization_membership_id !== membershipId) {
-      throw notFound('RoleAssignment');
+      throw notFound('Role Assignment', assignmentId);
     }
 
     ws.roleAssignments.delete(assignmentId);
@@ -462,14 +486,14 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
   app.delete('/authorization/organization_memberships/:id/role_assignments', async (c) => {
     const membershipId = c.req.param('id');
     const membership = ws.organizationMemberships.get(membershipId);
-    if (!membership) throw notFound('OrganizationMembership');
+    if (!membership) throw notFound('UserOrganizationMembership', membershipId);
     const body = await parseJsonBody(c);
     if (typeof body.role_slug !== 'string' || !body.role_slug)
       throw validationError('role_slug is required', [{ field: 'role_slug', code: 'required' }]);
     // Production rejects an unknown slug with a 404 but treats "nothing to
     // remove" as success, unlike the group criteria delete above.
     const role = resolvePrimaryRole(ws, membership.organization_id, body.role_slug);
-    if (!role) throw notFound('Role');
+    if (!role) throw notFound('Role', body.role_slug);
     const resource = resolveResourceTarget(ws, body, membership.organization_id);
     // Match the resolved role's id, not the slug: an organization role shadows an
     // environment role of the same slug, and only the shadowing role's grant goes.

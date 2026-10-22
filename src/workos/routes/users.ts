@@ -99,19 +99,19 @@ export function userRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/users/:id', (c) => {
     const user = ws.users.get(c.req.param('id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('id'));
     return c.json(formatUser(user));
   });
 
   app.get('/user_management/users/external_id/:external_id', (c) => {
     const user = ws.users.findOneBy('external_id', c.req.param('external_id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('external_id'));
     return c.json(formatUser(user));
   });
 
   app.put('/user_management/users/:id', async (c) => {
     const user = ws.users.get(c.req.param('id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('id'));
 
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
@@ -137,7 +137,7 @@ export function userRoutes(ctx: RouteContext): void {
 
   app.delete('/user_management/users/:id', (c) => {
     const user = ws.users.get(c.req.param('id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('id'));
 
     for (const s of ws.sessions.findBy('user_id', user.id)) {
       ws.sessions.delete(s.id);
@@ -182,7 +182,7 @@ export function userRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/users/:id/identities', (c) => {
     const user = ws.users.get(c.req.param('id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('id'));
 
     // A bare array, per the spec: this endpoint is not paginated and returns no list envelope.
     return c.json(ws.identities.findBy('user_id', user.id).map(formatIdentity));

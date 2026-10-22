@@ -1,14 +1,13 @@
-import {
-  type RouteContext,
-  WorkOSApiError,
-  generateId,
-  notFound,
-  parseJsonBody,
-  validationError,
-} from '../../core/index.js';
+import { type RouteContext, WorkOSApiError, generateId, parseJsonBody, validationError } from '../../core/index.js';
 import { assertAllowedRedirectUri, expiresIn, findUserByEmail, isEmailShaped, isExpired } from '../helpers.js';
 import { getWorkOSStore } from '../store.js';
 import type { WorkOSUser } from '../entities.js';
+
+// Production's ExternalAuthNotFoundException (api authkit-idp/external-auth.controller.ts) is a
+// plain Nest 404 with its own code, used by both the server-to-server and the browser route.
+function externalAuthNotFound(id: string): WorkOSApiError {
+  return new WorkOSApiError(404, `Session not found for external_auth_id: ${id}.`, 'external_auth_not_found');
+}
 
 export function standaloneConnectRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -60,7 +59,7 @@ export function standaloneConnectRoutes(ctx: RouteContext): void {
     }
 
     const session = ws.externalAuthSessions.get(externalAuthId);
-    if (!session || isExpired(session.expires_at)) throw notFound('External authentication session');
+    if (!session || isExpired(session.expires_at)) throw externalAuthNotFound(externalAuthId);
     if (session.completed_at) {
       throw new WorkOSApiError(
         400,
@@ -102,7 +101,8 @@ export function standaloneConnectRoutes(ctx: RouteContext): void {
   });
 
   app.get('/oauth2/authorize/complete', (c) => {
-    const session = ws.externalAuthSessions.get(c.req.query('external_auth_id') ?? '');
+    const externalAuthId = c.req.query('external_auth_id') ?? '';
+    const session = ws.externalAuthSessions.get(externalAuthId);
     if (
       !session ||
       isExpired(session.expires_at) ||
@@ -111,7 +111,7 @@ export function standaloneConnectRoutes(ctx: RouteContext): void {
       !session.user_id ||
       !ws.users.get(session.user_id)
     ) {
-      throw notFound('External authentication session');
+      throw externalAuthNotFound(externalAuthId);
     }
     assertAllowedRedirectUri(session.redirect_uri, store);
     const redirect = new URL(session.redirect_uri);

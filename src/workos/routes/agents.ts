@@ -1,6 +1,7 @@
 import {
   type JWTPayload,
   type RouteContext,
+  EntityNotFoundError,
   WorkOSApiError,
   generateUlid,
   notFound,
@@ -209,8 +210,16 @@ function assertNameAvailable(ws: WorkOSStore, name: string, exceptId?: string): 
 
 function requireBlueprint(ws: WorkOSStore, id: string): WorkOSAgentBlueprint {
   const blueprint = ws.agentBlueprints.get(id);
-  if (!blueprint) throw notFound('Agent blueprint');
+  if (!blueprint) throw notFound('Agent Blueprint', id);
   return blueprint;
+}
+
+// Production's sessions controller builds this 404 by hand rather than through an entity
+// exception, so the id sits mid-sentence (api agent-blueprints/agent-instance-sessions.controller.ts).
+function sessionNotFound(id: string): EntityNotFoundError {
+  return new EntityNotFoundError('Agent instance session', id, {
+    message: `Agent instance session '${id}' not found.`,
+  });
 }
 
 function optionalIntent(body: Record<string, unknown>): string | undefined {
@@ -296,7 +305,7 @@ function resolveSessionAuthority(
 }
 
 function assertOrganizationInvocable(ws: WorkOSStore, blueprint: WorkOSAgentBlueprint, organizationId: string): void {
-  if (!ws.organizations.get(organizationId)) throw notFound('Organization');
+  if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
   if (!isOrganizationInvocable(blueprint, organizationId)) {
     throw tokenError(
       403,
@@ -533,7 +542,7 @@ export function agentRoutes(ctx: RouteContext): void {
           throw tokenError(400, 'user_session_ended', 'The delegating user session has ended.');
         }
         const organizationId = payload.org_id;
-        if (!ws.organizations.get(organizationId)) throw notFound('Organization');
+        if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
         // Membership before invocability, so a non-member cannot probe which organizations
         // a blueprint is invocable from.
@@ -731,13 +740,13 @@ export function agentRoutes(ctx: RouteContext): void {
 
   app.get('/agents/instances/:id', (c) => {
     const instance = ws.agentInstances.get(c.req.param('id'));
-    if (!instance) throw notFound('Agent instance');
+    if (!instance) throw notFound('Agent Instance', c.req.param('id'));
     return c.json(formatAgentInstance(instance));
   });
 
   app.delete('/agents/instances/:id', (c) => {
     const instance = ws.agentInstances.get(c.req.param('id'));
-    if (!instance) throw notFound('Agent instance');
+    if (!instance) throw notFound('Agent Instance', c.req.param('id'));
     deleteAgentInstance(ws, instance);
     return c.body(null, 204);
   });
@@ -757,7 +766,7 @@ export function agentRoutes(ctx: RouteContext): void {
 
   app.get('/agents/sessions/:id', (c) => {
     const session = ws.agentInstanceSessions.get(c.req.param('id'));
-    if (!session) throw notFound('Agent instance session');
+    if (!session) throw sessionNotFound(c.req.param('id'));
     return c.json(formatAgentInstanceSession(session));
   });
 
@@ -766,7 +775,7 @@ export function agentRoutes(ctx: RouteContext): void {
   // one stays `expired` with a null revoked_at.
   app.post('/agents/sessions/:id/revoke', (c) => {
     const session = ws.agentInstanceSessions.get(c.req.param('id'));
-    if (!session) throw notFound('Agent instance session');
+    if (!session) throw sessionNotFound(c.req.param('id'));
     revokeAgentSessionTree(ws, session.id);
     return c.json(formatAgentInstanceSession(ws.agentInstanceSessions.get(session.id)!));
   });

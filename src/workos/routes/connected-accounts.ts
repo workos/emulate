@@ -95,11 +95,11 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
     account: WorkOSConnectedAccount | undefined;
   } {
     const user = ws.users.get(c.req.param('user_id'));
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', c.req.param('user_id'));
 
     const slug = c.req.param('slug');
     const organizationId = new URL(c.req.url).searchParams.get('organization_id');
-    if (organizationId && !ws.organizations.get(organizationId)) throw notFound('Organization');
+    if (organizationId && !ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
     const account = exact
       ? ws.connectedAccounts
@@ -109,9 +109,18 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
     return { userId: user.id, slug, organizationId: organizationId ?? null, account };
   }
 
+  // Production looks an account up by the triple and names the whole triple in its 404
+  // (api data-integrations.user-management.controller.ts, DataInstallationNotFoundException).
+  const requireAccount = (target: ReturnType<typeof resolveTarget>): WorkOSConnectedAccount => {
+    if (target.account) return target.account;
+    throw notFound(
+      'Data Installation',
+      `slug=${target.slug} userland_user_id=${target.userId} organization_id=${target.organizationId}`,
+    );
+  };
+
   app.get(ACCOUNT_PATH, (c) => {
-    const { account } = resolveTarget(c);
-    if (!account) throw notFound('Connected Account');
+    const account = requireAccount(resolveTarget(c));
     return c.json(formatConnectedAccount(account));
   });
 
@@ -146,8 +155,7 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
   });
 
   app.put(ACCOUNT_PATH, async (c) => {
-    const { account } = resolveTarget(c);
-    if (!account) throw notFound('Connected Account');
+    const account = requireAccount(resolveTarget(c));
 
     const dto = parseDto(await parseJsonBody(c));
     // Without an explicit state, an update touching the credentials re-derives it from the
@@ -177,8 +185,7 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
   });
 
   app.delete(ACCOUNT_PATH, (c) => {
-    const { account } = resolveTarget(c);
-    if (!account) throw notFound('Connected Account');
+    const account = requireAccount(resolveTarget(c));
     // Deleting is what "disconnects": the row (and the tokens the spec says are removed with
     // it) goes away, so a later import is a fresh 201 rather than a 409 against a dead link.
     // The pipes.connected_account.disconnected event is emitted by the collection hook.

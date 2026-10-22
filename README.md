@@ -605,7 +605,7 @@ connectApplications:
    `aud` is the application's `audience`, falling back to its `client_id`.
 
 Reusing a completed ID returns `400 external_auth_session_already_completed`; unknown or expired IDs
-return `404 not_found`. Missing required fields return `422`, malformed email returns `400 invalid_email`,
+return `404 external_auth_not_found`. Missing required fields return `422`, malformed email returns `400 invalid_email`,
 and an email owned by another user returns `400 email_not_available` (including on updates). A failed
 validation does not consume the session. Browser redemption of an incomplete or already redeemed ID
 returns `404`.
@@ -1599,6 +1599,25 @@ Notes:
   is any URI with no authority at all (`view-source:javascript:…`, `jar:`, `about:blank`), which
   the host check has nothing to say about and `*` would otherwise wave through. Custom app schemes
   (`myapp://callback`, for native clients) keep their host and are allowed if that host is.
+
+## Not-Found Responses
+
+A lookup that finds nothing answers the way production's `EntityNotFoundException` does: the
+entity type as production names it, the id, slug, token or email the route looked up by, and
+`code: "entity_not_found"`:
+
+```json
+{ "message": "Organization not found: 'org_01K...'.", "code": "entity_not_found", "entity_id": "org_01K..." }
+```
+
+A client that matched on the emulator's former `not_found` code must match `entity_not_found`
+instead. A few routes mirror a production 404 that is not an entity lookup: `POST
+/authkit/oauth2/complete` answers `external_auth_not_found`, removing a membership that is not in
+a group answers `membership_not_found`, and `GET /user_management/jwt_template`, `POST
+/sso/logout/authorize` and `DELETE /user_management/authkit_oauth_resources/{id}` carry
+production's bare `{ "message" }` body (plus `"error": "Not Found"` where production adds it)
+with no `code`. OAuth grant failures keep their RFC 6749 `{ "error", "error_description" }`
+shape, and a route that does not exist is still `{ "message": "Not Found", "code": "not_found" }`.
 
 ## Error Hooks
 

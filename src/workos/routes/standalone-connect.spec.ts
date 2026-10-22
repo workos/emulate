@@ -149,7 +149,11 @@ describe('Standalone Connect', () => {
     for (const invalid of ['ext_auth_unknown', id]) {
       const res = await complete(invalid);
       expect(res.status).toBe(404);
-      expect((await json(res)).code).toBe('not_found');
+      // Production's ExternalAuthNotFoundException, not the entity_not_found shape.
+      expect(await json(res)).toEqual({
+        message: `Session not found for external_auth_id: ${invalid}.`,
+        code: 'external_auth_not_found',
+      });
     }
     expect(ws.users.findOneBy('external_id', user.id)).toBeUndefined();
   });

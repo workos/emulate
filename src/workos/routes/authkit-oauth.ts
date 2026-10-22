@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import {
   type RouteContext,
   OauthApiError,
+  NestNotFoundError,
   WorkOSApiError,
   parseJsonBody,
   parseListParams,
@@ -331,8 +332,10 @@ export function authkitOauthRoutes(ctx: RouteContext): void {
 
   app.delete('/user_management/authkit_oauth_resources/:id', (c) => {
     const id = c.req.param('id');
+    // A bare Nest NotFoundException with a string message in production
+    // (api authkit-oauth-resources controller), so `error` rather than `code`.
     if (!ws.authkitOauthResources.get(id)) {
-      throw new WorkOSApiError(404, `AuthKit OAuth resource not found: '${id}'.`, 'not_found');
+      throw new NestNotFoundError(`AuthKit OAuth resource not found: '${id}'.`, 'Not Found');
     }
     ws.authkitOauthResources.delete(id);
     return c.body(null, 204);

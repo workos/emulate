@@ -15,7 +15,7 @@ export function itContactRoutes(ctx: RouteContext): void {
 
   const requireOrganization = (organizationId: string) => {
     const org = ws.organizations.get(organizationId);
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', organizationId);
     return org;
   };
 
@@ -23,7 +23,8 @@ export function itContactRoutes(ctx: RouteContext): void {
   const requireContact = (organizationId: string, contactId: string): WorkOSItContact => {
     requireOrganization(organizationId);
     const contact = ws.itContacts.get(contactId);
-    if (!contact || contact.organization_id !== organizationId) throw notFound('ItContact');
+    if (!contact || contact.organization_id !== organizationId)
+      throw notFound('Organization Admin Membership', contactId);
     return contact;
   };
 

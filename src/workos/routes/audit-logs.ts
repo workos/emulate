@@ -90,7 +90,7 @@ export function auditLogRoutes(ctx: RouteContext): void {
   // Get export
   app.get('/audit_logs/exports/:id', (c) => {
     const exp = ws.auditLogExports.get(c.req.param('id'));
-    if (!exp) throw notFound('AuditLogExport');
+    if (!exp) throw notFound('Audit Log Export', c.req.param('id'));
     return c.json(formatAuditLogExport(exp));
   });
 

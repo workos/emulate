@@ -77,14 +77,14 @@ export function apiKeyRoutes(ctx: RouteContext): void {
   // stops authenticating, not just stops resolving.
   app.delete('/api_keys/:id', (c) => {
     const record = ws.apiKeyRecords.get(c.req.param('id'));
-    if (!record) throw notFound('ApiKey');
+    if (!record) throw notFound('API Key', c.req.param('id'));
     deleteApiKey(store, ws, record);
     return c.body(null, 204);
   });
 
   app.post('/api_keys/:id/expire', async (c) => {
     const record = ws.apiKeyRecords.get(c.req.param('id'));
-    if (!record) throw notFound('ApiKey');
+    if (!record) throw notFound('API Key', c.req.param('id'));
 
     const body = c.req.raw.body ? await parseJsonBody(c) : {};
     if (body.expires_at !== undefined && body.expires_at !== null && typeof body.expires_at !== 'string') {
@@ -107,7 +107,7 @@ export function apiKeyRoutes(ctx: RouteContext): void {
   // org-owned (owner.id) or user-owned within that org (owner.organization_id).
   app.get('/organizations/:orgId/api_keys', (c) => {
     const orgId = c.req.param('orgId');
-    if (!ws.organizations.get(orgId)) throw notFound('Organization');
+    if (!ws.organizations.get(orgId)) throw notFound('Organization', orgId);
     const params = parseListParams(new URL(c.req.url));
     const result = ws.apiKeyRecords.list({
       ...params,
@@ -118,7 +118,7 @@ export function apiKeyRoutes(ctx: RouteContext): void {
 
   app.post('/organizations/:orgId/api_keys', async (c) => {
     const orgId = c.req.param('orgId');
-    if (!ws.organizations.get(orgId)) throw notFound('Organization');
+    if (!ws.organizations.get(orgId)) throw notFound('Organization', orgId);
     return c.json(
       createApiKey(await parseJsonBody(c), { type: 'organization', id: orgId }, c.get('auth')?.environment),
       201,
@@ -127,7 +127,7 @@ export function apiKeyRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/users/:userId/api_keys', (c) => {
     const userId = c.req.param('userId');
-    if (!ws.users.get(userId)) throw notFound('User');
+    if (!ws.users.get(userId)) throw notFound('User', userId);
     const url = new URL(c.req.url);
     const organizationId = url.searchParams.get('organization_id');
     const result = ws.apiKeyRecords.list({
@@ -142,13 +142,13 @@ export function apiKeyRoutes(ctx: RouteContext): void {
 
   app.post('/user_management/users/:userId/api_keys', async (c) => {
     const userId = c.req.param('userId');
-    if (!ws.users.get(userId)) throw notFound('User');
+    if (!ws.users.get(userId)) throw notFound('User', userId);
     const body = await parseJsonBody(c);
     const organizationId = typeof body.organization_id === 'string' ? body.organization_id : '';
     if (!organizationId) {
       throw validationError('organization_id is required', [{ field: 'organization_id', code: 'required' }]);
     }
-    if (!ws.organizations.get(organizationId)) throw notFound('Organization');
+    if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
     const membership = ws.organizationMemberships
       .findBy('user_id', userId)
       .find((m) => m.organization_id === organizationId && m.status === 'active');

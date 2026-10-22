@@ -29,12 +29,12 @@ export function membershipRoutes(ctx: RouteContext): void {
     }
 
     const org = ws.organizations.get(organizationId);
-    if (!org) throw notFound('Organization');
+    if (!org) throw notFound('Organization', organizationId);
 
     // Real WorkOS 404s an unknown user; validating here also guarantees the embedded
     // `user` in the response (and every later read) is always resolvable, never null.
     const user = ws.users.get(userId);
-    if (!user) throw notFound('User');
+    if (!user) throw notFound('User', userId);
 
     const existing = liveMembershipFor(ws, organizationId, userId);
     // The API reference: a pending membership is an unaccepted invitation, which the user has to
@@ -99,13 +99,13 @@ export function membershipRoutes(ctx: RouteContext): void {
 
   app.get('/user_management/organization_memberships/:id', (c) => {
     const m = ws.organizationMemberships.get(c.req.param('id'));
-    if (!m) throw notFound('Organization Membership');
+    if (!m) throw notFound('UserOrganizationMembership', c.req.param('id'));
     return c.json(formatMembership(m, ws));
   });
 
   app.put('/user_management/organization_memberships/:id', async (c) => {
     const m = ws.organizationMemberships.get(c.req.param('id'));
-    if (!m) throw notFound('Organization Membership');
+    if (!m) throw notFound('UserOrganizationMembership', c.req.param('id'));
 
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
@@ -125,7 +125,7 @@ export function membershipRoutes(ctx: RouteContext): void {
 
   app.delete('/user_management/organization_memberships/:id', (c) => {
     const m = ws.organizationMemberships.get(c.req.param('id'));
-    if (!m) throw notFound('Organization Membership');
+    if (!m) throw notFound('UserOrganizationMembership', c.req.param('id'));
     deleteAgentInstancesForMembership(ws, m.id);
     // Role assignments hang off the membership and go with it, as in production.
     ws.roleAssignments.deleteBy('organization_membership_id', m.id);
@@ -135,7 +135,7 @@ export function membershipRoutes(ctx: RouteContext): void {
 
   app.put('/user_management/organization_memberships/:id/deactivate', (c) => {
     const m = ws.organizationMemberships.get(c.req.param('id'));
-    if (!m) throw notFound('Organization Membership');
+    if (!m) throw notFound('UserOrganizationMembership', c.req.param('id'));
     // The API reference: a pending membership is an unaccepted invitation, revoked rather than
     // deactivated; an inactive one is a no-op that emits no event, so the store is not touched.
     if (m.status === 'pending') {
@@ -155,7 +155,7 @@ export function membershipRoutes(ctx: RouteContext): void {
 
   app.put('/user_management/organization_memberships/:id/reactivate', (c) => {
     const m = ws.organizationMemberships.get(c.req.param('id'));
-    if (!m) throw notFound('Organization Membership');
+    if (!m) throw notFound('UserOrganizationMembership', c.req.param('id'));
     // The API reference: a pending membership becomes active by accepting its invitation; an
     // active one is a no-op that emits no event.
     if (m.status === 'pending') {

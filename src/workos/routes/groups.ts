@@ -1,6 +1,7 @@
 import {
   type RouteContext,
   notFound,
+  WorkOSApiError,
   validationError,
   parseJsonBody,
   parseListParams,
@@ -25,7 +26,7 @@ export function groupRoutes(ctx: RouteContext): void {
   // Create a group
   app.post('/organizations/:organizationId/groups', async (c) => {
     const organizationId = c.req.param('organizationId');
-    if (!ws.organizations.get(organizationId)) throw notFound('Organization');
+    if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
     const body = await parseJsonBody(c);
     const name = body.name;
@@ -46,7 +47,7 @@ export function groupRoutes(ctx: RouteContext): void {
   // List groups in an organization
   app.get('/organizations/:organizationId/groups', (c) => {
     const organizationId = c.req.param('organizationId');
-    if (!ws.organizations.get(organizationId)) throw notFound('Organization');
+    if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
     const url = new URL(c.req.url);
     const params = parseListParams(url);
@@ -61,14 +62,16 @@ export function groupRoutes(ctx: RouteContext): void {
   // Get a group
   app.get('/organizations/:organizationId/groups/:groupId', (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group || group.organization_id !== c.req.param('organizationId')) throw notFound('Group');
+    if (!group || group.organization_id !== c.req.param('organizationId'))
+      throw notFound('Group', c.req.param('groupId'));
     return c.json(formatGroup(group));
   });
 
   // Update a group
   app.patch('/organizations/:organizationId/groups/:groupId', async (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group || group.organization_id !== c.req.param('organizationId')) throw notFound('Group');
+    if (!group || group.organization_id !== c.req.param('organizationId'))
+      throw notFound('Group', c.req.param('groupId'));
 
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
@@ -90,7 +93,8 @@ export function groupRoutes(ctx: RouteContext): void {
   // Delete a group
   app.delete('/organizations/:organizationId/groups/:groupId', (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group || group.organization_id !== c.req.param('organizationId')) throw notFound('Group');
+    if (!group || group.organization_id !== c.req.param('organizationId'))
+      throw notFound('Group', c.req.param('groupId'));
 
     // Join rows are left in place rather than deleted here: deleting them would fire a
     // `group.member_removed` event per member, but a group deletion is one event
@@ -104,7 +108,8 @@ export function groupRoutes(ctx: RouteContext): void {
   // Add an organization membership to a group
   app.post('/organizations/:organizationId/groups/:groupId/organization-memberships', async (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group || group.organization_id !== c.req.param('organizationId')) throw notFound('Group');
+    if (!group || group.organization_id !== c.req.param('organizationId'))
+      throw notFound('Group', c.req.param('groupId'));
 
     const body = await parseJsonBody(c);
     const omId = body.organization_membership_id;
@@ -115,7 +120,7 @@ export function groupRoutes(ctx: RouteContext): void {
     }
 
     const membership = ws.organizationMemberships.get(omId);
-    if (!membership) throw notFound('Organization Membership');
+    if (!membership) throw notFound('UserOrganizationMembership', omId);
 
     if (membership.organization_id !== group.organization_id) {
       throw validationError('Organization Membership does not belong to this organization', [
@@ -138,7 +143,8 @@ export function groupRoutes(ctx: RouteContext): void {
   // List the organization memberships in a group
   app.get('/organizations/:organizationId/groups/:groupId/organization-memberships', (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group || group.organization_id !== c.req.param('organizationId')) throw notFound('Group');
+    if (!group || group.organization_id !== c.req.param('organizationId'))
+      throw notFound('Group', c.req.param('groupId'));
 
     const url = new URL(c.req.url);
     const params = parseListParams(url);
@@ -157,11 +163,20 @@ export function groupRoutes(ctx: RouteContext): void {
   // Remove an organization membership from a group
   app.delete('/organizations/:organizationId/groups/:groupId/organization-memberships/:omId', (c) => {
     const group = ws.groups.get(c.req.param('groupId'));
-    if (!group || group.organization_id !== c.req.param('organizationId')) throw notFound('Group');
+    if (!group || group.organization_id !== c.req.param('organizationId'))
+      throw notFound('Group', c.req.param('groupId'));
 
     const omId = c.req.param('omId');
     const gm = ws.groupMemberships.findBy('group_id', group.id).find((row) => row.organization_membership_id === omId);
-    if (!gm) throw notFound('Organization Membership');
+    // Production's GroupMembershipNotFoundException (api-services group-memberships) is a plain
+    // Nest 404 with its own code rather than an entity_not_found.
+    if (!gm) {
+      throw new WorkOSApiError(
+        404,
+        `Group membership not found for organization membership '${omId}' in group '${group.id}'.`,
+        'membership_not_found',
+      );
+    }
 
     ws.groupMemberships.delete(gm.id);
     return c.body(null, 204);
@@ -170,7 +185,7 @@ export function groupRoutes(ctx: RouteContext): void {
   // List the groups an organization membership belongs to
   app.get('/user_management/organization_memberships/:omId/groups', (c) => {
     const omId = c.req.param('omId');
-    if (!ws.organizationMemberships.get(omId)) throw notFound('Organization Membership');
+    if (!ws.organizationMemberships.get(omId)) throw notFound('UserOrganizationMembership', omId);
 
     const url = new URL(c.req.url);
     const params = parseListParams(url);
