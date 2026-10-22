@@ -67,26 +67,51 @@ const badRequest = (code: string, message: string) => new WorkOSApiError(400, me
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value !== '';
+
+/** The optional string fields of each options object, which the DTO holds to `@IsString() @IsNotEmpty()` when given. */
+const SAML_STRING_FIELDS = ['idp_metadata_url', 'acs_url', 'sp_entity_id', 'idp_entity_id', 'idp_sso_url'] as const;
+const OIDC_STRING_FIELDS = ['client_secret', 'redirect_uri'] as const;
+
 /**
  * The DTO's own checks, which production runs before any cross-field rule: a required field
- * that is absent is a 422, not one of the 400s below. The emulator renders those with its
- * standard validation envelope.
+ * that is absent, or a given field that is not the non-empty string the DTO demands, is a 422,
+ * not one of the 400s below. The emulator renders those with its standard validation envelope.
+ * A `null` is refused with the empty string rather than read as absent: the cross-field rules
+ * key on presence, and a null `idp_metadata_url` must not pass as an IdP description.
  */
 function validateShape(body: Record<string, unknown>): void {
   const errors: NonNullable<WorkOSApiError['errors']> = [];
-  if (typeof body.organization_id !== 'string' || body.organization_id === '') {
+  if (!isNonEmptyString(body.organization_id)) {
     errors.push({ field: 'organization_id', code: 'required' });
   }
-  if (body.name !== undefined && (typeof body.name !== 'string' || body.name === '')) {
+  if (body.name !== undefined && !isNonEmptyString(body.name)) {
     errors.push({ field: 'name', code: 'invalid' });
   }
   for (const field of ['saml_options', 'oidc_options'] as const) {
     if (body[field] !== undefined && !isObject(body[field])) errors.push({ field, code: 'invalid' });
   }
+  if (isObject(body.saml_options)) {
+    const options = body.saml_options;
+    for (const field of SAML_STRING_FIELDS) {
+      if (options[field] !== undefined && !isNonEmptyString(options[field])) {
+        errors.push({ field: `saml_options.${field}`, code: 'invalid' });
+      }
+    }
+    const certs = options.idp_signing_certs;
+    if (certs !== undefined && (!Array.isArray(certs) || !certs.every(isNonEmptyString))) {
+      errors.push({ field: 'saml_options.idp_signing_certs', code: 'invalid' });
+    }
+  }
   if (isObject(body.oidc_options)) {
+    const options = body.oidc_options;
     for (const field of ['discovery_endpoint', 'client_id'] as const) {
-      const value = body.oidc_options[field];
-      if (typeof value !== 'string' || value === '') errors.push({ field: `oidc_options.${field}`, code: 'required' });
+      if (!isNonEmptyString(options[field])) errors.push({ field: `oidc_options.${field}`, code: 'required' });
+    }
+    for (const field of OIDC_STRING_FIELDS) {
+      if (options[field] !== undefined && !isNonEmptyString(options[field])) {
+        errors.push({ field: `oidc_options.${field}`, code: 'invalid' });
+      }
     }
   }
   if (errors.length > 0) throw validationError('Validation failed', errors);

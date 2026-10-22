@@ -608,6 +608,19 @@ describe('SSO routes', () => {
         .filter((e) => e.event === 'authentication.sso_failed'),
     ).toHaveLength(0);
 
+    // The key map is a plain object: a secret naming an Object.prototype property must not
+    // resolve to it, and a secret that is not a string is not a secret at all.
+    for (const secret of ['constructor', '__proto__', 'hasOwnProperty']) {
+      const prototypeSecret = await exchange({ client_id: 'client_x', client_secret: secret });
+      expect(prototypeSecret.status).toBe(400);
+      expect((await json(prototypeSecret)).error).toBe('invalid_client');
+    }
+    const objectSecret = await exchange({ client_id: 'client_x', client_secret: { sk_test_sso: true } });
+    expect(await json(objectSecret)).toEqual({
+      error: 'invalid_request',
+      error_description: 'client_secret is required.',
+    });
+
     // The code survived the refusals: the guard runs before the code is consumed.
     const ok = await exchange({ client_id: 'client_x', client_secret: 'sk_test_sso' });
     expect(ok.status).toBe(200);

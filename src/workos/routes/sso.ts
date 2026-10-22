@@ -372,15 +372,18 @@ export function ssoRoutes(ctx: RouteContext): void {
     // production's 400 `invalid_client` / "Invalid client secret.", with no event: nothing has
     // been authenticated yet. The `client_id` is only required to be present, as it is on every
     // other endpoint here — the emulator registers no AuthKit clients to check it against.
-    const clientId = body.client_id as string | undefined;
-    const clientSecret = body.client_secret as string | undefined;
-    if (!clientId) {
+    const clientId = body.client_id;
+    const clientSecret = body.client_secret;
+    if (typeof clientId !== 'string' || clientId === '') {
       throw new OauthApiError(400, 'invalid_request', 'client_id is required.');
     }
-    if (!clientSecret) {
+    if (typeof clientSecret !== 'string' || clientSecret === '') {
       throw new OauthApiError(400, 'invalid_request', 'client_secret is required.');
     }
-    const apiKey = (store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {})[clientSecret];
+    // An own-property lookup, because the map is a plain object: `client_secret: "constructor"`
+    // would otherwise find Object.prototype's and, having no expiry, pass as a live key.
+    const apiKeys = store.getData<ApiKeyMap>(STORE_KEYS.apiKeyMap) ?? {};
+    const apiKey = Object.hasOwn(apiKeys, clientSecret) ? apiKeys[clientSecret] : undefined;
     if (!apiKey || isApiKeyEntryExpired(apiKey)) {
       throw new OauthApiError(400, 'invalid_client', 'Invalid client secret.');
     }

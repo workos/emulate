@@ -246,12 +246,29 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
   // issuer is left alone — the whole point is that it does not move with the port.
   if (!options.issuer) jwt.issuer = url;
 
+  const closeServers = (): Promise<void> => {
+    const closeOne = (server: ReturnType<typeof serve>) =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    const servers = secondaryServer ? [httpServer, secondaryServer] : [httpServer];
+    return Promise.all(servers.map(closeOne)).then(() => undefined);
+  };
+
   // Reflect the actual bound URL on the route context too (matters when port: 0), so
   // per-request URLs like the device verification_uri and SSO logout_url resolve to a
   // reachable address instead of the pre-bind http://localhost:0. Seed afterward so seeded
   // invitation accept_invitation_urls are baked with the bound port as well.
   ctx.baseUrl = url;
-  seedFn(url);
+  try {
+    seedFn(url);
+  } catch (error) {
+    // The listeners are already bound, and the caller never receives the `close()` that
+    // would release them: a seed that fails the boot must not leave the port held by a
+    // half-seeded emulator, or the retry on the same port fails with EADDRINUSE.
+    await closeServers().catch(() => undefined);
+    throw error;
+  }
 
   const primaryApiKey = Object.keys(apiKeys)[0];
 
@@ -282,14 +299,7 @@ export async function createEmulator(options: EmulatorOptions = {}): Promise<Emu
       // will not work after reset. This is acceptable for test scenarios where
       // reset is primarily used, but not for production use.
     },
-    close(): Promise<void> {
-      const closeOne = (server: ReturnType<typeof serve>) =>
-        new Promise<void>((resolve, reject) => {
-          server.close((err) => (err ? reject(err) : resolve()));
-        });
-      const servers = secondaryServer ? [httpServer, secondaryServer] : [httpServer];
-      return Promise.all(servers.map(closeOne)).then(() => undefined);
-    },
+    close: closeServers,
     addErrorHook(hook: ErrorHookInput): ErrorHook {
       return addErrorHook(store, hook);
     },

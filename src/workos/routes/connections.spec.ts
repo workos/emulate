@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
+import { createServer as createNetServer } from 'node:net';
 import { createServer, type ApiKeyMap, type Store } from '../../core/index.js';
+import { createEmulator } from '../../index.js';
 import { workosPlugin, seedFromConfig } from '../index.js';
 import { getWorkOSStore } from '../store.js';
 
@@ -254,6 +256,39 @@ describe('Connection routes', () => {
       expect((await json(noEndpoint)).errors).toEqual([{ field: 'oidc_options.discovery_endpoint', code: 'required' }]);
     });
 
+    // A field that is given must be the non-empty string the DTO demands: a null or empty
+    // `idp_metadata_url` is not an IdP description, and a null or empty `client_secret` is
+    // not a credential — neither passes as present, and neither is read as absent.
+    it('refuses a null or empty option field rather than reading it as present', async () => {
+      for (const idp_metadata_url of [null, '']) {
+        const res = await create({ organization_id: orgId, saml_options: { idp_metadata_url } });
+        expect(res.status).toBe(422);
+        expect((await json(res)).errors).toEqual([{ field: 'saml_options.idp_metadata_url', code: 'invalid' }]);
+      }
+      const badCerts = await create({
+        organization_id: orgId,
+        saml_options: { idp_sso_url: 'https://idp.example.com/sso', idp_signing_certs: [''] },
+      });
+      expect(badCerts.status).toBe(422);
+      expect((await json(badCerts)).errors).toEqual([{ field: 'saml_options.idp_signing_certs', code: 'invalid' }]);
+
+      for (const client_secret of [null, '']) {
+        const res = await create({ organization_id: orgId, oidc_options: { ...OIDC_OPTIONS, client_secret } });
+        expect(res.status).toBe(422);
+        expect((await json(res)).errors).toEqual([{ field: 'oidc_options.client_secret', code: 'invalid' }]);
+      }
+      const nullEndpoint = await create({
+        organization_id: orgId,
+        oidc_options: { ...OIDC_OPTIONS, discovery_endpoint: null },
+      });
+      expect(nullEndpoint.status).toBe(422);
+      expect((await json(nullEndpoint)).errors).toEqual([
+        { field: 'oidc_options.discovery_endpoint', code: 'required' },
+      ]);
+      // Nothing was created by any of the refusals.
+      expect((await json(await req(`/connections?organization_id=${orgId}`))).data).toHaveLength(0);
+    });
+
     it('still 404s an organization it does not know', async () => {
       const res = await create({ organization_id: 'org_missing', saml_options: SAML_OPTIONS });
       expect(res.status).toBe(404);
@@ -371,5 +406,41 @@ describe('Seeding connections', () => {
     // Activation is announced for the active one only.
     const activated = ws.events.all().filter((e) => e.event === 'connection.activated');
     expect(activated.map((e) => (e.data as { name: string }).name)).toEqual(['Acme SSO']);
+  });
+
+  // createEmulator binds its listeners before it seeds, and a seed that fails the boot is
+  // thrown before the caller holds a `close()`. The listeners must go with it, or a retry on
+  // the same port — the natural next move after fixing the seed — meets EADDRINUSE.
+  it('releases the port when the seed fails the boot', async () => {
+    // A port the OS just handed out and we gave back, so both boots below contend for it.
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = createNetServer();
+      probe.once('error', reject);
+      probe.listen(0, '127.0.0.1', () => {
+        const address = probe.address();
+        const chosen = typeof address === 'object' && address ? address.port : 0;
+        probe.close(() => resolve(chosen));
+      });
+    });
+
+    await expect(
+      createEmulator({
+        port,
+        seed: {
+          organizations: [{ name: 'Acme Corp' }],
+          connections: [
+            { name: 'Acme Okta', organization: 'Acme Corp' },
+            { name: 'Acme Entra', organization: 'Acme Corp' },
+          ],
+        },
+      }),
+    ).rejects.toThrow('workos seed config: organization "Acme Corp" already has a connection');
+
+    const retry = await createEmulator({ port, seed: { organizations: [{ name: 'Acme Corp' }] } });
+    try {
+      expect(retry.port).toBe(port);
+    } finally {
+      await retry.close();
+    }
   });
 });
