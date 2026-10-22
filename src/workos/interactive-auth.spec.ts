@@ -527,7 +527,10 @@ describe('Interactive Auth Mode with the password step', () => {
     const failed = authEvents().slice(before);
     expect(failed).toHaveLength(1);
     expect(failed[0].event).toBe('authentication.email_verification_failed');
-    expect(failed[0].data).toMatchObject({ email: 'unverified@example.com', error: { code: 'invalid_code' } });
+    expect(failed[0].data).toMatchObject({
+      email: 'unverified@example.com',
+      error: { code: 'invalid_one_time_code', message: 'Invalid one-time code' },
+    });
     // The same code is still waiting; a wrong guess does not reissue it.
     expect(emailCodeFor(token)).toMatch(/^\d{6}$/);
   });
@@ -590,7 +593,10 @@ describe('Interactive Auth Mode with the password step', () => {
     const failed = authEvents().slice(before);
     expect(failed).toHaveLength(1);
     expect(failed[0].event).toBe('authentication.mfa_failed');
-    expect(failed[0].data).toMatchObject({ email: 'mfa@example.com', error: { code: 'invalid_one_time_code' } });
+    expect(failed[0].data).toMatchObject({
+      email: 'mfa@example.com',
+      error: { code: 'invalid_one_time_code', message: 'Invalid one-time code' },
+    });
   });
 
   it('mints a code after the right one-time code; the exchange reports what the mfa-totp grant would', async () => {

@@ -382,6 +382,102 @@ describe('Auth routes', () => {
       expect(res.status).toBe(403);
       expect((await json(res)).code).toBe('organization_selection_required');
     });
+
+    // The grant's failures are production's one-time-code family, naming the email: a wrong code
+    // counts, three of them lock the code, a redeemed code stays redeemed, and only the latest
+    // code sent to the user is compared.
+    const verifyWith = (token: string, code: string) =>
+      post({
+        grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+        pending_authentication_token: token,
+        code,
+      });
+    const sendCode = async (userId: string) =>
+      (await json(await req(`/user_management/users/${userId}/email_verification/send`, { method: 'POST' }))).code;
+    /** The token the password gate would have issued for the user, minted directly so a test can hold several. */
+    let minted = 0;
+    const gateTokenFor = (userId: string) => {
+      const token = `pending_gate_${++minted}`;
+      store.setData(`pending_auth:${token}`, {
+        user_id: userId,
+        organization_id: null,
+        auth_method: 'Password',
+        reason: 'EmailVerification',
+      });
+      return token;
+    };
+
+    it('locks the code after three wrong codes, naming the email', async () => {
+      const { user, body } = await gatedSignIn('locked@test.com');
+      const verification = await json(await req(`/user_management/email_verification/${body.email_verification_id}`));
+      const attempt = (code: string) =>
+        post({
+          grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+          pending_authentication_token: body.pending_authentication_token,
+          code,
+        });
+
+      for (let n = 1; n <= 3; n++) {
+        const res = await attempt('000000');
+        expect(res.status, `attempt ${n}`).toBe(400);
+        expect(await json(res)).toEqual({ code: 'invalid_one_time_code', message: 'Invalid one-time code' });
+      }
+      const res = await attempt(verification.code);
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        code: 'one_time_code_too_many_attempts',
+        message: "One-time code for 'locked@test.com' has had too many failed attempts.",
+      });
+      // The pending token survives a locked code: a fresh code finishes the same login.
+      expect((await json(await req(`/user_management/users/${user.id}`))).email_verified).toBe(false);
+      const fresh = await sendCode(user.id);
+      expect(
+        (
+          await post({
+            grant_type: 'urn:workos:oauth:grant-type:email-verification:code',
+            pending_authentication_token: body.pending_authentication_token,
+            code: fresh,
+          })
+        ).status,
+      ).toBe(200);
+    });
+
+    it('refuses a redeemed code as one_time_code_previously_used', async () => {
+      const user = await createUser('reused@test.com', { email_verified: false });
+      const code = await sendCode(user.id);
+      expect((await verifyWith(gateTokenFor(user.id), code)).status).toBe(200);
+
+      // On a second login's token, since the first one was spent with the code.
+      const res = await verifyWith(gateTokenFor(user.id), code);
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        code: 'one_time_code_previously_used',
+        message: "One-time code for 'reused@test.com' was previously used.",
+      });
+    });
+
+    it('compares against the latest code sent, and reports expiry by name', async () => {
+      const user = await createUser('latest@test.com', { email_verified: false });
+      const token = gateTokenFor(user.id);
+      const first = await sendCode(user.id);
+      const second = await sendCode(user.id);
+      expect((await json(await verifyWith(token, first))).code).toBe('invalid_one_time_code');
+
+      const ws = getWorkOSStore(store);
+      const latest = ws.emailVerifications.findBy('user_id', user.id).find((v) => v.code === second)!;
+      ws.emailVerifications.update(latest.id, { expires_at: new Date(Date.now() - 1000).toISOString() });
+      const res = await verifyWith(token, second);
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        code: 'one_time_code_expired',
+        message: "One-time code for 'latest@test.com' has expired.",
+      });
+    });
+
+    it('answers 404 for a user never sent a code', async () => {
+      const user = await createUser('never@test.com', { email_verified: false });
+      expect((await verifyWith(gateTokenFor(user.id), '123456')).status).toBe(404);
+    });
   });
 
   it('authorization_code grant flow', async () => {
@@ -1014,20 +1110,81 @@ describe('Auth routes', () => {
     expect(await json(res)).toEqual({ error: 'invalid_request', error_description: 'code_verifier is required.' });
   });
 
-  it('fails a wrong magic auth code with the plain shape and production code string', async () => {
-    await createUser('wrongcode@test.com');
-    const res = await app.request('/user_management/authenticate', {
+  /** Request a Magic Auth code for the address, as `POST /user_management/magic_auth` issues it. */
+  const magicAuthCode = async (email: string) =>
+    (await json(await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email }) }))).code;
+  const magicAuth = (email: string, code: string) =>
+    app.request('/user_management/authenticate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'urn:workos:oauth:grant-type:magic-auth:code',
-        email: 'wrongcode@test.com',
-        code: '000000',
-      }),
+      body: JSON.stringify({ grant_type: 'urn:workos:oauth:grant-type:magic-auth:code', email, code }),
     });
+
+  it('fails a wrong magic auth code with the plain shape and production code string', async () => {
+    await createUser('wrongcode@test.com');
+    await magicAuthCode('wrongcode@test.com');
+    const res = await magicAuth('wrongcode@test.com', '000000');
     expect(res.status).toBe(400);
     const body = await json(res);
     expect(body).toEqual({ code: 'invalid_one_time_code', message: 'Invalid one-time code' });
+  });
+
+  // Production resolves the code by the email — the user, then their latest email challenge —
+  // so there is nothing to compare a code against for an address without an account or an
+  // account never sent one, and both are 404s rather than wrong codes.
+  it('answers 404 for a magic auth email with no account or no code', async () => {
+    expect((await magicAuth('nobody@test.com', '123456')).status).toBe(404);
+    await createUser('no-code@test.com');
+    expect((await magicAuth('no-code@test.com', '123456')).status).toBe(404);
+  });
+
+  it('refuses a redeemed magic auth code as one_time_code_previously_used, before the code is compared', async () => {
+    await createUser('reuse@test.com');
+    const code = await magicAuthCode('reuse@test.com');
+    expect((await magicAuth('reuse@test.com', code)).status).toBe(200);
+
+    for (const replay of [code, '000000']) {
+      const res = await magicAuth('reuse@test.com', replay);
+      expect(res.status, replay).toBe(400);
+      expect(await json(res)).toEqual({
+        code: 'one_time_code_previously_used',
+        message: "One-time code for 'reuse@test.com' was previously used.",
+      });
+    }
+  });
+
+  it('locks a magic auth code after three wrong codes, until a new one is issued', async () => {
+    await createUser('locked@test.com');
+    const code = await magicAuthCode('locked@test.com');
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect((await json(await magicAuth('locked@test.com', '000000'))).code, `attempt ${attempt}`).toBe(
+        'invalid_one_time_code',
+      );
+    }
+
+    // The right code no longer helps: the challenge is refused before any comparison.
+    const res = await magicAuth('locked@test.com', code);
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'one_time_code_too_many_attempts',
+      message: "One-time code for 'locked@test.com' has had too many failed attempts.",
+    });
+    const ws = getWorkOSStore(store);
+    expect(ws.sessions.findBy('user_id', ws.users.findOneBy('email', 'locked@test.com')!.id)).toHaveLength(0);
+
+    // A fresh code starts over.
+    expect((await magicAuth('locked@test.com', await magicAuthCode('locked@test.com'))).status).toBe(200);
+  });
+
+  it('compares a magic auth code against the latest one issued, retiring any earlier one', async () => {
+    await createUser('resend@test.com');
+    const first = await magicAuthCode('resend@test.com');
+    const second = await magicAuthCode('resend@test.com');
+    expect(first).not.toBe(second);
+
+    // The first code is not the latest, so it is a miss — and the miss counts against the latest.
+    expect((await json(await magicAuth('resend@test.com', first))).code).toBe('invalid_one_time_code');
+    expect((await magicAuth('resend@test.com', second)).status).toBe(200);
   });
 
   it('fails a PKCE verifier mismatch OAuth-style, like any other bad authorization code', async () => {
@@ -1134,6 +1291,8 @@ describe('Auth routes', () => {
       user_id: user.id,
       email: user.email,
       code: '123456',
+      attempts: 0,
+      verified_at: null,
       expires_at: new Date(Date.now() - 60_000).toISOString(),
     });
     const res = await app.request('/user_management/authenticate', {
@@ -1693,6 +1852,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
+      last_verified_at: new Date().toISOString(),
       totp: { issuer: 'Test', user: email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
     const res = await app.request('/user_management/authenticate', {
@@ -2250,6 +2410,8 @@ describe('Auth routes', () => {
       user_id: user.id,
       email: user.email,
       code: '424242',
+      attempts: 0,
+      verified_at: null,
       expires_at: new Date(Date.now() + 600000).toISOString(),
     });
     store.setData('pending_auth:pending_multi_grant', {
@@ -2350,6 +2512,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
+      last_verified_at: new Date().toISOString(),
       totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
@@ -2651,6 +2814,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
+      last_verified_at: new Date().toISOString(),
       totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
@@ -2699,6 +2863,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
+      last_verified_at: new Date().toISOString(),
       totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
@@ -2783,6 +2948,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
+      last_verified_at: new Date().toISOString(),
       totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
@@ -2793,6 +2959,8 @@ describe('Auth routes', () => {
       factor_id: factor.id,
       expires_at: new Date(Date.now() + 600000).toISOString(),
       code: '123456',
+      attempts: 0,
+      verified_at: null,
     });
 
     // Create pending auth. MFA is a second factor; the pending token records the *primary*
@@ -2830,6 +2998,7 @@ describe('Auth routes', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
+      last_verified_at: new Date().toISOString(),
       totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 
@@ -2839,6 +3008,8 @@ describe('Auth routes', () => {
       factor_id: factor.id,
       expires_at: new Date(Date.now() + 600000).toISOString(),
       code: '123456',
+      attempts: 0,
+      verified_at: null,
     });
 
     const pendingToken = 'pending_mfa_bad';
@@ -2861,7 +3032,113 @@ describe('Auth routes', () => {
     });
     expect(res.status).toBe(400);
     const body = await json(res);
-    expect(body.code).toBe('invalid_one_time_code');
+    expect(body).toEqual({ code: 'invalid_one_time_code', message: 'Invalid one-time code' });
+  });
+
+  /** A verified factor, a challenge for it in the given state, and a pending token to finish with. */
+  function mfaFixture(
+    email: string,
+    challengeState: Partial<{ expires_at: string; attempts: number; verified_at: string }> = {},
+  ) {
+    const ws = getWorkOSStore(store);
+    const pendingToken = `pending_${email}`;
+    return createUser(email).then((user) => {
+      const factor = ws.authFactors.insert({
+        object: 'authentication_factor',
+        user_id: user.id,
+        type: 'totp',
+        last_verified_at: new Date().toISOString(),
+        totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
+      });
+      const challenge = ws.authChallenges.insert({
+        object: 'authentication_challenge',
+        user_id: user.id,
+        factor_id: factor.id,
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        code: '123456',
+        attempts: 0,
+        verified_at: null,
+        ...challengeState,
+      });
+      store.setData(`pending_auth:${pendingToken}`, {
+        user_id: user.id,
+        organization_id: null,
+        auth_method: 'Password',
+        reason: 'MfaChallenge',
+      });
+      const totp = (code: string) =>
+        app.request('/user_management/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grant_type: 'urn:workos:oauth:grant-type:mfa-totp',
+            code,
+            pending_authentication_token: pendingToken,
+            authentication_challenge_id: challenge.id,
+          }),
+        });
+      return { user, factor, challenge, totp };
+    });
+  }
+
+  // The MFA grant's failures name the challenge, not an email: production hides that Magic Auth
+  // and email verification are challenges underneath, but an MFA challenge is one on the wire.
+  it('mfa-totp locks the challenge after three wrong codes, naming the challenge', async () => {
+    const { challenge, totp } = await mfaFixture('mfa-locked@test.com');
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect((await json(await totp('000000'))).code, `attempt ${attempt}`).toBe('invalid_one_time_code');
+    }
+    const res = await totp('123456');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'one_time_code_too_many_attempts',
+      message: `One-time code for '${challenge.id}' has had too many failed attempts.`,
+    });
+  });
+
+  it('mfa-totp refuses a challenge already verified as one_time_code_previously_used', async () => {
+    const { challenge, totp } = await mfaFixture('mfa-reused@test.com', { verified_at: new Date().toISOString() });
+    const res = await totp('123456');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'one_time_code_previously_used',
+      message: `One-time code for '${challenge.id}' was previously used.`,
+    });
+  });
+
+  it('mfa-totp reports an expired challenge as one_time_code_expired', async () => {
+    const { challenge, totp } = await mfaFixture('mfa-stale@test.com', {
+      expires_at: new Date(Date.now() - 1000).toISOString(),
+    });
+    const res = await totp('123456');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'one_time_code_expired',
+      message: `One-time code for '${challenge.id}' has expired.`,
+    });
+  });
+
+  // Enrolled means verified, as production counts it: a factor whose enrollment challenge never
+  // cleared is not a second factor the password grant can demand.
+  it('password grant ignores a factor whose enrollment was never verified', async () => {
+    const user = await createUser('unverified-factor@test.com');
+    const ws = getWorkOSStore(store);
+    ws.users.update(user.id, { password_hash: hashPassword('pw') });
+    ws.authFactors.insert({
+      object: 'authentication_factor',
+      user_id: user.id,
+      type: 'totp',
+      last_verified_at: null,
+      totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
+    });
+
+    const res = await app.request('/user_management/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'password', email: 'unverified-factor@test.com', password: 'pw' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await json(res)).access_token).toBeDefined();
   });
 });
 
@@ -3497,6 +3774,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
+      last_verified_at: new Date().toISOString(),
       totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
     const challenge = ws.authChallenges.insert({
@@ -3505,6 +3783,8 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       factor_id: factor.id,
       expires_at: new Date(Date.now() + 600000).toISOString(),
       code: '123456',
+      attempts: 0,
+      verified_at: null,
     });
     const pendingToken = 'pending_evt_mfa';
     store.setData(`pending_auth:${pendingToken}`, {
@@ -3607,6 +3887,7 @@ describe('authentication events (spec-named, spec-shaped)', () => {
       object: 'authentication_factor',
       user_id: user.id,
       type: 'totp',
+      last_verified_at: new Date().toISOString(),
       totp: { issuer: 'Test', user: user.email, secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://...' },
     });
 

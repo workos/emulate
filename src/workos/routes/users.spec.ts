@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { BadRequestException } from '@workos-inc/node';
-import { createServer, type ApiKeyMap } from '../../core/index.js';
+import { createServer, type ApiKeyMap, type Store } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 import { sdkClient } from '../sdk.test-utils.js';
 
 const apiKeys: ApiKeyMap = { sk_test_users: { environment: 'test' } };
@@ -499,37 +500,48 @@ describe('User name field', () => {
 
 describe('Email Verification', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: Store;
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
   const json = (res: Response) => res.json() as Promise<any>;
 
+  const createUnverified = async (email: string) =>
+    json(await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email }) }));
+  const send = async (userId: string) =>
+    json(await req(`/user_management/users/${userId}/email_verification/send`, { method: 'POST' }));
+  const confirm = (userId: string, code: string) =>
+    req(`/user_management/users/${userId}/email_verification/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+
   it('send → confirm flow', async () => {
-    const user = await json(
-      await req('/user_management/users', {
-        method: 'POST',
-        body: JSON.stringify({ email: 'verify@test.com' }),
-      }),
-    );
+    const user = await createUnverified('verify@test.com');
     expect(user.email_verified).toBe(false);
 
-    const ev = await json(await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' }));
+    const ev = await send(user.id);
     expect(ev.code).toMatch(/^\d{6}$/);
+    expect(ev).not.toHaveProperty('attempts');
+    expect(ev).not.toHaveProperty('verified_at');
 
-    const confirmed = await json(
-      await req(`/user_management/users/${user.id}/email_verification/confirm`, {
-        method: 'POST',
-        body: JSON.stringify({ code: ev.code }),
-      }),
-    );
+    const res = await confirm(user.id, ev.code);
+    expect(res.status).toBe(200);
+    // The spec's VerifyEmailResponse wraps the user, which is what the SDKs' verifyEmail unwraps.
+    const { user: confirmed, ...rest } = await json(res);
+    expect(rest).toEqual({});
+    expect(confirmed.id).toBe(user.id);
     expect(confirmed.email_verified).toBe(true);
   });
 
   // A code proves the inbox it was sent to. Production checks it against the email factor of the
-  // user's current address, so a code sent to the old address cannot verify the new one.
+  // user's current address, so a code sent to the old address cannot verify the new one: that
+  // factor has no challenge yet, and production's `findLatestByFactorOrThrow` answers 404.
   it('refuses a code issued before the address changed', async () => {
     const user = await json(
       await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'old@test.com' }) }),
@@ -543,8 +555,7 @@ describe('Email Verification', () => {
       method: 'POST',
       body: JSON.stringify({ code: stale.code }),
     });
-    expect(res.status).toBe(400);
-    expect((await json(res)).code).toBe('invalid_code');
+    expect(res.status).toBe(404);
     expect((await json(await req(`/user_management/users/${user.id}`))).email_verified).toBe(false);
 
     const fresh = await json(
@@ -557,7 +568,105 @@ describe('Email Verification', () => {
         body: JSON.stringify({ code: fresh.code }),
       }),
     );
-    expect(confirmed.email_verified).toBe(true);
+    expect(confirmed.user.email_verified).toBe(true);
+  });
+
+  it('confirms through the SDK', async () => {
+    const workos = sdkClient(app, 'sk_test_users');
+    const user = await createUnverified('sdk-verify@test.com');
+    const ev = await send(user.id);
+    const { user: confirmed } = await workos.userManagement.verifyEmail({ userId: user.id, code: ev.code });
+    expect(confirmed.emailVerified).toBe(true);
+  });
+
+  // Production's confirm has its own error vocabulary — the `email_verification_*` codes the
+  // spec lists for it, not the authenticate grants' `one_time_code_*` — and the same rules:
+  // the latest code is the only one compared, three misses lock it, a redeemed code stays
+  // redeemed, and a mailbox verified already is noticed only once the code has passed.
+  it('reports a wrong code as email_verification_code_incorrect', async () => {
+    const user = await createUnverified('wrong@test.com');
+    await send(user.id);
+    const res = await confirm(user.id, '000000');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'email_verification_code_incorrect',
+      message: 'Email verification code is incorrect.',
+    });
+    expect((await json(await req(`/user_management/users/${user.id}`))).email_verified).toBe(false);
+  });
+
+  it('compares against the latest code sent, so an earlier one is incorrect', async () => {
+    const user = await createUnverified('resend@test.com');
+    const first = await send(user.id);
+    const second = await send(user.id);
+    expect(first.code).not.toBe(second.code);
+
+    expect((await json(await confirm(user.id, first.code))).code).toBe('email_verification_code_incorrect');
+    expect((await confirm(user.id, second.code)).status).toBe(200);
+  });
+
+  it('reports a redeemed code as email_verification_code_previously_used before the mailbox', async () => {
+    const user = await createUnverified('reuse@test.com');
+    const ev = await send(user.id);
+    expect((await confirm(user.id, ev.code)).status).toBe(200);
+
+    const res = await confirm(user.id, ev.code);
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'email_verification_code_previously_used',
+      message: 'Email verification code has previously been used.',
+    });
+  });
+
+  it('reports a verified mailbox as email_previously_verified once a fresh code passes', async () => {
+    const user = await createUnverified('again@test.com');
+    expect((await confirm(user.id, (await send(user.id)).code)).status).toBe(200);
+
+    // A new code for a mailbox already verified: the code is checked first, and a wrong one is
+    // still simply incorrect.
+    const ev = await send(user.id);
+    expect((await json(await confirm(user.id, '000000'))).code).toBe('email_verification_code_incorrect');
+    const res = await confirm(user.id, ev.code);
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'email_previously_verified',
+      message: 'Email has been previously verified.',
+    });
+  });
+
+  it('locks the code after three wrong attempts', async () => {
+    const user = await createUnverified('locked@test.com');
+    const ev = await send(user.id);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect((await json(await confirm(user.id, '000000'))).code, `attempt ${attempt}`).toBe(
+        'email_verification_code_incorrect',
+      );
+    }
+    const res = await confirm(user.id, ev.code);
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'email_verification_too_many_attempts',
+      message: 'Email verification had too many attempts.',
+    });
+    // A fresh code is a fresh three attempts.
+    expect((await confirm(user.id, (await send(user.id)).code)).status).toBe(200);
+  });
+
+  it('reports an expired code as email_verification_code_expired', async () => {
+    const user = await createUnverified('stale@test.com');
+    const ev = await send(user.id);
+    getWorkOSStore(store).emailVerifications.update(ev.id, { expires_at: new Date(Date.now() - 1000).toISOString() });
+    const res = await confirm(user.id, ev.code);
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      code: 'email_verification_code_expired',
+      message: 'Email verification code has expired.',
+    });
+  });
+
+  it('answers 404 for a user never sent a code', async () => {
+    const user = await createUnverified('never@test.com');
+    expect((await confirm(user.id, '123456')).status).toBe(404);
   });
 });
 

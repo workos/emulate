@@ -22,9 +22,9 @@
  * Adding an operation to ENVELOPE_SCHEMA_MAP without adding a case here fails
  * the coverage test, so a catalog entry can't sit unexercised.
  *
- * Scope: response *bodies*, not status codes. Some routes return 200 where the
- * spec says 201 (`/auth/challenges/{id}/verify`); status conformance is a
- * separate axis and this loop only requires a 2xx.
+ * Scope: response *bodies*, not status codes. A route answering 200 where the
+ * spec says 201 would still pass here; status conformance is a separate
+ * axis and this loop only requires a 2xx.
  */
 import { describe, it, expect, beforeAll } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../core/index.js';
@@ -278,6 +278,8 @@ describe('response envelope conformance (route bodies vs OpenAPI spec)', () => {
       factor_id: factorId,
       expires_at: new Date(Date.now() + 600_000).toISOString(),
       code: '123456',
+      attempts: 0,
+      verified_at: null,
     }).id;
 
     // The IT contact list has no create-then-list case of its own, so the page it returns

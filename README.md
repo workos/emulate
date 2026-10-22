@@ -419,9 +419,12 @@ users:
     totp: true # enrolls a TOTP factor; password sign-ins answer with mfa_challenge
 ```
 
-The factor is reported by `GET /user_management/users/{id}/auth_factors`, and a password
-sign-in for the user returns the spec's `mfa_challenge` step (a `pending_authentication_token`
-plus an `authentication_challenge`) instead of a session, completed with the
+The seeded factor comes up verified — what a factor becomes once its enrollment challenge
+clears, and the only kind production lists or challenges (see [Enrolled means
+verified](#enrolled-means-verified)) — so it is reported by
+`GET /user_management/users/{id}/auth_factors`, and a password sign-in for the user returns
+the spec's `mfa_challenge` step (a `pending_authentication_token` plus an
+`authentication_challenge`) instead of a session, completed with the
 `urn:workos:oauth:grant-type:mfa-totp` grant — so MFA administration and step-up login flows
 need no post-boot enrollment calls that in-memory state would lose on restart.
 
@@ -1504,19 +1507,19 @@ The emulator issues a new refresh token on every refresh and retires the one you
 
 `POST /user_management/authenticate` does not use one error shape for every failure. Which shape you get depends on the failure, not only on the grant: any malformed request is OAuth-shaped, and among credential failures three grants are OAuth-shaped and the rest plain.
 
-| Failure                                                          | Body                                                                          | Node SDK raises                |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------ |
-| `grant_type` outside production's public list, legacy names too  | `{"code": "invalid_request_parameters", "message": "…", "errors": […]}` (422) | `UnprocessableEntityException` |
-| Malformed request — missing parameter, any grant                 | `{"error": "invalid_request", "error_description": "…"}`                      | `OauthException`               |
-| `authorization_code` — unknown, expired, bad verifier, user gone | `{"error": "invalid_grant", "error_description": "…"}`                        | `OauthException`               |
-| `refresh_token` — unknown, expired, already exchanged, user gone | `{"error": "invalid_grant", "error_description": "…"}`                        | `OauthException`               |
-| `refresh_token` — switch to an organization the user is not in   | `{"error": "organization_membership_not_found\|organization_not_found", …}`   | `OauthException`               |
-| Device code — pending, expired, unknown, or user deleted         | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}`         | `OauthException`               |
-| `password` — wrong password                                      | `{"code": "invalid_credentials", "message": "…"}` (400)                       | `GenericServerException`       |
-| Magic Auth — wrong or expired code                               | `{"code": "invalid_one_time_code\|one_time_code_expired", …}`                 | `GenericServerException`       |
-| Pending token spent on a grant other than its own                | `{"message": "…"}` (400, no `code`)                                           | `GenericServerException`       |
-| `mfa-totp` — challenge belongs to another user                   | `{"code": "user_mismatch", "message": "…"}` (400)                             | `GenericServerException`       |
-| Step-up (MFA, org selection, email verification)                 | `{"code": "…", "message": "…"}` (403)                                         | `AuthenticationException`      |
+| Failure                                                                      | Body                                                                                                                          | Node SDK raises                |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `grant_type` outside production's public list, legacy names too              | `{"code": "invalid_request_parameters", "message": "…", "errors": […]}` (422)                                                 | `UnprocessableEntityException` |
+| Malformed request — missing parameter, any grant                             | `{"error": "invalid_request", "error_description": "…"}`                                                                      | `OauthException`               |
+| `authorization_code` — unknown, expired, bad verifier, user gone             | `{"error": "invalid_grant", "error_description": "…"}`                                                                        | `OauthException`               |
+| `refresh_token` — unknown, expired, already exchanged, user gone             | `{"error": "invalid_grant", "error_description": "…"}`                                                                        | `OauthException`               |
+| `refresh_token` — switch to an organization the user is not in               | `{"error": "organization_membership_not_found\|organization_not_found", …}`                                                   | `OauthException`               |
+| Device code — pending, expired, unknown, or user deleted                     | `{"error": "authorization_pending\|expired_token\|invalid_grant", …}`                                                         | `OauthException`               |
+| `password` — wrong password                                                  | `{"code": "invalid_credentials", "message": "…"}` (400)                                                                       | `GenericServerException`       |
+| Magic Auth, email verification, MFA — wrong, expired, reused, or locked code | `{"code": "invalid_one_time_code\|one_time_code_expired\|one_time_code_previously_used\|one_time_code_too_many_attempts", …}` | `GenericServerException`       |
+| Pending token spent on a grant other than its own                            | `{"message": "…"}` (400, no `code`)                                                                                           | `GenericServerException`       |
+| `mfa-totp` — challenge belongs to another user                               | `{"code": "user_mismatch", "message": "…"}` (400)                                                                             | `GenericServerException`       |
+| Step-up (MFA, org selection, email verification)                             | `{"code": "…", "message": "…"}` (403)                                                                                         | `AuthenticationException`      |
 
 `password` is an RFC 6749 grant, but production fails its credentials with the plain shape, so the emulator does too — while a `password` request that omits a parameter still answers `invalid_request` OAuth-style. Both halves come from the spec, whose authenticate 400 lists `invalid_request` and `invalid_grant` only as `{error, error_description}` and `invalid_credentials` and the one-time-code errors only as `{code, message}`. A `grant_type` production does not list fails body validation there before any grant runs, and the emulator answers with the same 422: `invalid_request_parameters`, with one `grant_type_required` error whose message spells out the accepted list. The legacy `urn:workos:oauth:grant-type:magic-auth` and `urn:workos:oauth:grant-type:email-verification` names (without the `:code` suffix) are outside that list and fail the same way. A grant production does list but the emulator does not implement — the Radar challenges and email completion — is reported as `invalid_request` rather than `unsupported_grant_type`, which the spec gives to `/sso/token` alone.
 
@@ -1546,13 +1549,32 @@ A password reset token lasts 15 minutes. Confirming one sets the password, signs
 
 Each of these mirrors a check production makes, under production's code:
 
-- `PUT /user_management/users/{id}` applies `email` — a malformed address is `400 invalid_email`, one another user holds is `400 email_not_available`, and a changed address is unverified until something verifies it; an email-verification code sent to the old address is `400 invalid_code`, since production checks a code against the factor of the user's current address — and refuses `email_verified: false` on a verified user with `400 email_already_verified`. An `external_id` another user holds is `400 external_id_already_used` on update, and on create a `400 user_creation_error` carrying `external_id_already_used`.
+- `PUT /user_management/users/{id}` applies `email` — a malformed address is `400 invalid_email`, one another user holds is `400 email_not_available`, and a changed address is unverified until something verifies it; an email-verification code sent to the old address is a `404`, since production checks a code against the factor of the user's current address, which has no challenge yet — and refuses `email_verified: false` on a verified user with `400 email_already_verified`. An `external_id` another user holds is `400 external_id_already_used` on update, and on create a `400 user_creation_error` carrying `external_id_already_used`.
 - `POST` and `PUT /user_management/organization_memberships` answer a `role_slug` (or any of `role_slugs`) that names no role with `422 invalid_role`. A slug resolves to a role of that organization or of the environment; `member` and `admin` always resolve, since production creates both with every environment, so they need no seeding. `GET /user_management/organization_memberships` wants an `organization_id` or a `user_id` (`400 missing_user_id_or_organization_id`).
 - `POST /user_management/invitations`: an open invitation to the same organization is `400 email_already_invited_to_organization`; without an organization, an open invitation for the address is `400 email_already_invited` and an existing account is `400 user_already_exists` (production lets through an account that only an organization invitation created, since its owner has not signed up; the emulator records no such distinction and refuses any existing account); an unknown `role_slug` is `400 invalid_role`; `expires_in_days` must be 1 to 30 (`expires_in_days_too_short`, `expires_in_days_too_long`) and defaults to 7 days; an unknown `organization_id` or `inviter_user_id` is a `404`.
 - An invitation's `state` is derived when it is read, so one expires on its own once `expires_at` passes. Accepting or revoking anything but a pending invitation is `400 invite_not_pending`; resending one that has expired, been revoked or been accepted is `400 invite_expired`, `invite_revoked` or `invite_accepted`. There is no `DELETE` for an invitation, as there is none in the API — revoke it.
 - Groups: a second group with the same name in an organization is a `409` whose body is `{"message": "A group with name: … already exists in the organization.", "error": "Conflict"}` with no `code`, as production's conflict renders; `name` is at most 256 characters and `description` a non-empty string of at most 150 (`null` clears it); a group holds at most 500 members (`400 group_membership_limit_exceeded`).
 
 One assumption runs through the membership and invitation routes: multiple roles are enabled for the environment, so `role_slugs` is accepted wherever production accepts it with that setting on, and `multiple_roles_not_enabled` is never answered.
+
+### One-time codes are single-use, latest-only, and lock after three misses
+
+A Magic Auth code, an email verification code, and an MFA challenge are one authentication challenge underneath in production, verified by one rule, and the emulator verifies all three the same way:
+
+- **Only the latest code counts.** The grant looks up the code by the user, not the user by the code, so `POST /user_management/magic_auth` twice for one address retires the first code — it is `invalid_one_time_code`, and the miss counts against the second — and `POST /user_management/users/{id}/email_verification/send` does the same. An address with no account, or an account never sent a code, is a `404`: there is nothing to compare against.
+- **Three misses lock it.** Each wrong code is `invalid_one_time_code` and counts. From the fourth request on, right code or wrong, the answer is `one_time_code_too_many_attempts`; the way forward is a new code, which starts over. A pending token survives the lockout, so the same login finishes with the fresh code.
+- **A redeemed code stays redeemed.** Presenting it again is `one_time_code_previously_used`, checked before the code is even compared — so a replay with a wrong code says previously used, not invalid.
+- **An expired code** is `one_time_code_expired`.
+
+Messages name the email for Magic Auth and email verification (`One-time code for 'bob@example.com' has expired.`) and the challenge id for MFA, as production's do. Each failure emits the matching `authentication.*_failed` event with the same `error.code`.
+
+`POST /user_management/users/{id}/email_verification/confirm` applies the same rules under its own codes — `email_verification_code_incorrect`, `email_verification_code_expired`, `email_verification_code_previously_used`, `email_verification_too_many_attempts` — and reports `email_previously_verified` only once a fresh code has passed for a mailbox already verified. Its response is the spec's `{ "user": … }` envelope, which the SDKs' `verifyEmail` unwraps.
+
+`POST /auth/challenges/{id}/verify` (the SDKs' `verifyChallenge`) answers a wrong code with `201 { "challenge": …, "valid": false }` — the verification ran and said no — and keeps its errors for a challenge that cannot be verified at all: `422 authentication_challenge_expired`, `422 authentication_challenge_previously_verified`, and `400 one_time_code_too_many_attempts`.
+
+### Enrolled means verified
+
+`POST /user_management/users/{id}/auth_factors` creates the factor and the enrollment challenge that completes it, and until that challenge is verified at `POST /auth/challenges/{id}/verify` the factor is not enrolled: `GET /user_management/users/{id}/auth_factors` lists verified factors only, and the `password` grant — and the hosted login page — challenges a second factor only when the user has one. A test that wants the `mfa_challenge` step enrolls, reads the enrollment challenge's code off the store (a TOTP code is delivered nowhere), verifies it, and then signs in; an enrollment abandoned at the QR code changes nothing about how the user signs in, as it does live. Seeded `totp: true` factors come up verified.
 
 ### Emitted events
 
@@ -2191,7 +2213,7 @@ const emulator = await createEmulator({
 - The page shows the email read-only above an `input[name="password"]`, with a "Use a different account" link back to the email page. A user without a password skips it, so a sign-up or a passwordless seed behaves exactly as before.
 - A wrong password re-renders the page with an inline error (HTTP 401) and emits `authentication.password_failed` with `invalid_credentials`, the same event the `password` grant emits. Nothing reaches your callback until the password is right.
 - Once it is, the code the callback receives remembers how it was earned: the exchange emits `authentication.password_succeeded` rather than `authentication.oauth_succeeded`, and the response carries `"authentication_method": "Password"`.
-- The gates the `password` grant enforces apply here too, in the order hosted AuthKit shows them. A user whose `email_verified` is `false` gets a "Verify your email" page for the code that arrives on the `email_verification.created` webhook, and a user with an enrolled factor (`totp: true` in a seed) gets a one-time-code page for a fresh authentication challenge, whose code a test reads from the store as it does to finish the `mfa-totp` grant. Both pages take an `input[name="code"]`. A wrong code re-renders with an inline error (HTTP 401) and emits `authentication.email_verification_failed` or `authentication.mfa_failed`, as the matching grant would.
+- The gates the `password` grant enforces apply here too, in the order hosted AuthKit shows them. A user whose `email_verified` is `false` gets a "Verify your email" page for the code that arrives on the `email_verification.created` webhook, and a user with an enrolled factor (`totp: true` in a seed) gets a one-time-code page for a fresh authentication challenge, whose code a test reads from the store as it does to finish the `mfa-totp` grant. Both pages take an `input[name="code"]`. A wrong code re-renders with an inline error (HTTP 401) and emits `authentication.email_verification_failed` or `authentication.mfa_failed`, as the matching grant would; three wrong codes lock the code as they would at the grant (`one_time_code_too_many_attempts` on the event), and the page issues a fresh one, as it does for a code that has expired.
 - When a gate was cleared, the exchange reports what that grant reports: `authentication.email_verification_succeeded` or `authentication.mfa_succeeded` in place of `authentication.password_succeeded`, with the session and `authentication_method` still recording `Password`. Fixtures that should go from the password straight to the callback want `email_verified: true`, as they do for the `password` grant.
 - Every page after the password carries a short-lived token rather than the password. Posting an `organization_id`, or a code, without that token lands back on the password page, and posting past an open gate lands back on the gate.
 - Plain `--interactive` is unchanged.

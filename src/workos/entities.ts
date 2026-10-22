@@ -127,7 +127,20 @@ export interface WorkOSSession extends Entity {
   ended_at: string | null;
 }
 
-export interface WorkOSEmailVerification extends Entity {
+/**
+ * The verification state production keeps on every one-time code it issues, whatever delivers
+ * it: a Magic Auth code, an email verification code, and an MFA challenge are all one
+ * authentication challenge underneath, verified by one rule. Neither field is serialized —
+ * no spec shape carries them — but they are what makes a code single-use and three-strikes.
+ */
+export interface OneTimeCodeState {
+  /** Comparisons made so far, hit or miss. Production refuses the code outright after three. */
+  attempts: number;
+  /** When the code was redeemed; a redeemed code answers `one_time_code_previously_used` from then on. */
+  verified_at: string | null;
+}
+
+export interface WorkOSEmailVerification extends Entity, OneTimeCodeState {
   object: 'email_verification';
   user_id: string;
   email: string;
@@ -150,7 +163,7 @@ export interface WorkOSPasswordReset extends Entity {
   expires_at: string;
 }
 
-export interface WorkOSMagicAuth extends Entity {
+export interface WorkOSMagicAuth extends Entity, OneTimeCodeState {
   object: 'magic_auth';
   user_id: string;
   email: string;
@@ -162,6 +175,13 @@ export interface WorkOSAuthenticationFactor extends Entity {
   object: 'authentication_factor';
   user_id: string;
   type: 'totp';
+  /**
+   * When a challenge for this factor last verified, production's `last_verified_at`. Null until
+   * the enrollment challenge clears, and that null is what keeps an abandoned enrollment out of
+   * the factor list and out of the password grant's second-factor step. Not serialized: the
+   * spec's AuthenticationFactor has no such field.
+   */
+  last_verified_at: string | null;
   totp: {
     issuer: string;
     user: string;
@@ -443,12 +463,16 @@ export interface WorkOSRefreshToken extends Entity {
   exchanged_for_id: string | null;
 }
 
-export interface WorkOSAuthenticationChallenge extends Entity {
+export interface WorkOSAuthenticationChallenge extends Entity, OneTimeCodeState {
   object: 'authentication_challenge';
   user_id: string;
   factor_id: string;
   expires_at: string;
-  code: string | null;
+  /**
+   * The code the challenge accepts. Production derives a TOTP code from the factor's secret;
+   * the emulator mints one at challenge time instead, so a test reads it off the store.
+   */
+  code: string;
 }
 
 export interface WorkOSDeviceAuthorization extends Entity {

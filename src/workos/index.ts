@@ -580,12 +580,15 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       }
 
       // The same record the enrollment route writes, so ListAuthFactors reports it and the
-      // password grant challenges it like any enrolled second factor.
+      // password grant challenges it like any enrolled second factor — verified, as a factor is
+      // once its enrollment challenge clears, since an unverified one is neither listed nor
+      // challenged and a seed that enrolled one would be inert.
       if (userConfig.totp) {
         ws.authFactors.insert({
           object: 'authentication_factor',
           user_id: user.id,
           type: 'totp',
+          last_verified_at: new Date().toISOString(),
           totp: newTotp('WorkOS Emulator', user.email),
         });
       }

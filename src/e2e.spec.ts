@@ -83,6 +83,19 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       },
     });
 
+  /**
+   * Clear a factor's enrollment challenge with the code read off the store (a TOTP code is
+   * delivered nowhere): enrolled means verified, as it does live, so until this runs the
+   * factor is neither listed nor challenged.
+   */
+  async function verifyEnrollment(challengeId: string) {
+    const { getWorkOSStore } = await import('./workos/store.js');
+    const code = getWorkOSStore(emulator.store).authChallenges.get(challengeId)!.code;
+    const res = await api(`/auth/challenges/${challengeId}/verify`, { method: 'POST', body: JSON.stringify({ code }) });
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as { valid: boolean }).valid).toBe(true);
+  }
+
   /** Deliveries are fire-and-forget — poll until the named webhook arrives past the cursor. */
   function waitForWebhook(event: string, opts?: { after?: number; timeout?: number }): Promise<ReceivedWebhook> {
     return waitFor(
@@ -342,7 +355,8 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       }),
     });
     expect(factorRes.status).toBe(201);
-    const { authentication_factor: factor } = (await factorRes.json()) as any;
+    const { authentication_factor: factor, authentication_challenge: enrollment } = (await factorRes.json()) as any;
+    await verifyEnrollment(enrollment.id);
 
     // Step 2: Authenticate with password - should trigger MFA challenge
     const passwordRes = await fetch(`${emulator.url}/user_management/authenticate`, {
@@ -381,7 +395,8 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
       }),
     });
     expect(factorRes.status).toBe(201);
-    const { authentication_factor: factor } = (await factorRes.json()) as any;
+    const { authentication_factor: factor, authentication_challenge: enrollment } = (await factorRes.json()) as any;
+    await verifyEnrollment(enrollment.id);
 
     // Step 2: Authenticate with password to trigger MFA challenge
     const passwordRes = await fetch(`${emulator.url}/user_management/authenticate`, {

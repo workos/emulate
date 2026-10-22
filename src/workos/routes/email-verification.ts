@@ -1,6 +1,15 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatEmailVerification, formatUser, generateCode, expiresIn, isExpired, emailsMatch } from '../helpers.js';
+import {
+  formatEmailVerification,
+  formatUser,
+  generateCode,
+  expiresIn,
+  emailsMatch,
+  latestOneTimeCode,
+  redeemOneTimeCode,
+  verifyOneTimeCode,
+} from '../helpers.js';
 
 export function emailVerificationRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -22,11 +31,20 @@ export function emailVerificationRoutes(ctx: RouteContext): void {
       email: user.email,
       code: generateCode(),
       expires_at: expiresIn(10),
+      attempts: 0,
+      verified_at: null,
     });
 
     return c.json(formatEmailVerification(ev), 201);
   });
 
+  /**
+   * Production verifies the code against the user's latest email challenge — so only the most
+   * recently sent code counts, an earlier one is simply incorrect — and only once the code has
+   * passed does it notice a mailbox that was already verified. Its five failures are this
+   * endpoint's own `email_verification_*` codes, not the authenticate grants' `one_time_code_*`
+   * family, and the user comes back wrapped, the `VerifyEmailResponse` the SDKs unwrap.
+   */
   app.post('/user_management/users/:id/email_verification/confirm', async (c) => {
     const user = ws.users.get(c.req.param('id'));
     if (!user) throw notFound('User', c.req.param('id'));
@@ -39,21 +57,41 @@ export function emailVerificationRoutes(ctx: RouteContext): void {
 
     // A code proves the inbox it was sent to: production keys the email factor it checks the
     // code against by the user's current address (`findInternalEmailFactorByUserlandUser`), so a
-    // code issued before the address changed verifies nothing.
-    const verifications = ws.emailVerifications.findBy('user_id', user.id);
-    const ev = verifications.find((v) => v.code === code && emailsMatch(v.email, user.email));
+    // code issued before the address changed verifies nothing. A user never sent a code at their
+    // current address has no challenge to verify against: production's `findLatestByFactorOrThrow`
+    // is a 404 here, not a wrong code.
+    const ev = latestOneTimeCode(
+      ws.emailVerifications.findBy('user_id', user.id).filter((v) => emailsMatch(v.email, user.email)),
+    );
+    if (!ev) throw notFound('Email Verification');
 
-    if (!ev) {
-      throw new WorkOSApiError(400, 'Invalid code', 'invalid_code');
+    switch (verifyOneTimeCode(ws.emailVerifications, ev, code)) {
+      case 'expired':
+        throw new WorkOSApiError(400, 'Email verification code has expired.', 'email_verification_code_expired');
+      case 'previously_used':
+        throw new WorkOSApiError(
+          400,
+          'Email verification code has previously been used.',
+          'email_verification_code_previously_used',
+        );
+      case 'too_many_attempts':
+        throw new WorkOSApiError(
+          400,
+          'Email verification had too many attempts.',
+          'email_verification_too_many_attempts',
+        );
+      case 'invalid':
+        throw new WorkOSApiError(400, 'Email verification code is incorrect.', 'email_verification_code_incorrect');
+      case 'valid':
+        break;
     }
-    if (isExpired(ev.expires_at)) {
-      throw new WorkOSApiError(400, 'Code has expired', 'expired_code');
+    redeemOneTimeCode(ws.emailVerifications, ev);
+
+    if (user.email_verified) {
+      throw new WorkOSApiError(400, 'Email has been previously verified.', 'email_previously_verified');
     }
 
     ws.users.update(user.id, { email_verified: true });
-    ws.emailVerifications.delete(ev.id);
-
-    const updated = ws.users.get(user.id)!;
-    return c.json(formatUser(updated));
+    return c.json({ user: formatUser(ws.users.get(user.id)!) });
   });
 }

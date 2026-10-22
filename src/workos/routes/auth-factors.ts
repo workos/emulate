@@ -8,6 +8,7 @@ import {
   formatAuthFactorEnrolled,
   generateCode,
   newTotp,
+  verifiedAuthFactors,
 } from '../helpers.js';
 
 export function authFactorRoutes(ctx: RouteContext): void {
@@ -27,10 +28,13 @@ export function authFactorRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(422, 'TOTP secret must be a valid Base32 string', 'invalid_totp_secret');
     }
 
+    // Unverified until the enrollment challenge below clears at POST /auth/challenges/{id}/verify:
+    // until then the factor is neither listed nor challenged, as production has it.
     const factor = ws.authFactors.insert({
       object: 'authentication_factor',
       user_id: user.id,
       type: type as 'totp',
+      last_verified_at: null,
       totp: newTotp(
         (body.totp_issuer as string) ?? 'WorkOS Emulator',
         (body.totp_user as string) ?? user.email,
@@ -46,6 +50,8 @@ export function authFactorRoutes(ctx: RouteContext): void {
       factor_id: factor.id,
       expires_at: expiresIn(10),
       code: generateCode(),
+      attempts: 0,
+      verified_at: null,
     });
 
     return c.json(
@@ -62,7 +68,9 @@ export function authFactorRoutes(ctx: RouteContext): void {
     const user = ws.users.get(userId);
     if (!user) throw notFound('User', userId);
 
-    const factors = ws.authFactors.findBy('user_id', user.id);
+    // Verified factors only (`verifiedOnly: true` in production's list): an enrollment whose
+    // challenge never cleared is not a factor the user can sign in with, so it is not reported.
+    const factors = verifiedAuthFactors(ws, user.id);
     return c.json({
       object: 'list',
       data: factors.map(formatAuthFactor),

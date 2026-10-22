@@ -5,9 +5,11 @@ import {
   formatAuthFactorEnrolled,
   formatAuthChallenge,
   expiresIn,
-  isExpired,
   generateCode,
   newTotp,
+  redeemOneTimeCode,
+  touchFactorVerified,
+  verifyOneTimeCode,
 } from '../helpers.js';
 
 export function legacyMfaRoutes(ctx: RouteContext): void {
@@ -25,6 +27,7 @@ export function legacyMfaRoutes(ctx: RouteContext): void {
       object: 'authentication_factor',
       user_id: 'legacy',
       type: type as 'totp',
+      last_verified_at: null,
       totp: newTotp(issuer, totpUser),
     });
 
@@ -58,31 +61,60 @@ export function legacyMfaRoutes(ctx: RouteContext): void {
       factor_id: factor.id,
       expires_at: expiresIn(10),
       code,
+      attempts: 0,
+      verified_at: null,
     });
 
     return c.json(formatAuthChallenge(challenge), 201);
   });
 
-  // Verify challenge
+  /**
+   * Verify challenge. Production answers a wrong code with `valid: false` — the verification
+   * ran and the answer was no — and reserves its errors for a challenge that cannot be verified
+   * at all: one already verified or expired is a 422 naming the challenge, and one that has
+   * had its three attempts is the authenticate grants' 400 `one_time_code_too_many_attempts`
+   * (the one exception it shares with them, kept at 400 for compatibility; see the comment on
+   * `AuthenticationChallengeTooManyAttemptsException`). The success status is 201, the Nest
+   * default for a POST and what the spec documents.
+   */
   app.post('/auth/challenges/:id/verify', async (c) => {
     const challenge = ws.authChallenges.get(c.req.param('id'));
     if (!challenge) throw notFound('Authentication Challenge', c.req.param('id'));
-
-    if (isExpired(challenge.expires_at)) {
-      ws.authChallenges.delete(challenge.id);
-      throw new WorkOSApiError(400, 'Challenge has expired', 'expired_challenge');
-    }
 
     const body = await parseJsonBody(c);
     const code = body.code as string;
     if (!code) {
       throw new WorkOSApiError(400, 'code is required', 'invalid_request');
     }
-    if (challenge.code && code !== challenge.code) {
-      throw new WorkOSApiError(400, 'Invalid one-time code', 'invalid_one_time_code');
-    }
 
-    ws.authChallenges.delete(challenge.id);
-    return c.json({ challenge: formatAuthChallenge(challenge), valid: true });
+    const outcome = verifyOneTimeCode(ws.authChallenges, challenge, code);
+    switch (outcome) {
+      case 'previously_used':
+        throw new WorkOSApiError(
+          422,
+          `The authentication challenge '${challenge.id}' has already been verified.`,
+          'authentication_challenge_previously_verified',
+        );
+      case 'too_many_attempts':
+        throw new WorkOSApiError(
+          400,
+          'One-time code has had too many failed attempts.',
+          'one_time_code_too_many_attempts',
+        );
+      case 'expired':
+        throw new WorkOSApiError(
+          422,
+          `The authentication challenge '${challenge.id}' has expired.`,
+          'authentication_challenge_expired',
+        );
+      case 'invalid':
+        return c.json({ challenge: formatAuthChallenge(challenge), valid: false }, 201);
+      case 'valid':
+        redeemOneTimeCode(ws.authChallenges, challenge);
+        // This is how a factor becomes enrolled: verifying its enrollment challenge is what
+        // puts it in the factor list and in front of the password grant.
+        touchFactorVerified(ws, challenge.factor_id);
+        return c.json({ challenge: formatAuthChallenge(challenge), valid: true }, 201);
+    }
   });
 }

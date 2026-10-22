@@ -47,12 +47,16 @@ export function magicAuthRoutes(ctx: RouteContext): void {
         impersonator: null,
       });
 
+    // The newest code is the only one the magic-auth grant will compare against, so this
+    // retires any earlier unredeemed code for the user, as production does.
     const ma = ws.magicAuths.insert({
       object: 'magic_auth',
       user_id: user.id,
       email: user.email,
       code: generateCode(),
       expires_at: expiresIn(10),
+      attempts: 0,
+      verified_at: null,
     });
 
     return c.json(formatMagicAuth(ma), 201);

@@ -79,16 +79,14 @@ describe('Legacy MFA routes', () => {
     const challenge = await json(challengeRes);
     expect(challenge.object).toBe('authentication_challenge');
 
-    // In the emulator we need to know the code — use a 6-digit code
-    // The emulator stores the code; for test we need to peek at it or accept any code
-    // Since the challenge object doesn't expose the code, we verify with the stored code
-    // For testing, we'll create a new challenge and verify with a matching code
+    // The challenge withholds its code, so a guess is the only code this test has; production
+    // answers a wrong one as a verification that ran and said no, not as an error.
     const verifyRes = await req(`/auth/challenges/${challenge.id}/verify`, {
       method: 'POST',
       body: JSON.stringify({ code: '000000' }),
     });
-    // Code won't match the generated one, so this should fail
-    expect(verifyRes.status).toBe(400);
+    expect(verifyRes.status).toBe(201);
+    expect(await json(verifyRes)).toMatchObject({ valid: false, challenge: { id: challenge.id } });
   });
 
   it('returns 404 for nonexistent challenge', async () => {

@@ -4,8 +4,9 @@
  * and only enrollment does — GET and LIST strip them.
  */
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { createServer, type ApiKeyMap } from '../../core/index.js';
+import { createServer, type ApiKeyMap, type Store } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 
 const apiKeys: ApiKeyMap = { sk_test_mfa: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_mfa', 'Content-Type': 'application/json' };
@@ -16,10 +17,13 @@ function createTestApp() {
 
 describe('Auth factor routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: Store;
   let userId: string;
 
   beforeEach(async () => {
-    app = createTestApp().app;
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
     const res = await req('/user_management/users', {
       method: 'POST',
       body: JSON.stringify({ email: 'mfa@test.com', password: 'a strong enough passphrase', email_verified: true }),
@@ -73,13 +77,49 @@ describe('Auth factor routes', () => {
     expect(factor.totp.user).toBe('mfa@test.com');
   });
 
+  const list = async () => (await json(await req(`/user_management/users/${userId}/auth_factors`))).data;
+  /** Clear the enrollment challenge with the code a test reads off the store, as the SDK's verifyChallenge would. */
+  const verifyEnrollment = (challengeId: string) =>
+    req(`/auth/challenges/${challengeId}/verify`, {
+      method: 'POST',
+      body: JSON.stringify({ code: getWorkOSStore(store).authChallenges.get(challengeId)!.code }),
+    });
+
   it('lists factors without their secrets', async () => {
-    await enroll();
+    const { authentication_challenge: challenge } = await json(await enroll());
+    await verifyEnrollment(challenge.id);
     const res = await req(`/user_management/users/${userId}/auth_factors`);
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.data).toHaveLength(1);
     expect(body.data[0].totp).toEqual({ issuer: 'WorkOS Emulator', user: 'mfa@test.com' });
+    expect(body.data[0]).not.toHaveProperty('last_verified_at');
+  });
+
+  // Production lists verified factors only (`verifiedOnly: true`): enrolling is not enrolled
+  // until the enrollment challenge clears, and an abandoned enrollment is invisible — to this
+  // list and to the password grant, which challenges only what this list reports.
+  it('lists a factor only once its enrollment challenge has verified', async () => {
+    const { authentication_factor: factor, authentication_challenge: challenge } = await json(await enroll());
+    expect(await list()).toEqual([]);
+
+    const password = () =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'password', email: 'mfa@test.com', password: 'a strong enough passphrase' }),
+      });
+    // No second factor to challenge yet: the sign-in completes.
+    expect((await password()).status).toBe(200);
+
+    const verified = await verifyEnrollment(challenge.id);
+    expect(verified.status).toBe(201);
+    expect((await json(verified)).valid).toBe(true);
+
+    expect((await list()).map((f: { id: string }) => f.id)).toEqual([factor.id]);
+    const challenged = await password();
+    expect(challenged.status).toBe(403);
+    expect((await json(challenged)).code).toBe('mfa_challenge');
   });
 
   it('answers 404 for an unknown user', async () => {

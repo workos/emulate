@@ -7,6 +7,7 @@ import {
   generateId,
   ID_PREFIXES,
   type ApiKeyMap,
+  type Collection,
   type CursorPaginatedResult,
   type Entity,
   type Store,
@@ -48,6 +49,7 @@ import type {
   WorkOSAuthorizedApplication,
   WorkOSConnectedAccount,
   ConnectedAccountState,
+  OneTimeCodeState,
   WorkOSAuthenticationChallenge,
   WorkOSDeviceAuthorization,
   WorkOSRole,
@@ -383,8 +385,12 @@ export function emitAuthenticationEvent(opts: {
   });
 }
 
+// The attempt count and redemption time are the verifier's bookkeeping; the spec's
+// EmailVerification and MagicAuth carry the code and its expiry, nothing about its use.
+const ONE_TIME_CODE_EXCLUDE = new Set([...INTERNAL_FIELDS, 'attempts', 'verified_at']);
+
 export function formatEmailVerification(ev: WorkOSEmailVerification): Record<string, unknown> {
-  return formatEntity(ev);
+  return formatEntity(ev, { exclude: ONE_TIME_CODE_EXCLUDE });
 }
 
 // The spec's PasswordReset carries `created_at` but no `updated_at`: a reset is never modified,
@@ -396,7 +402,7 @@ export function formatPasswordReset(pr: WorkOSPasswordReset): Record<string, unk
 }
 
 export function formatMagicAuth(ma: WorkOSMagicAuth): Record<string, unknown> {
-  return formatEntity(ma);
+  return formatEntity(ma, { exclude: ONE_TIME_CODE_EXCLUDE });
 }
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -425,14 +431,32 @@ export function newTotp(issuer: string, user: string, secret?: string): WorkOSAu
 const TOTP_QR_CODE =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
+// Whether the factor has verified is a filter on the list, never a field of the factor.
+const AUTH_FACTOR_EXCLUDE = new Set([...INTERNAL_FIELDS, 'last_verified_at']);
+
 /** The spec's AuthenticationFactor: what GET and LIST return, secrets stripped. */
 export function formatAuthFactor(f: WorkOSAuthenticationFactor): Record<string, unknown> {
-  return { ...formatEntity(f), totp: { issuer: f.totp.issuer, user: f.totp.user } };
+  return { ...formatEntity(f, { exclude: AUTH_FACTOR_EXCLUDE }), totp: { issuer: f.totp.issuer, user: f.totp.user } };
 }
 
 /** The spec's AuthenticationFactorEnrolled: the one response that shows the secrets. */
 export function formatAuthFactorEnrolled(f: WorkOSAuthenticationFactor): Record<string, unknown> {
-  return { ...formatEntity(f), totp: { ...f.totp, qr_code: TOTP_QR_CODE } };
+  return { ...formatEntity(f, { exclude: AUTH_FACTOR_EXCLUDE }), totp: { ...f.totp, qr_code: TOTP_QR_CODE } };
+}
+
+/**
+ * The factors production counts as enrolled: those whose enrollment challenge has verified.
+ * `GET /user_management/users/{id}/auth_factors` lists these and nothing else
+ * (`verifiedOnly: true`), and the password grant challenges a second factor only when one
+ * exists — so a factor enrolled and never verified is invisible to both, as it is live.
+ */
+export function verifiedAuthFactors(ws: WorkOSStore, userId: string): WorkOSAuthenticationFactor[] {
+  return ws.authFactors.findBy('user_id', userId).filter((f) => f.last_verified_at !== null);
+}
+
+/** Production's `touchLastVerifiedAt`: the factor is verified from the moment one of its challenges is. */
+export function touchFactorVerified(ws: WorkOSStore, factorId: string): void {
+  ws.authFactors.update(factorId, { last_verified_at: new Date().toISOString() });
 }
 
 /**
@@ -623,6 +647,86 @@ export function revokeSession(ws: WorkOSStore, sessionId: string): void {
   // Sessions have no onUpdate hook, so this only shapes the session.revoked payload.
   ws.sessions.update(sessionId, { status: 'revoked', ended_at: new Date().toISOString() });
   ws.sessions.delete(sessionId);
+}
+
+/** Production's `MAX_AUTHENTICAITON_ATTEMPTS` (sic): comparisons a one-time code allows before it locks. */
+export const MAX_ONE_TIME_CODE_ATTEMPTS = 3;
+
+export type OneTimeCodeOutcome = 'valid' | 'invalid' | 'expired' | 'previously_used' | 'too_many_attempts';
+
+type OneTimeCode = Entity & OneTimeCodeState & { code: string; expires_at: string };
+
+/**
+ * The newest of a user's codes: the only one production will compare against. It resolves the
+ * code to verify by the user — the latest challenge on their email factor — rather than by the
+ * code sent, so requesting a second code retires the first even while the first is unexpired.
+ * Insertion order is not enough to find it, since an update re-indexes a record to the end.
+ */
+export function latestOneTimeCode<T extends Entity>(records: T[]): T | undefined {
+  return records.reduce<T | undefined>(
+    (latest, r) =>
+      !latest || r.created_at > latest.created_at || (r.created_at === latest.created_at && r.id > latest.id)
+        ? r
+        : latest,
+    undefined,
+  );
+}
+
+/**
+ * What production's AuthenticationChallengeVerifier answers for `code` against `record`, in its
+ * order: a code already redeemed is refused before anything else, then one that has used up its
+ * attempts, then one past its expiry — and only then is the code compared. A miss is counted
+ * here, so the third miss is the last comparison the code gets: the fourth request, right code
+ * or wrong, is `too_many_attempts`. A hit is not spent here; the caller runs `redeemOneTimeCode`
+ * once whatever else its request has to check has passed, so a request that fails after the
+ * code matched leaves the code redeemable.
+ */
+export function verifyOneTimeCode<T extends OneTimeCode>(
+  collection: Collection<T>,
+  record: T,
+  code: string,
+): OneTimeCodeOutcome {
+  if (record.verified_at !== null) return 'previously_used';
+  if (record.attempts >= MAX_ONE_TIME_CODE_ATTEMPTS) return 'too_many_attempts';
+  if (isExpired(record.expires_at)) return 'expired';
+  if (code === record.code) return 'valid';
+  collection.update(record.id, { attempts: record.attempts + 1 } as Partial<T>);
+  return 'invalid';
+}
+
+/** Spend a code `verifyOneTimeCode` found valid: the hit counts as an attempt, and the code answers `previously_used` from now on. */
+export function redeemOneTimeCode<T extends OneTimeCode>(collection: Collection<T>, record: T): void {
+  collection.update(record.id, {
+    attempts: record.attempts + 1,
+    verified_at: new Date().toISOString(),
+  } as Partial<T>);
+}
+
+/**
+ * The authenticate grants' one-time-code failures, as production words them. `identifier` is
+ * what the message names: the email for Magic Auth and email verification, the challenge id for
+ * MFA — production's own distinction, since the first two being challenges underneath is not
+ * something it exposes.
+ */
+export function oneTimeCodeError(outcome: Exclude<OneTimeCodeOutcome, 'valid'>, identifier: string): WorkOSApiError {
+  switch (outcome) {
+    case 'expired':
+      return new WorkOSApiError(400, `One-time code for '${identifier}' has expired.`, 'one_time_code_expired');
+    case 'previously_used':
+      return new WorkOSApiError(
+        400,
+        `One-time code for '${identifier}' was previously used.`,
+        'one_time_code_previously_used',
+      );
+    case 'too_many_attempts':
+      return new WorkOSApiError(
+        400,
+        `One-time code for '${identifier}' has had too many failed attempts.`,
+        'one_time_code_too_many_attempts',
+      );
+    case 'invalid':
+      return new WorkOSApiError(400, 'Invalid one-time code', 'invalid_one_time_code');
+  }
 }
 
 export function formatConnection(conn: WorkOSConnection): Record<string, unknown> {
@@ -1263,7 +1367,7 @@ export function assertAllowedRedirectUri(uri: string, store: Store): void {
 // `code` stays server-side as production keeps a TOTP challenge's; `user_id` and `factor_id`
 // are the store's join columns — the spec's challenge names its factor `authentication_factor_id`
 // and carries no user at all.
-const AUTH_CHALLENGE_EXCLUDE = new Set([...INTERNAL_FIELDS, 'code', 'user_id', 'factor_id']);
+const AUTH_CHALLENGE_EXCLUDE = new Set([...INTERNAL_FIELDS, 'code', 'user_id', 'factor_id', 'attempts', 'verified_at']);
 
 export function formatAuthChallenge(c: WorkOSAuthenticationChallenge): Record<string, unknown> {
   return { ...formatEntity(c, { exclude: AUTH_CHALLENGE_EXCLUDE }), authentication_factor_id: c.factor_id };

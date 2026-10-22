@@ -238,6 +238,7 @@ const authFactor: WorkOSAuthenticationFactor = {
   object: 'authentication_factor',
   user_id: 'user_01',
   type: 'totp',
+  last_verified_at: TS,
   totp: {
     issuer: 'Acme',
     user: 'alice@example.com',
@@ -256,6 +257,8 @@ const authChallenge: WorkOSAuthenticationChallenge = {
   factor_id: 'auth_factor_01',
   expires_at: TS,
   code: '123456',
+  attempts: 1,
+  verified_at: TS,
   created_at: TS,
   updated_at: TS,
 };
