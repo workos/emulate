@@ -201,6 +201,51 @@ describe('JWT templates end to end', () => {
     expect(flat).not.toContain('verification_prefix');
   });
 
+  it("keeps a started verification's token and prefix out of template claims", async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        ...seed,
+        organizations: [
+          {
+            name: 'Acme Corp',
+            domains: [{ domain: 'acme.com', state: 'pending' as const }],
+            memberships: [{ email: 'alice@acme.com', role: 'admin', status: 'active' as const }],
+          },
+        ],
+        jwtTemplate: {
+          content: '{"urn:example:domains": {{ organization.domains }}}',
+        },
+      },
+    });
+
+    const ws = getWorkOSStore(emulator.store);
+    const [domain] = ws.organizationDomains.all();
+    const started = await fetch(`${emulator.url}/organization_domains/${domain.id}/verify`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${emulator.apiKey}` },
+    });
+    expect(started.status).toBe(201);
+    // The API never mints a branded prefix — production's dashboard flows do — so set one directly.
+    const prefix = 'acme-domain-verification-z3kjny';
+    ws.organizationDomains.update(domain.id, { verification_prefix: prefix });
+    const stored = ws.organizationDomains.get(domain.id)!;
+    expect(stored.verification_token).toBeString();
+    expect(stored.verification_prefix).toBe(prefix);
+
+    const { status, body } = await login(emulator.url);
+    expect(status).toBe(200);
+
+    const domains = decode(body.access_token)['urn:example:domains'] as Array<Record<string, unknown>>;
+    expect(domains).toHaveLength(1);
+    expect(domains[0]).toMatchObject({ domain: 'acme.com', state: 'pending', verification_strategy: 'dns' });
+    expect(domains[0]).not.toHaveProperty('verification_token');
+    expect(domains[0]).not.toHaveProperty('verification_prefix');
+    const flat = JSON.stringify(domains);
+    expect(flat).not.toContain(stored.verification_token!);
+    expect(flat).not.toContain(prefix);
+  });
+
   it('signs nothing extra when no template is configured', async () => {
     emulator = await createEmulator({ port: 0, seed });
     const { body } = await login(emulator.url);

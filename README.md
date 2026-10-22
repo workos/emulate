@@ -435,9 +435,18 @@ accepts both. On update, a domain resent with a different state is deleted and r
 new id (`organization_domain.deleted`, then `organization_domain.created`), exactly as
 production's `recreateExistingDomainsWithDifferentState` does; one resent unchanged keeps its
 row, token and all. Verified domains created either way record `verification_strategy: manual`;
-pending ones carry no verification fields until `verify` runs. From Node, flipping a domain in
-the store — `getWorkOSStore(store).organizationDomains.update(id, { state: 'verified' })` — fires
+pending ones carry no verification fields until `verify` runs. Domains are ASCII: production
+never enables its validator's Unicode mode, so `bücher.de` is refused and `xn--bcher-kva.de`
+accepted. From Node, flipping a domain in the store —
+`getWorkOSStore(store).organizationDomains.update(id, { state: 'verified' })` — fires
 `organization_domain.verified`, the one way to exercise that webhook.
+
+Events follow production's write order. `PUT /organizations/{id}` writes the organization first
+and emits `organization.updated` from that write — only when a field actually changed, and with
+the domains as they stood at that moment — then writes the domains, which report themselves as
+`organization_domain.created` and `organization_domain.deleted`. A domain-only update therefore
+emits no `organization.updated`, and one that also renames the organization carries the
+pre-change domains in that event while the response carries the new ones.
 
 ### Organization IT contacts
 

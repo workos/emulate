@@ -227,6 +227,19 @@ describe('Organization routes', () => {
       });
     });
 
+    it('rejects a non-ASCII domain, as production does without allowUnicode, and takes its punycode form', async () => {
+      const unicode = await create({ domain_data: [{ domain: 'bücher.de', state: 'verified' }] });
+      expect(unicode.status).toBe(422);
+      expect(await json(unicode)).toEqual({
+        message: 'Validation failed',
+        errors: [{ field: 'domain_data.0.domain', code: 'domain must be valid domain name' }],
+      });
+
+      const punycode = await create({ domain_data: [{ domain: 'xn--bcher-kva.de', state: 'verified' }] });
+      expect(punycode.status).toBe(201);
+      expect((await json(punycode)).domains[0].domain).toBe('xn--bcher-kva.de');
+    });
+
     it('rejects the same domain listed twice, in any casing', async () => {
       const res = await create({
         domain_data: [
@@ -322,6 +335,30 @@ describe('Organization routes', () => {
 
         const cleared = await json(await put(org.id, { domain_data: [] }));
         expect(cleared.domains).toEqual([]);
+      });
+
+      it('reports domain changes through domain events, with organization.updated only for a field change', async () => {
+        const org = await json(await create({ domain_data: [{ domain: 'acme.com', state: 'pending' }] }));
+
+        // A domain-only update writes no organization row, so production emits no organization.updated.
+        const domainsOnly = await json(await put(org.id, { domain_data: [{ domain: 'acme.dev', state: 'verified' }] }));
+        expect(domainsOnly.domains.map((d: any) => d.domain)).toEqual(['acme.dev']);
+        expect(domainsOnly.updated_at).toBe(org.updated_at);
+        expect(await eventsOf('organization.updated')).toHaveLength(0);
+        expect((await eventsOf('organization_domain.deleted')).map((e) => e.data.domain)).toEqual(['acme.com']);
+
+        // A field change emits organization.updated from the organization write, which production
+        // performs before the domain writes: the event carries the domains as they were, the
+        // response the domains as they are.
+        const renamed = await json(
+          await put(org.id, { name: 'Acme Inc', domain_data: [{ domain: 'acme.io', state: 'verified' }] }),
+        );
+        expect(renamed.name).toBe('Acme Inc');
+        expect(renamed.domains.map((d: any) => d.domain)).toEqual(['acme.io']);
+        const updatedEvents = await eventsOf('organization.updated');
+        expect(updatedEvents).toHaveLength(1);
+        expect(updatedEvents[0].data.name).toBe('Acme Inc');
+        expect(updatedEvents[0].data.domains.map((d: any) => d.domain)).toEqual(['acme.dev']);
       });
 
       it('applies the same validation and consumer-domain rules before the organization is written', async () => {

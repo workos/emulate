@@ -27,7 +27,9 @@ export function normalizeDomain(domain: string): string {
  * A domain is at most 253 characters of letters, digits, hyphens, underscores and dots, with at
  * least two labels; each label is under 64 characters and neither starts nor ends with a hyphen;
  * the TLD is not all digits; the registrable label (the one before the TLD) allows no underscore
- * and no `--` other than an IDN `xn--` prefix.
+ * and no `--` other than an IDN `xn--` prefix. Internationalized names must arrive in that
+ * punycode form: production never passes `allowUnicode`, so `bücher.de` is refused and
+ * `xn--bcher-kva.de` accepted.
  *
  * One divergence: the package also knows public second-level suffixes (`co.uk`), so it holds
  * `foo` in `foo.co.uk` to the registrable-label rules, whereas this port holds `co` to them. An

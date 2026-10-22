@@ -69,6 +69,20 @@ describe('Organization domain routes', () => {
       });
     });
 
+    it('rejects a non-ASCII domain, as production does without allowUnicode, and takes its punycode form', async () => {
+      const org = await createOrg();
+      const unicode = await post('/organization_domains', { organization_id: org.id, domain: 'bücher.de' });
+      expect(unicode.status).toBe(422);
+      expect(await json(unicode)).toEqual({
+        message: 'Validation failed',
+        errors: [{ field: 'domain', code: 'domain must be valid domain name' }],
+      });
+
+      const punycode = await post('/organization_domains', { organization_id: org.id, domain: 'xn--bcher-kva.de' });
+      expect(punycode.status).toBe(201);
+      expect((await json(punycode)).domain).toBe('xn--bcher-kva.de');
+    });
+
     it('returns 404 for an unknown organization', async () => {
       const res = await post('/organization_domains', { organization_id: 'org_missing', domain: 'acme.com' });
       expect(res.status).toBe(404);

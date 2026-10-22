@@ -14,7 +14,7 @@ import {
   formatAuthorizedApplication,
   revokeApiKeysForOwner,
 } from '../helpers.js';
-import type { WorkOSOrganizationDomain } from '../entities.js';
+import type { WorkOSOrganization, WorkOSOrganizationDomain } from '../entities.js';
 import { deleteAgentInstancesForOrganization } from '../agent-sessions.js';
 import {
   type DomainDataEntry,
@@ -183,15 +183,28 @@ export function organizationRoutes(ctx: RouteContext): void {
       rejectConsumerDomains(domainChanges.add.map((e) => e.domain));
     }
 
-    const updated = ws.organizations.update(org.id, updates);
-    syncOrganizationResource(ws, updated!);
+    // Production writes the organization first and emits `organization.updated` from that write
+    // (creator-updater `update`), only when a field actually changed and with the domains as they
+    // stand at that moment; the domain writes follow and report themselves through their own
+    // events. So a domain-only update emits no `organization.updated`, and one that also changes a
+    // field carries the pre-change domains in that event while the response carries the new ones.
+    const changed = Object.fromEntries(
+      Object.entries(updates).filter(
+        ([key, value]) => JSON.stringify(value) !== JSON.stringify(org[key as keyof WorkOSOrganization]),
+      ),
+    );
+    let updated = org;
+    if (Object.keys(changed).length > 0) {
+      updated = ws.organizations.update(org.id, changed)!;
+      syncOrganizationResource(ws, updated);
+    }
 
     if (domainChanges) {
       for (const d of domainChanges.remove) ws.organizationDomains.delete(d.id);
       for (const entry of domainChanges.add) insertOrganizationDomain(ws, org.id, entry);
     }
 
-    return c.json(formatOrganization(updated!, ws));
+    return c.json(formatOrganization(updated, ws));
   });
 
   app.delete('/organizations/:id', (c) => {
