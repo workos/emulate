@@ -6,7 +6,7 @@ import {
   parseJsonBody,
   parseListParams,
   cursorPaginate,
-  ReasonPhraseApiError,
+  PlainApiError,
   WorkOSApiError,
 } from '../../core/index.js';
 import { getWorkOSStore, type WorkOSStore } from '../store.js';
@@ -65,7 +65,14 @@ function assertGroupNameFree(ws: WorkOSStore, organizationId: string, name: stri
     .findBy('organization_id', organizationId)
     .some((g) => g.name === name && g.id !== exceptGroupId);
   if (taken) {
-    throw new ReasonPhraseApiError(409, `A group with name: ${name} already exists in the organization.`, 'Conflict');
+    throw new PlainApiError(
+      409,
+      `A group with name: ${name} already exists in the organization.`,
+      'group_name_conflict',
+      {
+        error: 'Conflict',
+      },
+    );
   }
 }
 
