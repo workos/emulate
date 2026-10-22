@@ -99,10 +99,11 @@ export function authorizationOrgRoleRoutes(ctx: RouteContext): void {
   });
 
   // Only an organization role can be deleted, and only while nothing holds it: production
-  // answers 409 `role_has_assignments` while a membership still has the role (the organization
-  // role config's assignments) and 409 `role_has_group_role_mappings` while a directory group
-  // maps to it. The emulator resolves directory group mappings onto memberships when it seeds
-  // them and keeps no mapping rows, so only the first conflict can arise here.
+  // answers 409 `role_has_assignments` while a membership still has the role, directly or
+  // through a native group it belongs to, and 409 `role_has_group_role_mappings` while a
+  // directory group maps to it. The emulator resolves directory group mappings onto
+  // memberships when it seeds them and keeps no mapping rows, so only the first conflict can
+  // arise here.
   app.delete(`${prefix}/:slug`, (c) => {
     const orgId = c.req.param('orgId');
     requireOrganization(ws, orgId);

@@ -163,11 +163,19 @@ export function emitRolePermissionsUpdated(store: Store, ws: WorkOSStore, role: 
  * Whether any membership still holds the role, which is what production's
  * `userRolesService.findAllByRoleId` answers before an organization role may be deleted:
  * a membership's organization-level roles (held by slug, which resolves to this role
- * because an organization role shadows an environment role) and resource-scoped
- * assignments, the ones derived from a native group's grant included.
+ * because an organization role shadows an environment role), its resource-scoped
+ * assignments, and the ones a native group's grant derives for each of the group's members.
+ * The emulator materializes those derived assignments when they are read rather than
+ * storing them, so a group grant counts while its group still has a member.
  */
 export function roleHasAssignments(ws: WorkOSStore, role: WorkOSRole): boolean {
   if (ws.roleAssignments.findBy('role_id', role.id).length > 0) return true;
+  const heldThroughGroup = ws.groupRoleAssignments
+    .findBy('role_id', role.id)
+    .some(
+      (grant) => ws.groups.get(grant.group_id) && ws.groupMemberships.findBy('group_id', grant.group_id).length > 0,
+    );
+  if (heldThroughGroup) return true;
   if (role.organization_id === null) return false;
   return ws.organizationMemberships
     .findBy('organization_id', role.organization_id)

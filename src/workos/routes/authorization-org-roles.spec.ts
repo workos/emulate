@@ -367,6 +367,49 @@ describe('Authorization org role routes', () => {
     );
   });
 
+  it('refuses to delete an org role a native group with members still holds', async () => {
+    const org = await createOrg('Group Org');
+    await createOrgRole(org.id, { slug: 'org-grouped', name: 'Grouped' });
+    const user = await json(
+      await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'grouped@test.com' }) }),
+    );
+    const membership = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slug: 'member' }),
+      }),
+    );
+    const group = await json(
+      await req(`/organizations/${org.id}/groups`, { method: 'POST', body: JSON.stringify({ name: 'Grouped' }) }),
+    );
+    // A grant to an empty group derives no assignment, so the role is still deletable
+    const grant = await json(
+      await req(`/authorization/groups/${group.id}/role_assignments`, {
+        method: 'POST',
+        body: JSON.stringify({ role_slug: 'org-grouped' }),
+      }),
+    );
+    expect(grant.object).toBe('group_role_assignment');
+    await req(`/organizations/${org.id}/groups/${group.id}/organization-memberships`, {
+      method: 'POST',
+      body: JSON.stringify({ organization_membership_id: membership.id }),
+    });
+
+    const res = await req(`/authorization/organizations/${org.id}/roles/org-grouped`, { method: 'DELETE' });
+    expect(res.status).toBe(409);
+    expect((await json(res)).code).toBe('role_has_assignments');
+    expect((await req(`/authorization/groups/${group.id}/role_assignments/${grant.id}`)).status).toBe(200);
+
+    // Once the group has no members the grant derives nothing, and the delete takes it along
+    await req(`/organizations/${org.id}/groups/${group.id}/organization-memberships/${membership.id}`, {
+      method: 'DELETE',
+    });
+    expect((await req(`/authorization/organizations/${org.id}/roles/org-grouped`, { method: 'DELETE' })).status).toBe(
+      204,
+    );
+    expect((await req(`/authorization/groups/${group.id}/role_assignments/${grant.id}`)).status).toBe(404);
+  });
+
   it('does not count a membership of another organization that holds the same slug', async () => {
     const org = await createOrg('Mine Org');
     const other = await createOrg('Theirs Org');
