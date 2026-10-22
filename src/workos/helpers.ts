@@ -118,10 +118,13 @@ export function formatOrganization(
   return result;
 }
 
-const DOMAIN_EXCLUDE = new Set([...INTERNAL_FIELDS, 'verification_token', 'verification_prefix']);
-
+/**
+ * Both production serializers (the standalone domain and the organization's embedded list) render
+ * `verification_token`, `verification_prefix` and `verification_strategy` whenever the domain has
+ * them, so the fields appear once DNS verification has started and are absent before.
+ */
 export function formatDomain(domain: WorkOSOrganizationDomain): Record<string, unknown> {
-  return formatEntity(domain, { exclude: DOMAIN_EXCLUDE });
+  return formatEntity(domain);
 }
 
 // The owning organization and the whole invitation state stay internal: the spec's ItContact

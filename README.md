@@ -388,6 +388,57 @@ plus an `authentication_challenge`) instead of a session, completed with the
 `urn:workos:oauth:grant-type:mfa-totp` grant — so MFA administration and step-up login flows
 need no post-boot enrollment calls that in-memory state would lose on restart.
 
+### Organization domains
+
+A domain reaches an organization three ways, and each stores it lowercased:
+
+```yaml
+organizations:
+  - name: Acme Corp
+    domains:
+      - domain: acme.com
+        state: verified # or pending, the default
+```
+
+```bash
+# domain_data on create or update: `state` is required, `pending` or `verified`
+curl -X POST http://localhost:4100/organizations \
+  -H "Authorization: Bearer sk_test_ci_key" -H "Content-Type: application/json" \
+  -d '{"name":"Acme Corp","domain_data":[{"domain":"acme.com","state":"verified"}]}'
+
+# The standalone route always creates the domain pending and starts DNS verification on it
+curl -X POST http://localhost:4100/organization_domains \
+  -H "Authorization: Bearer sk_test_ci_key" -H "Content-Type: application/json" \
+  -d '{"organization_id":"org_01K...","domain":"acme.dev"}'
+```
+
+Production's validation applies to `domain_data` and to `POST /organization_domains`. A malformed
+domain, or an entry whose `state` is missing or not one of the two, is the validation pipe's
+`422 {"message":"Validation failed","errors":[{"field":"domain_data.0.domain","code":"domain must be valid domain name"}]}`
+(with `state should not be empty` or `state must be one of the following values: pending, verified`
+for the state). A `domain_data` list that names a domain twice in any casing is
+`422 {"error":"Unprocessable Entity","message":"\`domain_data\` must contain unique domains"}`, and
+a public consumer domain — `gmail.com`, `icloud.com`, `outlook.*`and the rest of production's
+list, vendored in`src/workos/consumer-domains.ts`— is`422`with`The domain icloud.com is a public consumer domain and cannot be attached to an organization.`;
+both are refused before the organization is written, so no `organization.created`or`organization.updated`precedes them. Adding a domain the organization already holds through`POST /organization_domains`is`409 domain_already_exists`. Two organizations may share a
+domain: production forbids that only behind its `enforce-unique-organization-domains-in-environment`flag, which the emulator does not model.`external_id`is unique across organizations — reusing
+another organization's is`400 external_id_already_used` on create and update.
+
+**`POST /organization_domains/{id}/verify` starts verification; it does not verify.** As in
+production it answers `201` with the domain `pending` under `verification_strategy: dns` and a
+fresh 25-character `verification_token` (calling it again rotates the token), fires
+`organization_domain.updated`, and is `400 domain_already_verified` on a verified domain.
+Production then has a cron resolve the TXT record; the emulator resolves no DNS, so the domain
+stays pending and no route ever fires `organization_domain.verified`. To get a verified domain,
+seed `state: verified` or send `domain_data[].state: verified` on the organization — production
+accepts both. On update, a domain resent with a different state is deleted and recreated under a
+new id (`organization_domain.deleted`, then `organization_domain.created`), exactly as
+production's `recreateExistingDomainsWithDifferentState` does; one resent unchanged keeps its
+row, token and all. Verified domains created either way record `verification_strategy: manual`;
+pending ones carry no verification fields until `verify` runs. From Node, flipping a domain in
+the store — `getWorkOSStore(store).organizationDomains.update(id, { state: 'verified' })` — fires
+`organization_domain.verified`, the one way to exercise that webhook.
+
 ### Organization IT contacts
 
 `/organizations/{id}/it_contacts` is implemented in full — list, create, delete, invite and
@@ -1420,19 +1471,19 @@ The typo guard applies wherever an address is written rather than looked up: bot
 
 Authentication events carry the spec payload `{ type, status, user_id, email, ip_address, user_agent }` (plus `error` on failures and `sso` details on SSO events).
 
-| Trigger                                | Events                                                                                                   |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Login success (per method)             | `authentication.{oauth,password,magic_auth,email_verification,mfa,sso}_succeeded`                        |
-| Login failure (bad/expired credential) | `authentication.{oauth,password,magic_auth,email_verification,mfa,sso}_failed`                           |
-| Sessions                               | `session.created`, `session.revoked`                                                                     |
-| Users                                  | `user.created`, `user.updated`, `user.deleted`                                                           |
-| Login-flow resources                   | `magic_auth.created`, `email_verification.created`, `password_reset.created`, `password_reset.succeeded` |
-| Organizations & domains                | `organization.*`, `organization_domain.*` (incl. `organization_domain.verified`)                         |
-| Memberships & invitations              | `organization_membership.*`, `invitation.{created,accepted,revoked,resent}`                              |
-| Connections                            | `connection.activated`, `connection.deactivated`, `connection.deleted`                                   |
-| Directory Sync                         | `dsync.activated`, `dsync.deleted`, `dsync.user.*`, `dsync.group.*`                                      |
-| Roles & permissions                    | `role.*`, `organization_role.*`, `permission.*`                                                          |
-| API keys & feature flags               | `api_key.{created,updated,revoked}`, `flag.{created,updated,deleted}`                                    |
+| Trigger                                | Events                                                                                                                                                   |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Login success (per method)             | `authentication.{oauth,password,magic_auth,email_verification,mfa,sso}_succeeded`                                                                        |
+| Login failure (bad/expired credential) | `authentication.{oauth,password,magic_auth,email_verification,mfa,sso}_failed`                                                                           |
+| Sessions                               | `session.created`, `session.revoked`                                                                                                                     |
+| Users                                  | `user.created`, `user.updated`, `user.deleted`                                                                                                           |
+| Login-flow resources                   | `magic_auth.created`, `email_verification.created`, `password_reset.created`, `password_reset.succeeded`                                                 |
+| Organizations & domains                | `organization.*`, `organization_domain.{created,updated,deleted}` (`verified` only through the store, see [Organization domains](#organization-domains)) |
+| Memberships & invitations              | `organization_membership.*`, `invitation.{created,accepted,revoked,resent}`                                                                              |
+| Connections                            | `connection.activated`, `connection.deactivated`, `connection.deleted`                                                                                   |
+| Directory Sync                         | `dsync.activated`, `dsync.deleted`, `dsync.user.*`, `dsync.group.*`                                                                                      |
+| Roles & permissions                    | `role.*`, `organization_role.*`, `permission.*`                                                                                                          |
+| API keys & feature flags               | `api_key.{created,updated,revoked}`, `flag.{created,updated,deleted}`                                                                                    |
 
 The full catalog (including names the emulator never emits, like `authentication.passkey_*` and `vault.*`) lives in `src/workos/generated/events.ts`, generated from the [`@workos/openapi-spec`](https://www.npmjs.com/package/@workos/openapi-spec) package.
 

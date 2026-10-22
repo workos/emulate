@@ -79,6 +79,29 @@ export class NestNotFoundError extends WorkOSApiError {
   }
 }
 
+/**
+ * The same code-less Nest rendering as `NestNotFoundError`, for the other statuses. Nest raises
+ * these two ways: an exception built from a plain string (`new UnprocessableEntityException('…')`),
+ * whose body is `{ message, error: 'Unprocessable Entity' }`, and one built from a code-less
+ * object, like the validation pipe's `{ message: 'Validation failed', errors }`. `code` is still
+ * kept in-process — error hooks and event payloads read `{ code, message }` — but is not rendered.
+ */
+export class PlainApiError extends WorkOSApiError {
+  /** Nest's status text, rendered as `error` when production raised the exception from a string. */
+  readonly error?: string;
+
+  constructor(
+    status: number,
+    message: string,
+    code: string,
+    opts?: { error?: string; errors?: WorkOSApiError['errors'] },
+  ) {
+    super(status, message, code, opts?.errors);
+    this.name = 'PlainApiError';
+    this.error = opts?.error;
+  }
+}
+
 export function createApiErrorHandler(): ErrorHandler {
   return (err, c) => {
     if (err instanceof OauthApiError) {
@@ -90,6 +113,12 @@ export function createApiErrorHandler(): ErrorHandler {
     }
     if (err instanceof NestNotFoundError) {
       return c.json({ message: err.message, ...(err.error ? { error: err.error } : {}) }, 404);
+    }
+    if (err instanceof PlainApiError) {
+      const body: Record<string, unknown> = { message: err.message };
+      if (err.error) body.error = err.error;
+      if (err.errors) body.errors = err.errors;
+      return c.json(body, err.status as ContentfulStatusCode);
     }
     if (err instanceof WorkOSApiError) {
       const body: Record<string, unknown> = {
@@ -137,6 +166,19 @@ export function notFound(entityType: string, entityId?: string): EntityNotFoundE
 
 export function validationError(message: string, errors?: WorkOSApiError['errors']): WorkOSApiError {
   return new WorkOSApiError(422, message, 'unprocessable_entity', errors);
+}
+
+/** Production's `UnprocessableEntityException('<message>')`: 422 `{ message, error: 'Unprocessable Entity' }`, no `code`. */
+export function unprocessableEntity(message: string): PlainApiError {
+  return new PlainApiError(422, message, 'unprocessable_entity', { error: 'Unprocessable Entity' });
+}
+
+/**
+ * Production's validation pipe: 422 `{ message: 'Validation failed', errors: [{ field, code }] }`
+ * with no top-level `code`; each entry's `code` is the failed constraint's message.
+ */
+export function validationFailed(errors: Array<{ field: string; code: string }>): PlainApiError {
+  return new PlainApiError(422, 'Validation failed', 'unprocessable_entity', { errors });
 }
 
 export function unauthorized(): WorkOSApiError {

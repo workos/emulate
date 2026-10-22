@@ -108,7 +108,7 @@ describe('Organization routes', () => {
       method: 'POST',
       body: JSON.stringify({
         name: 'Delete Test',
-        domain_data: [{ domain: 'delete.com' }],
+        domain_data: [{ domain: 'delete.com', state: 'pending' }],
       }),
     });
     const org = await json(createRes);
@@ -186,6 +186,215 @@ describe('Organization routes', () => {
   it('rejects unauthenticated request', async () => {
     const res = await app.request('/organizations', { method: 'GET' });
     expect(res.status).toBe(401);
+  });
+
+  describe('domain_data', () => {
+    const create = (body: Record<string, unknown>) =>
+      req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'Acme Corp', ...body }) });
+    const eventsOf = async (name: string): Promise<any[]> => (await json(await req(`/events?events[]=${name}`))).data;
+
+    it('requires a state on every entry', async () => {
+      const res = await create({ domain_data: [{ domain: 'acme.com' }] });
+      expect(res.status).toBe(422);
+      expect(await json(res)).toEqual({
+        message: 'Validation failed',
+        errors: [{ field: 'domain_data.0.state', code: 'state should not be empty' }],
+      });
+    });
+
+    it('accepts only pending and verified as a state', async () => {
+      const res = await create({ domain_data: [{ domain: 'acme.com', state: 'legacy_verified' }] });
+      expect(res.status).toBe(422);
+      expect(await json(res)).toEqual({
+        message: 'Validation failed',
+        errors: [
+          { field: 'domain_data.0.state', code: 'state must be one of the following values: pending, verified' },
+        ],
+      });
+    });
+
+    it('rejects a malformed domain, naming its index', async () => {
+      const res = await create({
+        domain_data: [
+          { domain: 'acme.com', state: 'verified' },
+          { domain: 'not-a-domain', state: 'verified' },
+        ],
+      });
+      expect(res.status).toBe(422);
+      expect(await json(res)).toEqual({
+        message: 'Validation failed',
+        errors: [{ field: 'domain_data.1.domain', code: 'domain must be valid domain name' }],
+      });
+    });
+
+    it('rejects the same domain listed twice, in any casing', async () => {
+      const res = await create({
+        domain_data: [
+          { domain: 'company.com', state: 'verified' },
+          { domain: 'cOmPaNy.CoM', state: 'verified' },
+        ],
+      });
+      expect(res.status).toBe(422);
+      expect(await json(res)).toEqual({
+        error: 'Unprocessable Entity',
+        message: '`domain_data` must contain unique domains',
+      });
+    });
+
+    it('rejects a public consumer domain before the organization is written', async () => {
+      const res = await create({ domain_data: [{ domain: 'icloud.com', state: 'verified' }] });
+      expect(res.status).toBe(422);
+      expect(await json(res)).toEqual({
+        error: 'Unprocessable Entity',
+        message: 'The domain icloud.com is a public consumer domain and cannot be attached to an organization.',
+      });
+      expect((await json(await req('/organizations'))).data).toHaveLength(0);
+      expect(await eventsOf('organization.created')).toHaveLength(0);
+    });
+
+    it('stores domains lowercased: verified under the manual strategy, pending with no verification fields', async () => {
+      const org = await json(
+        await create({
+          domain_data: [
+            { domain: 'Acme.COM', state: 'verified' },
+            { domain: 'acme.dev', state: 'pending' },
+          ],
+        }),
+      );
+      expect(org.domains.map((d: any) => d.domain)).toEqual(['acme.com', 'acme.dev']);
+      expect(org.domains[0]).toMatchObject({ state: 'verified', verification_strategy: 'manual' });
+      expect(org.domains[0]).not.toHaveProperty('verification_token');
+      expect(org.domains[0]).not.toHaveProperty('verification_prefix');
+      expect(org.domains[1].state).toBe('pending');
+      expect(org.domains[1]).not.toHaveProperty('verification_strategy');
+      expect(org.domains[1]).not.toHaveProperty('verification_token');
+    });
+
+    describe('on update', () => {
+      const put = (id: string, body: Record<string, unknown>) =>
+        req(`/organizations/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+
+      it('recreates a domain resent with a different state under a new id', async () => {
+        const org = await json(await create({ domain_data: [{ domain: 'acme.com', state: 'pending' }] }));
+        const [pending] = org.domains;
+
+        const res = await put(org.id, { domain_data: [{ domain: 'acme.com', state: 'verified' }] });
+        expect(res.status).toBe(200);
+        const { domains } = await json(res);
+        expect(domains).toHaveLength(1);
+        expect(domains[0]).toMatchObject({ domain: 'acme.com', state: 'verified', verification_strategy: 'manual' });
+        expect(domains[0].id).not.toBe(pending.id);
+        expect((await req(`/organization_domains/${pending.id}`)).status).toBe(404);
+        expect((await eventsOf('organization_domain.deleted')).map((e) => e.data.id)).toEqual([pending.id]);
+        expect((await eventsOf('organization_domain.created')).map((e) => e.data.id).sort()).toEqual(
+          [pending.id, domains[0].id].sort(),
+        );
+      });
+
+      it('keeps a domain resent unchanged, token and all, and clears the rest', async () => {
+        const org = await json(
+          await create({
+            domain_data: [
+              { domain: 'acme.com', state: 'pending' },
+              { domain: 'old.com', state: 'verified' },
+            ],
+          }),
+        );
+        const started = await json(await req(`/organization_domains/${org.domains[0].id}/verify`, { method: 'POST' }));
+
+        const updated = await json(
+          await put(org.id, {
+            name: 'Acme Inc',
+            domain_data: [
+              { domain: 'ACME.com', state: 'pending' },
+              { domain: 'acme.dev', state: 'verified' },
+            ],
+          }),
+        );
+        expect(updated.name).toBe('Acme Inc');
+        expect(updated.domains.map((d: any) => d.domain)).toEqual(['acme.com', 'acme.dev']);
+        expect(updated.domains[0]).toMatchObject({
+          id: started.id,
+          verification_strategy: 'dns',
+          verification_token: started.verification_token,
+        });
+        expect(updated.domains[1]).toMatchObject({ state: 'verified', verification_strategy: 'manual' });
+
+        const cleared = await json(await put(org.id, { domain_data: [] }));
+        expect(cleared.domains).toEqual([]);
+      });
+
+      it('applies the same validation and consumer-domain rules before the organization is written', async () => {
+        const org = await json(await create({}));
+
+        const duplicate = await put(org.id, {
+          domain_data: [
+            { domain: 'domain.com', state: 'verified' },
+            { domain: 'domain.com', state: 'verified' },
+          ],
+        });
+        expect(duplicate.status).toBe(422);
+        expect(await json(duplicate)).toEqual({
+          error: 'Unprocessable Entity',
+          message: '`domain_data` must contain unique domains',
+        });
+
+        const consumer = await put(org.id, {
+          name: 'Renamed',
+          domain_data: [{ domain: 'icloud.com', state: 'verified' }],
+        });
+        expect(consumer.status).toBe(422);
+        expect(await json(consumer)).toEqual({
+          error: 'Unprocessable Entity',
+          message: 'The domain icloud.com is a public consumer domain and cannot be attached to an organization.',
+        });
+        expect((await json(await req(`/organizations/${org.id}`))).name).toBe('Acme Corp');
+        expect(await eventsOf('organization.updated')).toHaveLength(0);
+
+        const missingState = await put(org.id, { domain_data: [{ domain: 'domain.com' }] });
+        expect(missingState.status).toBe(422);
+        expect(await json(missingState)).toEqual({
+          message: 'Validation failed',
+          errors: [{ field: 'domain_data.0.state', code: 'state should not be empty' }],
+        });
+      });
+    });
+  });
+
+  describe('external_id', () => {
+    const create = (body: Record<string, unknown>) =>
+      req('/organizations', { method: 'POST', body: JSON.stringify(body) });
+    const put = (id: string, body: Record<string, unknown>) =>
+      req(`/organizations/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+    const alreadyUsed = {
+      message: 'The external_id provided has already been assigned to another organization.',
+      code: 'external_id_already_used',
+    };
+
+    it("refuses a create that reuses another organization's external_id", async () => {
+      await create({ name: 'First', external_id: 'ext_1' });
+      const res = await create({ name: 'Second', external_id: 'ext_1' });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual(alreadyUsed);
+      expect((await json(await req('/organizations'))).data).toHaveLength(1);
+    });
+
+    it("refuses an update that reuses another organization's external_id, but accepts its own", async () => {
+      const first = await json(await create({ name: 'First', external_id: 'ext_1' }));
+      const second = await json(await create({ name: 'Second', external_id: 'ext_2' }));
+
+      const clash = await put(second.id, { external_id: 'ext_1' });
+      expect(clash.status).toBe(400);
+      expect(await json(clash)).toEqual(alreadyUsed);
+      expect((await json(await req(`/organizations/${second.id}`))).external_id).toBe('ext_2');
+
+      const own = await put(first.id, { external_id: 'ext_1' });
+      expect(own.status).toBe(200);
+
+      // Clearing it frees the value for another organization.
+      expect((await json(await put(first.id, { external_id: null }))).external_id).toBeNull();
+      expect((await put(second.id, { external_id: 'ext_1' })).status).toBe(200);
+    });
   });
 
   describe('authorized applications', () => {

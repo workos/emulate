@@ -332,7 +332,17 @@ export function buildJwtTemplateContext(
 
   const organization = ws.organizations.get(organizationId);
   if (organization) {
-    context.organization = formatOrganization(organization, ws);
+    const organizationContext = formatOrganization(organization, ws);
+    // Production's context was probed on domains carrying no verification secrets, so whether it
+    // renders `verification_token`/`verification_prefix` into claims is unknown; a DNS-pending
+    // domain carries a token, and it stays out of the signed token regardless.
+    organizationContext.domains = (organizationContext.domains as Record<string, unknown>[]).map((domain) => {
+      const claim = { ...domain };
+      delete claim.verification_token;
+      delete claim.verification_prefix;
+      return claim;
+    });
+    context.organization = organizationContext;
   }
 
   const membership = ws.organizationMemberships

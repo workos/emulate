@@ -1,15 +1,36 @@
-import { type RouteContext, notFound, validationError, parseJsonBody, parseListParams } from '../../core/index.js';
+import {
+  type RouteContext,
+  notFound,
+  validationError,
+  parseJsonBody,
+  parseListParams,
+  WorkOSApiError,
+} from '../../core/index.js';
 import { syncOrganizationResource } from '../organization-resource.js';
 import { getWorkOSStore } from '../store.js';
 import {
   formatOrganization,
-  generateVerificationToken,
   formatListResponse,
   formatAuthorizedApplication,
   revokeApiKeysForOwner,
 } from '../helpers.js';
 import type { WorkOSOrganizationDomain } from '../entities.js';
 import { deleteAgentInstancesForOrganization } from '../agent-sessions.js';
+import {
+  type DomainDataEntry,
+  insertOrganizationDomain,
+  parseDomainData,
+  rejectConsumerDomains,
+} from '../domain-helpers.js';
+
+/** Production's `external_id` uniqueness failure, the same 400 on create and update. */
+function externalIdAlreadyUsed(): WorkOSApiError {
+  return new WorkOSApiError(
+    400,
+    'The external_id provided has already been assigned to another organization.',
+    'external_id_already_used',
+  );
+}
 
 export function organizationRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -22,10 +43,21 @@ export function organizationRoutes(ctx: RouteContext): void {
       throw validationError('Name is required', [{ field: 'name', code: 'required' }]);
     }
 
+    // Production's order: the payload is validated, then the external_id is checked against the
+    // environment, then the domains are created — where a consumer domain fails the transaction.
+    // Everything is checked before the organization is written so no `organization.created`
+    // precedes a rejection.
+    const domainData = parseDomainData(body);
+    const externalId = (body.external_id as string | null | undefined) ?? null;
+    if (externalId !== null && ws.organizations.findOneBy('external_id', externalId)) {
+      throw externalIdAlreadyUsed();
+    }
+    if (domainData) rejectConsumerDomains(domainData.map((d) => d.domain));
+
     const org = ws.organizations.insert({
       object: 'organization',
       name: name.trim(),
-      external_id: (body.external_id as string) ?? null,
+      external_id: externalId,
       metadata: (body.metadata as Record<string, string>) ?? {},
       stripe_customer_id: null,
       allow_profiles_outside_organization: false,
@@ -35,19 +67,8 @@ export function organizationRoutes(ctx: RouteContext): void {
 
     syncOrganizationResource(ws, org);
 
-    const domainData = body.domain_data as Array<{ domain: string; state?: string }> | undefined;
-    if (domainData && Array.isArray(domainData)) {
-      for (const dd of domainData) {
-        ws.organizationDomains.insert({
-          object: 'organization_domain',
-          organization_id: org.id,
-          domain: dd.domain,
-          state: dd.state === 'verified' ? 'verified' : 'pending',
-          verification_strategy: 'manual',
-          verification_token: generateVerificationToken(),
-          verification_prefix: 'workos-verify',
-        });
-      }
+    for (const entry of domainData ?? []) {
+      insertOrganizationDomain(ws, org.id, entry);
     }
 
     return c.json(formatOrganization(org, ws), 201);
@@ -131,41 +152,45 @@ export function organizationRoutes(ctx: RouteContext): void {
       }
       updates.name = (body.name as string).trim();
     }
-    if ('external_id' in body) updates.external_id = body.external_id ?? null;
+    const domainData = parseDomainData(body);
+    if ('external_id' in body) {
+      const externalId = (body.external_id as string | null | undefined) ?? null;
+      if (externalId !== null) {
+        const holder = ws.organizations.findOneBy('external_id', externalId);
+        if (holder && holder.id !== org.id) throw externalIdAlreadyUsed();
+      }
+      updates.external_id = externalId;
+    }
     if ('metadata' in body) updates.metadata = body.metadata ?? {};
     if ('allow_profiles_outside_organization' in body) {
       updates.allow_profiles_outside_organization = Boolean(body.allow_profiles_outside_organization);
     }
 
-    if ('domain_data' in body && Array.isArray(body.domain_data)) {
+    // Production sets the domains with `recreateExistingDomainsWithDifferentState`: a row survives
+    // only when the payload repeats both its domain and its state, so a pending domain resent as
+    // verified is deleted and recreated verified under a new id, while a domain resent unchanged
+    // keeps its row, token and all. The consumer-domain check covers only what will be created,
+    // and runs before the organization is written so no `organization.updated` precedes a 422.
+    let domainChanges: { remove: WorkOSOrganizationDomain[]; add: DomainDataEntry[] } | undefined;
+    if (domainData) {
       const existing = ws.organizationDomains.findBy('organization_id', org.id);
-      const incoming = body.domain_data as Array<{ domain: string; state?: string }>;
-      const incomingDomains = new Set(incoming.map((d) => d.domain));
-
-      for (const d of existing) {
-        if (!incomingDomains.has(d.domain)) {
-          ws.organizationDomains.delete(d.id);
-        }
-      }
-
-      const existingDomains = new Set(existing.map((d) => d.domain));
-      for (const dd of incoming) {
-        if (!existingDomains.has(dd.domain)) {
-          ws.organizationDomains.insert({
-            object: 'organization_domain',
-            organization_id: org.id,
-            domain: dd.domain,
-            state: dd.state === 'verified' ? 'verified' : 'pending',
-            verification_strategy: 'manual',
-            verification_token: generateVerificationToken(),
-            verification_prefix: 'workos-verify',
-          });
-        }
-      }
+      const same = (a: { domain: string; state: string }, b: { domain: string; state: string }) =>
+        a.domain === b.domain && a.state === b.state;
+      domainChanges = {
+        remove: existing.filter((d) => !domainData.some((e) => same(d, e))),
+        add: domainData.filter((e) => !existing.some((d) => same(d, e))),
+      };
+      rejectConsumerDomains(domainChanges.add.map((e) => e.domain));
     }
 
     const updated = ws.organizations.update(org.id, updates);
     syncOrganizationResource(ws, updated!);
+
+    if (domainChanges) {
+      for (const d of domainChanges.remove) ws.organizationDomains.delete(d.id);
+      for (const entry of domainChanges.add) insertOrganizationDomain(ws, org.id, entry);
+    }
+
     return c.json(formatOrganization(updated!, ws));
   });
 

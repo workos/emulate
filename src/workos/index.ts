@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { ServicePlugin, Store, RouteContext, ApiKeyMap } from '../core/index.js';
 import { generateId } from '../core/index.js';
 import { syncOrganizationResource } from './organization-resource.js';
+import { insertOrganizationDomain } from './domain-helpers.js';
 import { getWorkOSStore } from './store.js';
 import { organizationRoutes } from './routes/organizations.js';
 import { itContactRoutes } from './routes/it-contacts.js';
@@ -644,18 +645,11 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
 
       syncOrganizationResource(ws, org);
 
-      if (orgConfig.domains) {
-        for (const dd of orgConfig.domains) {
-          ws.organizationDomains.insert({
-            object: 'organization_domain',
-            organization_id: org.id,
-            domain: dd.domain,
-            state: dd.state ?? 'pending',
-            verification_strategy: 'manual',
-            verification_token: generateVerificationToken(),
-            verification_prefix: 'workos-verify',
-          });
-        }
+      // Seeded domains are shaped like `domain_data` on create: verified ones carry the `manual`
+      // strategy, pending ones no verification fields. The seed is not validated against the
+      // API's domain rules, so a test can pin whatever domain it needs.
+      for (const dd of orgConfig.domains ?? []) {
+        insertOrganizationDomain(ws, org.id, { domain: dd.domain, state: dd.state ?? 'pending' });
       }
 
       if (orgConfig.memberships) {

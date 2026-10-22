@@ -31,9 +31,16 @@ export interface WorkOSOrganizationDomain extends Entity {
   organization_id: string;
   domain: string;
   state: 'verified' | 'pending';
-  verification_strategy: 'manual' | 'dns';
-  verification_token: string;
-  verification_prefix: string;
+  /**
+   * How the domain was, or is being, verified. Production records `manual` on a domain created
+   * already verified and `dns` once verification starts; a pending domain that has not started
+   * verification has none, and the serializers omit the field.
+   */
+  verification_strategy?: 'manual' | 'dns';
+  /** The DNS TXT token, minted when verification starts (`POST /organization_domains/{id}/verify`). */
+  verification_token?: string;
+  /** Branded TXT record prefix. Only production's dashboard flows set one; API-created domains have none. */
+  verification_prefix?: string;
 }
 
 export interface WorkOSItContact extends Entity {
