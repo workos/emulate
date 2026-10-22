@@ -6,18 +6,15 @@ import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createEmulator } from '../dist/index.js';
 
-const webhookSecret = 'node_compat_webhook_secret';
+// Assigned from the endpoint the API returns: the signing secret is generated server-side, as in
+// production, and a `secret` in the create body is ignored.
+let webhookSecret;
 
 const receiver = await startWebhookReceiver();
 let emulator;
 
 try {
-  // The receiver is plain `http://` with a pinned secret: `POST /webhook_endpoints` refuses
-  // both, as production does, so the endpoint is seeded.
-  emulator = await createEmulator({
-    port: 0,
-    seed: { webhookEndpoints: [{ endpoint_url: receiver.url, secret: webhookSecret, events: ['user.created'] }] },
-  });
+  emulator = await createEmulator({ port: 0 });
 
   const api = (path, init = {}) =>
     fetch(`${emulator.url}${path}`, {
@@ -38,12 +35,16 @@ try {
   const jwks = await jwksResponse.json();
   assert.ok(Array.isArray(jwks.keys) && jwks.keys.length > 0, 'JWKS must contain at least one key');
 
-  const endpointsResponse = await api('/webhook_endpoints');
-  assert.equal(endpointsResponse.status, 200);
-  const endpoints = await endpointsResponse.json();
-  assert.equal(endpoints.data.length, 1);
-  assert.equal(endpoints.data[0].secret, webhookSecret);
-  assert.equal(endpoints.data[0].status, 'enabled');
+  const endpointResponse = await api('/webhook_endpoints', {
+    method: 'POST',
+    body: JSON.stringify({
+      endpoint_url: receiver.url,
+      events: ['user.created'],
+    }),
+  });
+  assert.equal(endpointResponse.status, 201);
+  webhookSecret = (await endpointResponse.json()).secret;
+  assert.equal(typeof webhookSecret, 'string');
 
   const email = 'node-compat@example.com';
   const userResponse = await api('/user_management/users', {

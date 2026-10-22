@@ -307,8 +307,8 @@ export interface WorkOSSeedPermission {
 
 export interface WorkOSSeedWebhookEndpoint {
   /**
-   * Where deliveries go. Any URL the receiver answers on: the API holds `POST /webhook_endpoints`
-   * to HTTPS as production does, so a plain `http://` receiver — the usual local setup — is
+   * Where deliveries go. Any URL the receiver answers on: `POST /webhook_endpoints` holds a URL to
+   * HTTPS as production does (loopback hosts excepted), so an `http://` receiver elsewhere is
    * registered here.
    */
   endpoint_url?: string;

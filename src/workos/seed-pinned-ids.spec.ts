@@ -154,10 +154,9 @@ describe('Seeding pinned organization and user ids', () => {
 
   it('delivers the pinned ids in webhooks', async () => {
     receiver = await startWebhookReceiver();
-    // The endpoint is seeded (the receiver is plain `http://`, which the API refuses as
-    // production does). An endpoint from a seed file receives no deliveries for that same
-    // seed data — it is registered last, mirroring real WorkOS — so the pinned ids are
-    // carried by the events the mutations below fire after seeding.
+    // An endpoint from a seed file receives no deliveries for that same seed data — it is
+    // registered last, mirroring real WorkOS — so the pinned ids are carried by the events
+    // the mutations below fire after seeding.
     emulator = await createEmulator({
       port: 0,
       seed: {

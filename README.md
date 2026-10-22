@@ -1252,7 +1252,7 @@ Or register at runtime:
 curl -X POST http://localhost:4100/webhook_endpoints \
   -H "Authorization: Bearer sk_test_default" \
   -H "Content-Type: application/json" \
-  -d '{"endpoint_url":"https://app.example.com/webhooks","events":["user.created","session.created"]}'
+  -d '{"endpoint_url":"http://localhost:5005/webhooks","events":["user.created","session.created"]}'
 ```
 
 The API holds a request to what production holds it to: `endpoint_url` must be an HTTPS URL
@@ -1260,9 +1260,12 @@ The API holds a request to what production holds it to: `endpoint_url` must be a
 `invalid_request_parameters`, with an `unknown_event_type` item per bad name), a URL another
 endpoint already uses is a 409 `duplicate_endpoint`, and the signing secret is generated — a
 `secret` in the body is ignored, as is `enabled`. `PATCH /webhook_endpoints/:id` takes
-`endpoint_url`, `events` and `status` (`enabled` or `disabled`) under the same rules. A plain
-`http://` receiver — the usual local setup — and the catch-all empty `events` list are therefore
-seed-only: the seed is where the emulator holds state the real API would never let you create.
+`endpoint_url`, `events` and `status` (`enabled` or `disabled`) under the same rules. One
+deliberate, emulator-only relaxation: a plain `http://` URL is accepted when its host is a
+loopback address (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`), since a receiver on this
+machine is the whole point and rarely has a certificate. Any other `http://` receiver, a pinned
+`secret`, and the catch-all empty `events` list are seed-only: the seed is where the emulator
+holds state the real API would never let you create.
 
 ### 2. Walk the login flow
 
