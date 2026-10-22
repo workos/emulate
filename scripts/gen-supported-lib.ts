@@ -117,7 +117,7 @@ export const FEATURES: FeatureDef[] = [
     name: 'Authentication',
     tags: ['user-management.authentication', 'user-management.magic-auth'],
     notes:
-      "All grant types are hand-written rather than generated from the spec, and only production's public grant names are accepted: anything else is the 422 production's body validation gives. Refresh tokens rotate on every exchange, with the documented 30-second replay grace period, and a refresh can only switch into an organization the user is an active member of. A pending_authentication_token is bound to the step that issued it, so an MFA challenge or email-verification gate cannot be skipped by spending its token on another grant.",
+      "All grant types are hand-written rather than generated from the spec, and only production's public grant names are accepted: anything else is the 422 production's body validation gives. Refresh tokens rotate on every exchange, with the documented 30-second replay grace period, and a refresh can only switch into an organization the user is an active member of. A pending_authentication_token is bound to the step that issued it, so an MFA challenge or email-verification gate cannot be skipped by spending its token on another grant. A Magic Auth or email verification code is single-use, locks after three wrong codes, and is compared only while it is the latest issued to the user: requesting another retires it.",
   },
   {
     name: 'Organization Memberships',
@@ -158,7 +158,7 @@ export const FEATURES: FeatureDef[] = [
     name: 'Multi-Factor Auth',
     tags: ['multi-factor-auth', 'multi-factor-auth.challenges', 'user-management.multi-factor-authentication'],
     notes:
-      'TOTP codes are accepted without verifying the shared secret. A factor is listed and challenged only once its enrollment challenge has been verified, and every one-time code is single-use, compared only while it is the latest issued, and locked after three wrong codes, as in production.',
+      'TOTP codes are accepted without verifying the shared secret. A factor is listed and challenged only once its enrollment challenge has been verified, and a challenge is single-use and locks after three wrong codes, as in production; a challenge is named by id, so issuing another does not retire it.',
   },
   {
     name: 'FGA / Authorization',

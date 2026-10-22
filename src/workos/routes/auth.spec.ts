@@ -394,6 +394,8 @@ describe('Auth routes', () => {
       });
     const sendCode = async (userId: string) =>
       (await json(await req(`/user_management/users/${userId}/email_verification/send`, { method: 'POST' }))).code;
+    const latestVerificationFor = (userId: string) =>
+      getWorkOSStore(store).emailVerifications.findBy('user_id', userId).at(-1)!;
     /** The token the password gate would have issued for the user, minted directly so a test can hold several. */
     let minted = 0;
     const gateTokenFor = (userId: string) => {
@@ -459,14 +461,17 @@ describe('Auth routes', () => {
     it('compares against the latest code sent, and reports expiry by name', async () => {
       const user = await createUser('latest@test.com', { email_verified: false });
       const token = gateTokenFor(user.id);
-      const first = await sendCode(user.id);
-      const second = await sendCode(user.id);
-      expect((await json(await verifyWith(token, first))).code).toBe('invalid_one_time_code');
-
       const ws = getWorkOSStore(store);
-      const latest = ws.emailVerifications.findBy('user_id', user.id).find((v) => v.code === second)!;
+      // Known codes, since two random six-digit codes can coincide.
+      await sendCode(user.id);
+      ws.emailVerifications.update(latestVerificationFor(user.id).id, { code: '111111' });
+      await sendCode(user.id);
+      const latest = latestVerificationFor(user.id);
+      ws.emailVerifications.update(latest.id, { code: '222222' });
+      expect((await json(await verifyWith(token, '111111'))).code).toBe('invalid_one_time_code');
+
       ws.emailVerifications.update(latest.id, { expires_at: new Date(Date.now() - 1000).toISOString() });
-      const res = await verifyWith(token, second);
+      const res = await verifyWith(token, '222222');
       expect(res.status).toBe(400);
       expect(await json(res)).toEqual({
         code: 'one_time_code_expired',
@@ -1111,8 +1116,9 @@ describe('Auth routes', () => {
   });
 
   /** Request a Magic Auth code for the address, as `POST /user_management/magic_auth` issues it. */
-  const magicAuthCode = async (email: string) =>
-    (await json(await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email }) }))).code;
+  const magicAuthRecord = async (email: string) =>
+    json(await req('/user_management/magic_auth', { method: 'POST', body: JSON.stringify({ email }) }));
+  const magicAuthCode = async (email: string) => (await magicAuthRecord(email)).code;
   const magicAuth = (email: string, code: string) =>
     app.request('/user_management/authenticate', {
       method: 'POST',
@@ -1178,13 +1184,19 @@ describe('Auth routes', () => {
 
   it('compares a magic auth code against the latest one issued, retiring any earlier one', async () => {
     await createUser('resend@test.com');
-    const first = await magicAuthCode('resend@test.com');
-    const second = await magicAuthCode('resend@test.com');
-    expect(first).not.toBe(second);
+    const ws = getWorkOSStore(store);
+    // Known codes, since two random six-digit codes can coincide.
+    const first = await magicAuthRecord('resend@test.com');
+    ws.magicAuths.update(first.id, { code: '111111' });
+    const second = await magicAuthRecord('resend@test.com');
+    ws.magicAuths.update(second.id, { code: '222222' });
 
     // The first code is not the latest, so it is a miss — and the miss counts against the latest.
-    expect((await json(await magicAuth('resend@test.com', first))).code).toBe('invalid_one_time_code');
-    expect((await magicAuth('resend@test.com', second)).status).toBe(200);
+    expect((await json(await magicAuth('resend@test.com', '111111'))).code).toBe('invalid_one_time_code');
+    expect(ws.magicAuths.get(second.id)!.attempts).toBe(1);
+    // Issuing the second retired the first outright: its record is gone, not merely outranked.
+    expect((await req(`/user_management/magic_auth/${first.id}`)).status).toBe(404);
+    expect((await magicAuth('resend@test.com', '222222')).status).toBe(200);
   });
 
   it('fails a PKCE verifier mismatch OAuth-style, like any other bad authorization code', async () => {

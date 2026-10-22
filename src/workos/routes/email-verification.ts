@@ -3,9 +3,8 @@ import { getWorkOSStore } from '../store.js';
 import {
   formatEmailVerification,
   formatUser,
-  generateCode,
-  expiresIn,
   emailsMatch,
+  issueEmailVerificationCode,
   latestOneTimeCode,
   redeemOneTimeCode,
   verifyOneTimeCode,
@@ -25,15 +24,8 @@ export function emailVerificationRoutes(ctx: RouteContext): void {
     const user = ws.users.get(c.req.param('id'));
     if (!user) throw notFound('User', c.req.param('id'));
 
-    const ev = ws.emailVerifications.insert({
-      object: 'email_verification',
-      user_id: user.id,
-      email: user.email,
-      code: generateCode(),
-      expires_at: expiresIn(10),
-      attempts: 0,
-      verified_at: null,
-    });
+    // Retires any earlier code: only the latest is ever compared, here and at the grant.
+    const ev = issueEmailVerificationCode(ws, user);
 
     return c.json(formatEmailVerification(ev), 201);
   });
@@ -59,11 +51,12 @@ export function emailVerificationRoutes(ctx: RouteContext): void {
     // code against by the user's current address (`findInternalEmailFactorByUserlandUser`), so a
     // code issued before the address changed verifies nothing. A user never sent a code at their
     // current address has no challenge to verify against: production's `findLatestByFactorOrThrow`
-    // is a 404 here, not a wrong code.
+    // is a 404 here, not a wrong code. It names the factor id it searched under, which the
+    // emulator has no counterpart for, so no id is reported.
     const ev = latestOneTimeCode(
       ws.emailVerifications.findBy('user_id', user.id).filter((v) => emailsMatch(v.email, user.email)),
     );
-    if (!ev) throw notFound('Email Verification');
+    if (!ev) throw notFound('Authentication Challenge');
 
     switch (verifyOneTimeCode(ws.emailVerifications, ev, code)) {
       case 'expired':

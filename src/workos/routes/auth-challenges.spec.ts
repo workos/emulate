@@ -153,6 +153,18 @@ describe('Auth challenge routes', () => {
     });
   });
 
+  // Each request reads the challenge only after its body has been read, so overlapping guesses
+  // each see the misses before them: four at once still leave exactly one locked out.
+  it('counts overlapping wrong codes separately', async () => {
+    const { factor } = seedUserWithFactor();
+    const challenge = insertChallenge(factor, '123456');
+
+    const results = await Promise.all(Array.from({ length: 4 }, () => verify(challenge.id, '000000')));
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses).toEqual([201, 201, 201, 400]);
+    expect(getWorkOSStore(store).authChallenges.get(challenge.id)!.attempts).toBe(3);
+  });
+
   it('verifying a challenge is what verifies its factor', async () => {
     const { factor } = seedUserWithFactor();
     const ws = getWorkOSStore(store);

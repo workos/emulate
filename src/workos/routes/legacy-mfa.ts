@@ -78,14 +78,17 @@ export function legacyMfaRoutes(ctx: RouteContext): void {
    * default for a POST and what the spec documents.
    */
   app.post('/auth/challenges/:id/verify', async (c) => {
-    const challenge = ws.authChallenges.get(c.req.param('id'));
-    if (!challenge) throw notFound('Authentication Challenge', c.req.param('id'));
-
+    // The body is read before the challenge, not after: the read-compare-count below has to see
+    // the attempts every earlier request recorded, and a challenge fetched before this await
+    // would be a snapshot that overlapping requests all count their miss against once.
     const body = await parseJsonBody(c);
     const code = body.code as string;
     if (!code) {
       throw new WorkOSApiError(400, 'code is required', 'invalid_request');
     }
+
+    const challenge = ws.authChallenges.get(c.req.param('id'));
+    if (!challenge) throw notFound('Authentication Challenge', c.req.param('id'));
 
     const outcome = verifyOneTimeCode(ws.authChallenges, challenge, code);
     switch (outcome) {

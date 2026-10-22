@@ -660,7 +660,9 @@ type OneTimeCode = Entity & OneTimeCodeState & { code: string; expires_at: strin
  * The newest of a user's codes: the only one production will compare against. It resolves the
  * code to verify by the user — the latest challenge on their email factor — rather than by the
  * code sent, so requesting a second code retires the first even while the first is unexpired.
- * Insertion order is not enough to find it, since an update re-indexes a record to the end.
+ * Issuing through `issueEmailVerificationCode` / `issueMagicAuthCode` leaves one record per
+ * user, but a record inserted directly (a seed, a test) can sit beside it, and insertion order
+ * would not settle which is newer, since an update re-indexes a record to the end.
  */
 export function latestOneTimeCode<T extends Entity>(records: T[]): T | undefined {
   return records.reduce<T | undefined>(
@@ -692,6 +694,45 @@ export function verifyOneTimeCode<T extends OneTimeCode>(
   if (code === record.code) return 'valid';
   collection.update(record.id, { attempts: record.attempts + 1 } as Partial<T>);
   return 'invalid';
+}
+
+/**
+ * Issue the user a fresh email verification code, retiring any earlier one. Production compares
+ * a code against the user's latest challenge only, so once this record exists an earlier code
+ * can never be redeemed again — presenting it is a miss against the new code, not
+ * `previously_used` — and nothing is lost by dropping its record. One record per user is also
+ * what keeps a long-running emulator from holding one per login. The insert is what delivers
+ * the code, on the email_verification.created webhook, the way every emailed code leaves the
+ * emulator.
+ */
+export function issueEmailVerificationCode(
+  ws: WorkOSStore,
+  user: { id: string; email: string },
+): WorkOSEmailVerification {
+  ws.emailVerifications.deleteBy('user_id', user.id);
+  return ws.emailVerifications.insert({
+    object: 'email_verification',
+    user_id: user.id,
+    email: user.email,
+    code: generateCode(),
+    expires_at: expiresIn(10),
+    attempts: 0,
+    verified_at: null,
+  });
+}
+
+/** The Magic Auth counterpart of `issueEmailVerificationCode`, delivered on magic_auth.created. */
+export function issueMagicAuthCode(ws: WorkOSStore, user: { id: string; email: string }): WorkOSMagicAuth {
+  ws.magicAuths.deleteBy('user_id', user.id);
+  return ws.magicAuths.insert({
+    object: 'magic_auth',
+    user_id: user.id,
+    email: user.email,
+    code: generateCode(),
+    expires_at: expiresIn(10),
+    attempts: 0,
+    verified_at: null,
+  });
 }
 
 /** Spend a code `verifyOneTimeCode` found valid: the hit counts as an attempt, and the code answers `previously_used` from now on. */

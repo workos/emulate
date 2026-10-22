@@ -1,6 +1,6 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatMagicAuth, generateCode, expiresIn, findUserByEmail, requireEmailString } from '../helpers.js';
+import { formatMagicAuth, findUserByEmail, issueMagicAuthCode, requireEmailString } from '../helpers.js';
 
 export function magicAuthRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -48,16 +48,8 @@ export function magicAuthRoutes(ctx: RouteContext): void {
       });
 
     // The newest code is the only one the magic-auth grant will compare against, so this
-    // retires any earlier unredeemed code for the user, as production does.
-    const ma = ws.magicAuths.insert({
-      object: 'magic_auth',
-      user_id: user.id,
-      email: user.email,
-      code: generateCode(),
-      expires_at: expiresIn(10),
-      attempts: 0,
-      verified_at: null,
-    });
+    // retires any earlier code for the user, as production does.
+    const ma = issueMagicAuthCode(ws, user);
 
     return c.json(formatMagicAuth(ma), 201);
   });

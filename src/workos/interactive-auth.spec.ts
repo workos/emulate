@@ -565,6 +565,35 @@ describe('Interactive Auth Mode with the password step', () => {
     expect(again.status).toBe(302);
   });
 
+  // The page compares the user's latest code, as the grant and the confirm endpoint do: a code
+  // sent since the page sent its own retires the page's, and the code it accepts is redeemed
+  // rather than dropped, so a replay of it anywhere reads as previously used.
+  it("verifies the user's latest code, not only the one the page sent", async () => {
+    await createUser('resent@example.com', { password: 'correct-horse' });
+    const token = tokenIn(await (await submit({ email: 'resent@example.com', password: 'correct-horse' })).text());
+    const ws = getWorkOSStore(emulator.store);
+    // Known codes, since two random six-digit codes can coincide.
+    ws.emailVerifications.update(loginFor(token)!.email_verification_id!, { code: '111111' });
+
+    // A newer code, sent the way an app would: it retires the page's.
+    const userId = ws.users.findOneBy('email', 'resent@example.com')!.id;
+    const sent = await fetch(`${emulator.url}/user_management/users/${userId}/email_verification/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${emulator.apiKey}` },
+    });
+    const newer = (await sent.json()) as { id: string };
+    ws.emailVerifications.update(newer.id, { code: '222222' });
+
+    const stale = await submit({ email: 'resent@example.com', pending_authentication_token: token, code: '111111' });
+    expect(stale.status).toBe(401);
+
+    const res = await submit({ email: 'resent@example.com', pending_authentication_token: token, code: '222222' });
+    expect(res.status).toBe(302);
+    const redeemed = ws.emailVerifications.get(newer.id)!;
+    expect(redeemed.verified_at).toEqual(expect.any(String));
+    expect(redeemed.attempts).toBe(2);
+  });
+
   it('asks a user with an enrolled factor for the one-time code after the password', async () => {
     const res = await submit({ email: 'mfa@example.com', password: 'correct-horse' });
     expect(res.status).toBe(200);

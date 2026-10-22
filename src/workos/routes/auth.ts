@@ -32,12 +32,14 @@ import {
   emailsMatch,
   activeOrganizationsFor,
   startLoginSession,
+  issueEmailVerificationCode,
   latestOneTimeCode,
   oneTimeCodeError,
   redeemOneTimeCode,
   touchFactorVerified,
   verifiedAuthFactors,
   verifyOneTimeCode,
+  type OneTimeCodeOutcome,
 } from '../helpers.js';
 import { renderConfiguredJwtTemplate } from '../jwt-template.js';
 import type { EventBus } from '../event-bus.js';
@@ -103,6 +105,21 @@ const PUBLIC_GRANT_TYPES = [
   'urn:workos:oauth:grant-type:email-completion',
   'urn:ietf:params:oauth:grant-type:device_code',
 ] as const;
+
+/**
+ * Why the hosted login's code page is sending another code, by the verdict on the one entered:
+ * a code that is spent cannot be retried, so the page replaces it rather than leaving a dead end.
+ */
+const REISSUED_CODE_MESSAGES: Record<Exclude<OneTimeCodeOutcome, 'valid' | 'invalid'>, string> = {
+  expired: 'That code has expired. A new one has been sent.',
+  previously_used: 'That code was already used. A new one has been sent.',
+  too_many_attempts: 'Too many incorrect codes. A new one has been sent.',
+};
+const REISSUED_CHALLENGE_MESSAGES: Record<Exclude<OneTimeCodeOutcome, 'valid' | 'invalid'>, string> = {
+  expired: 'That code has expired. A new challenge has been issued.',
+  previously_used: 'That challenge was already verified. A new one has been issued.',
+  too_many_attempts: 'Too many incorrect codes. A new challenge has been issued.',
+};
 
 /**
  * A password the interactive page has already checked, and how far past it the login has got.
@@ -452,50 +469,45 @@ export function authRoutes(ctx: RouteContext): void {
       if (!user.email_verified) {
         const verificationPage = (error?: string) =>
           codePage({ title: 'Verify your email', lead: 'Enter the code we sent to', error });
-        let pending = login.email_verification_id ? ws.emailVerifications.get(login.email_verification_id) : undefined;
+        if (login.email_verification_id === null) {
+          // The page's first showing sends this login its own code, retiring any earlier one the
+          // way hosted AuthKit's email does; the record's creation is what delivers it.
+          login.email_verification_id = issueEmailVerificationCode(ws, user).id;
+          return verificationPage();
+        }
+        // The code compared is the user's latest, as at the grant and the confirm endpoint: one
+        // sent since this page sent its own — by email_verification/send, or by another login's
+        // gate — has retired the page's, exactly as it retires an API login's.
+        let latest = latestOneTimeCode(ws.emailVerifications.findBy('user_id', user.id));
         let error: string | undefined;
-        if (pending && unspentCode !== null) {
+        if (latest && unspentCode !== null) {
           // The email-verification grant's verdict on the code, and its failure on the event:
-          // a miss counts against the code, and a code that is spent — expired or locked
-          // after three misses — is replaced, since this page can send another.
-          const outcome = verifyOneTimeCode(ws.emailVerifications, pending, unspentCode);
+          // a miss counts against the code, and a code that is spent — expired, locked after
+          // three misses, or already redeemed — is replaced, since this page can send another.
+          const outcome = verifyOneTimeCode(ws.emailVerifications, latest, unspentCode);
           if (outcome === 'invalid') {
             failStep('EmailVerification', oneTimeCodeError(outcome, user.email));
             return verificationPage('Incorrect code. Try again.');
           }
           if (outcome !== 'valid') {
             failStep('EmailVerification', oneTimeCodeError(outcome, user.email));
-            ws.emailVerifications.delete(pending.id);
-            pending = undefined;
-            error =
-              outcome === 'expired'
-                ? 'That code has expired. A new one has been sent.'
-                : 'Too many incorrect codes. A new one has been sent.';
+            error = REISSUED_CODE_MESSAGES[outcome];
+            latest = undefined;
           }
-        } else if (pending && isExpired(pending.expires_at)) {
-          ws.emailVerifications.delete(pending.id);
-          pending = undefined;
+        } else if (latest && (latest.verified_at !== null || isExpired(latest.expires_at))) {
+          // Nothing could be entered against a code already spent: send another.
+          latest = undefined;
         }
-        if (!pending) {
-          // Creating the record is what delivers the code, on the email_verification.created
-          // webhook, the way every emailed code leaves the emulator.
-          pending = ws.emailVerifications.insert({
-            object: 'email_verification',
-            user_id: user.id,
-            email: user.email,
-            code: generateCode(),
-            expires_at: expiresIn(10),
-            attempts: 0,
-            verified_at: null,
-          });
-          login.email_verification_id = pending.id;
+        if (!latest) {
+          login.email_verification_id = issueEmailVerificationCode(ws, user).id;
           return verificationPage(error);
         }
         if (unspentCode === null) return verificationPage();
         // What the email-verification grant does with a good code, short of the session it would
-        // issue: the mailbox is proven for good, not only for this login.
+        // issue: the mailbox is proven for good, not only for this login, and the code is
+        // redeemed rather than dropped, so a replay of it at the grant reads as previously used.
+        redeemOneTimeCode(ws.emailVerifications, latest);
         ws.users.update(user.id, { email_verified: true });
-        ws.emailVerifications.delete(pending.id);
         login.email_verification_id = null;
         login.step_up_method = 'EmailVerification';
         unspentCode = null;
@@ -524,10 +536,7 @@ export function authRoutes(ctx: RouteContext): void {
             failStep('MFA', oneTimeCodeError(outcome, pending.id));
             ws.authChallenges.delete(pending.id);
             pending = undefined;
-            error =
-              outcome === 'expired'
-                ? 'That code has expired. A new challenge has been issued.'
-                : 'Too many incorrect codes. A new challenge has been issued.';
+            error = REISSUED_CHALLENGE_MESSAGES[outcome];
           }
         } else if (pending && isExpired(pending.expires_at)) {
           ws.authChallenges.delete(pending.id);
@@ -963,15 +972,8 @@ export function authRoutes(ctx: RouteContext): void {
         reason: 'EmailVerification',
         invitation_token: invitation?.token ?? null,
       });
-      const verification = ws.emailVerifications.insert({
-        object: 'email_verification',
-        user_id: unverified.id,
-        email: unverified.email,
-        code: generateCode(),
-        expires_at: expiresIn(10),
-        attempts: 0,
-        verified_at: null,
-      });
+      // Retires any earlier code for the user: only the latest is compared at the grant.
+      const verification = issueEmailVerificationCode(ws, unverified);
       // 403 with {code, message}, like mfa_challenge and organization_selection_required: the
       // spec lists all three as authenticate's step-up codes under 403, never under its 400.
       return c.json(
@@ -1213,9 +1215,11 @@ export function authRoutes(ctx: RouteContext): void {
         // sent a code, is a 404 — there is nothing to verify against — and an earlier code is
         // simply not the latest, so it fails as invalid while counting against the latest.
         const magicUser = findUserByEmail(ws, email);
-        if (!magicUser) throw notFound('User');
+        if (!magicUser) throw notFound('User', email);
+        // Production's 404 here names the email factor it could not find for the user: a user
+        // never sent a code has no such factor, which is what no record means in the emulator.
         const magicAuth = latestOneTimeCode(ws.magicAuths.findBy('user_id', magicUser.id));
-        if (!magicAuth) throw notFound('Magic Auth');
+        if (!magicAuth) throw notFound('Authentication Factor', magicUser.id);
 
         const outcome = verifyOneTimeCode(ws.magicAuths, magicAuth, code);
         if (outcome !== 'valid') {
@@ -1249,7 +1253,7 @@ export function authRoutes(ctx: RouteContext): void {
         // The user's latest verification code is the one compared, as with Magic Auth: an
         // earlier code is invalid, and a user never sent one has nothing to verify against.
         const ev = latestOneTimeCode(ws.emailVerifications.findBy('user_id', userId));
-        if (!ev) throw notFound('Email Verification');
+        if (!ev) throw notFound('Authentication Factor', userId);
         const outcome = verifyOneTimeCode(ws.emailVerifications, ev, code);
         if (outcome !== 'valid') {
           failAuth('EmailVerification', { email: ev.email, userId: ev.user_id }, oneTimeCodeError(outcome, ev.email));

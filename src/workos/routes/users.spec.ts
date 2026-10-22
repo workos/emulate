@@ -597,12 +597,17 @@ describe('Email Verification', () => {
 
   it('compares against the latest code sent, so an earlier one is incorrect', async () => {
     const user = await createUnverified('resend@test.com');
+    const ws = getWorkOSStore(store);
+    // Known codes, since two random six-digit codes can coincide.
     const first = await send(user.id);
+    ws.emailVerifications.update(first.id, { code: '111111' });
     const second = await send(user.id);
-    expect(first.code).not.toBe(second.code);
+    ws.emailVerifications.update(second.id, { code: '222222' });
 
-    expect((await json(await confirm(user.id, first.code))).code).toBe('email_verification_code_incorrect');
-    expect((await confirm(user.id, second.code)).status).toBe(200);
+    expect((await json(await confirm(user.id, '111111'))).code).toBe('email_verification_code_incorrect');
+    // Issuing the second retired the first outright: its record is gone, not merely outranked.
+    expect((await req(`/user_management/email_verification/${first.id}`)).status).toBe(404);
+    expect((await confirm(user.id, '222222')).status).toBe(200);
   });
 
   it('reports a redeemed code as email_verification_code_previously_used before the mailbox', async () => {
