@@ -223,7 +223,44 @@ describe('Password reset routes', () => {
     expect(retry.status).toBe(200);
   });
 
-  it('spends the token, signs the user out everywhere, and verifies the email', async () => {
+  it('signs the user out everywhere: a live session and its refresh token stop working', async () => {
+    const { user, reset } = await createUserAndRequestReset();
+    const authenticate = (body: Record<string, unknown>) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const signedIn = await json(
+      await authenticate({ grant_type: 'password', email: user.email, password: 'correct-horse-battery' }),
+    );
+    expect(signedIn.refresh_token).toBeDefined();
+    expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(1);
+
+    const confirmRes = await req('/user_management/password_reset/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ token: reset.password_reset_token, new_password: 'an even better passphrase' }),
+    });
+    expect(confirmRes.status).toBe(200);
+
+    // The session is ended the way a revoke ends it, so its refresh token is refused like an
+    // unknown one and delegated agent sessions hanging off it go with it (the session's delete
+    // hook), and the old password no longer signs in.
+    expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(0);
+    expect(eventsNamed('session.revoked')).toHaveLength(1);
+    const refreshed = await authenticate({ grant_type: 'refresh_token', refresh_token: signedIn.refresh_token });
+    expect(refreshed.status).toBe(400);
+    expect((await json(refreshed)).error).toBe('invalid_grant');
+    const oldPassword = await authenticate({
+      grant_type: 'password',
+      email: user.email,
+      password: 'correct-horse-battery',
+    });
+    expect(oldPassword.status).toBe(400);
+    expect((await json(oldPassword)).code).toBe('invalid_credentials');
+  });
+
+  it('spends the token and verifies the email', async () => {
     const user = await json(
       await req('/user_management/users', {
         method: 'POST',
@@ -231,19 +268,6 @@ describe('Password reset routes', () => {
       }),
     );
     expect(user.email_verified).toBe(false);
-    // A session the reset must end: a session-less test double can only sign in verified, so the
-    // session is written directly.
-    getWorkOSStore(store).sessions.insert({
-      object: 'session',
-      user_id: user.id,
-      organization_id: null,
-      ip_address: null,
-      user_agent: null,
-      auth_method: 'password',
-      status: 'active',
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
-      ended_at: null,
-    });
     const reset = await json(
       await req('/user_management/password_reset', { method: 'POST', body: JSON.stringify({ email: user.email }) }),
     );
@@ -255,10 +279,7 @@ describe('Password reset routes', () => {
     expect(confirmRes.status).toBe(200);
     // Production serializes the user it looked up by the token, so the response predates the reset.
     expect((await json(confirmRes)).user).toMatchObject({ object: 'user', id: user.id, email_verified: false });
-
     expect((await json(await req(`/user_management/users/${user.id}`))).email_verified).toBe(true);
-    expect(getWorkOSStore(store).sessions.findBy('user_id', user.id)).toHaveLength(0);
-    expect(eventsNamed('session.revoked')).toHaveLength(1);
 
     const replay = await req('/user_management/password_reset/confirm', {
       method: 'POST',

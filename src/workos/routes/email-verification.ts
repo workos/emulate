@@ -1,6 +1,6 @@
 import { type RouteContext, notFound, parseJsonBody, WorkOSApiError } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatEmailVerification, formatUser, generateCode, expiresIn, isExpired } from '../helpers.js';
+import { formatEmailVerification, formatUser, generateCode, expiresIn, isExpired, emailsMatch } from '../helpers.js';
 
 export function emailVerificationRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -37,8 +37,11 @@ export function emailVerificationRoutes(ctx: RouteContext): void {
       throw new WorkOSApiError(400, 'code is required', 'invalid_request');
     }
 
+    // A code proves the inbox it was sent to: production keys the email factor it checks the
+    // code against by the user's current address (`findInternalEmailFactorByUserlandUser`), so a
+    // code issued before the address changed verifies nothing.
     const verifications = ws.emailVerifications.findBy('user_id', user.id);
-    const ev = verifications.find((v) => v.code === code);
+    const ev = verifications.find((v) => v.code === code && emailsMatch(v.email, user.email));
 
     if (!ev) {
       throw new WorkOSApiError(400, 'Invalid code', 'invalid_code');

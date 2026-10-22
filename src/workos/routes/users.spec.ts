@@ -527,6 +527,38 @@ describe('Email Verification', () => {
     );
     expect(confirmed.email_verified).toBe(true);
   });
+
+  // A code proves the inbox it was sent to. Production checks it against the email factor of the
+  // user's current address, so a code sent to the old address cannot verify the new one.
+  it('refuses a code issued before the address changed', async () => {
+    const user = await json(
+      await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'old@test.com' }) }),
+    );
+    const stale = await json(
+      await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' }),
+    );
+    await req(`/user_management/users/${user.id}`, { method: 'PUT', body: JSON.stringify({ email: 'new@test.com' }) });
+
+    const res = await req(`/user_management/users/${user.id}/email_verification/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ code: stale.code }),
+    });
+    expect(res.status).toBe(400);
+    expect((await json(res)).code).toBe('invalid_code');
+    expect((await json(await req(`/user_management/users/${user.id}`))).email_verified).toBe(false);
+
+    const fresh = await json(
+      await req(`/user_management/users/${user.id}/email_verification/send`, { method: 'POST' }),
+    );
+    expect(fresh.email).toBe('new@test.com');
+    const confirmed = await json(
+      await req(`/user_management/users/${user.id}/email_verification/confirm`, {
+        method: 'POST',
+        body: JSON.stringify({ code: fresh.code }),
+      }),
+    );
+    expect(confirmed.email_verified).toBe(true);
+  });
 });
 
 describe('Password Reset', () => {
