@@ -102,7 +102,11 @@ describe('Portal routes', () => {
   it('answers 404 for an organization that does not exist', async () => {
     const res = await generate({ intent: 'sso', organization: 'org_nope' });
     expect(res.status).toBe(404);
-    expect((await json(res)).message).toContain('Organization');
+    expect(await json(res)).toEqual({
+      message: "Organization not found: 'org_nope'.",
+      code: 'entity_not_found',
+      entity_id: 'org_nope',
+    });
   });
 
   it('resolves the organization before the intent, so an unknown org wins over a bad intent', async () => {
