@@ -3,7 +3,7 @@
  */
 import type { WorkOSSeedConfig } from './index.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
-import { isValidResourceTypeSlug } from './constants.js';
+import { isValidResourceTypeSlug, SUBSCRIBABLE_EVENTS, type WorkOSEventName } from './constants.js';
 import { AGENT_SESSION_SETTING_LIMITS } from './agent-sessions.js';
 import { normalizeEmail, type NormalizedEmail } from './helpers.js';
 import { isValidResourceUri, resourceUrisEqual } from './authkit-oauth.js';
@@ -887,6 +887,24 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             path: `webhookEndpoints[${index}].events`,
             message: 'events must be an array if provided',
             value: endpoint.events,
+          });
+        } else if (Array.isArray(endpoint.events)) {
+          // The same catalog `POST /webhook_endpoints` subscribes from: a name outside it can
+          // never match an emitted event, so seeding it would make an endpoint that never fires.
+          const unknown = endpoint.events.filter((event) => !SUBSCRIBABLE_EVENTS.includes(event as WorkOSEventName));
+          if (unknown.length > 0) {
+            errors.push({
+              path: `webhookEndpoints[${index}].events`,
+              message: `events contains unknown event names: ${unknown.join(', ')}`,
+              value: unknown,
+            });
+          }
+        }
+        if (endpoint.status !== undefined && endpoint.status !== 'enabled' && endpoint.status !== 'disabled') {
+          errors.push({
+            path: `webhookEndpoints[${index}].status`,
+            message: 'status must be "enabled" or "disabled" if provided',
+            value: endpoint.status,
           });
         }
         // The secret keys every signature the endpoint will ever receive; a non-string here

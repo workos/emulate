@@ -12,7 +12,12 @@ const receiver = await startWebhookReceiver();
 let emulator;
 
 try {
-  emulator = await createEmulator({ port: 0 });
+  // The receiver is plain `http://` with a pinned secret: `POST /webhook_endpoints` refuses
+  // both, as production does, so the endpoint is seeded.
+  emulator = await createEmulator({
+    port: 0,
+    seed: { webhookEndpoints: [{ endpoint_url: receiver.url, secret: webhookSecret, events: ['user.created'] }] },
+  });
 
   const api = (path, init = {}) =>
     fetch(`${emulator.url}${path}`, {
@@ -33,15 +38,12 @@ try {
   const jwks = await jwksResponse.json();
   assert.ok(Array.isArray(jwks.keys) && jwks.keys.length > 0, 'JWKS must contain at least one key');
 
-  const endpointResponse = await api('/webhook_endpoints', {
-    method: 'POST',
-    body: JSON.stringify({
-      endpoint_url: receiver.url,
-      events: ['user.created'],
-      secret: webhookSecret,
-    }),
-  });
-  assert.equal(endpointResponse.status, 201);
+  const endpointsResponse = await api('/webhook_endpoints');
+  assert.equal(endpointsResponse.status, 200);
+  const endpoints = await endpointsResponse.json();
+  assert.equal(endpoints.data.length, 1);
+  assert.equal(endpoints.data[0].secret, webhookSecret);
+  assert.equal(endpoints.data[0].status, 'enabled');
 
   const email = 'node-compat@example.com';
   const userResponse = await api('/user_management/users', {

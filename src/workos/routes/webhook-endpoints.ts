@@ -141,19 +141,21 @@ export function webhookEndpointRoutes(ctx: RouteContext): void {
   });
 
   app.patch('/webhook_endpoints/:id', async (c) => {
-    const ep = ws.webhookEndpoints.get(c.req.param('id'));
-    if (!ep) throw notFound('Webhook Endpoint', c.req.param('id'));
-
     const body = await parseJsonBody(c);
 
-    // Every field is optional, and `@ValidateIf(value !== undefined)` means an explicit
-    // `null` is validated — and rejected — rather than treated as absent.
+    // The DTO pipe runs while Nest resolves the handler's arguments, before the handler looks
+    // the endpoint up, so a malformed body is a 422 even for an id that does not exist. Every
+    // field is optional, and `@ValidateIf(value !== undefined)` means an explicit `null` is
+    // validated — and rejected — rather than treated as absent.
     const errors = [
       body.endpoint_url !== undefined ? validateEndpointUrl(body.endpoint_url) : undefined,
       body.status !== undefined ? validateStatus(body.status) : undefined,
       body.events !== undefined ? validateEvents(body.events) : undefined,
     ].filter((error): error is ValidationItem => error !== undefined);
     if (errors.length > 0) throw invalidRequestParameters(errors);
+
+    const ep = ws.webhookEndpoints.get(c.req.param('id'));
+    if (!ep) throw notFound('Webhook Endpoint', c.req.param('id'));
 
     const updates: Partial<WorkOSWebhookEndpoint> = {};
     if (body.endpoint_url !== undefined) {
