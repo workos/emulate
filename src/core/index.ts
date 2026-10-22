@@ -21,6 +21,8 @@ export { type ServicePlugin, type RouteContext } from './plugin.js';
 export {
   WorkOSApiError,
   OauthApiError,
+  EntityNotFoundError,
+  NestNotFoundError,
   createApiErrorHandler,
   requestIdMiddleware,
   notFound,

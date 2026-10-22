@@ -34,6 +34,51 @@ export class OauthApiError extends WorkOSApiError {
   }
 }
 
+/**
+ * A lookup that found nothing, rendered as production's `EntityNotFoundException`
+ * (api-services `common/exceptions/entity-not-found/entity-not-found-exception.ts`):
+ * `{message: "<Type> not found: '<id>'.", code: 'entity_not_found', entity_id: '<id>'}`.
+ *
+ * Production always has an id to name, so `entityId` is optional only for the handful of sites
+ * that resolved by something the response cannot quote; those render no `entity_id` rather than
+ * an invented one. `message` and `extra` exist for the few production sites that depart from the
+ * template (an agent session's wording, an `entity_type` field) and are otherwise left alone.
+ */
+export class EntityNotFoundError extends WorkOSApiError {
+  readonly extra?: Record<string, unknown>;
+
+  constructor(
+    readonly entityType: string,
+    readonly entityId?: string,
+    opts: { message?: string; extra?: Record<string, unknown> } = {},
+  ) {
+    super(
+      404,
+      opts.message ?? (entityId === undefined ? `${entityType} not found` : `${entityType} not found: '${entityId}'.`),
+      'entity_not_found',
+    );
+    this.name = 'EntityNotFoundError';
+    this.extra = opts.extra;
+  }
+}
+
+/**
+ * A 404 production raises as a bare Nest `NotFoundException` rather than an entity one. Nest
+ * renders `{message}` — plus `error: 'Not Found'` when the message was passed as a string — and
+ * no `code` at all (`HttpException.createBody`; the API's `CustomExceptionFilter` only strips
+ * `statusCode`). The `code` stored here is bookkeeping for `instanceof WorkOSApiError` callers;
+ * it is never rendered.
+ */
+export class NestNotFoundError extends WorkOSApiError {
+  constructor(
+    message = 'Not Found',
+    readonly error?: 'Not Found',
+  ) {
+    super(404, message, 'not_found');
+    this.name = 'NestNotFoundError';
+  }
+}
+
 export function createApiErrorHandler(): ErrorHandler {
   return (err, c) => {
     if (err instanceof OauthApiError) {
@@ -43,11 +88,18 @@ export function createApiErrorHandler(): ErrorHandler {
         err.headers,
       );
     }
+    if (err instanceof NestNotFoundError) {
+      return c.json({ message: err.message, ...(err.error ? { error: err.error } : {}) }, 404);
+    }
     if (err instanceof WorkOSApiError) {
       const body: Record<string, unknown> = {
         message: err.message,
         code: err.code,
       };
+      if (err instanceof EntityNotFoundError) {
+        if (err.entityId !== undefined) body.entity_id = err.entityId;
+        Object.assign(body, err.extra);
+      }
       if (err.errors) {
         body.errors = err.errors;
       }
@@ -74,8 +126,13 @@ export function requestIdMiddleware(): MiddlewareHandler {
   };
 }
 
-export function notFound(resource?: string): WorkOSApiError {
-  return new WorkOSApiError(404, resource ? `${resource} not found` : 'Not Found', 'not_found');
+/**
+ * `entityType` is the name production's exception class passes (`'Organization'`, `'API Key'`,
+ * `'UserOrganizationMembership'`, …) and `entityId` whatever the route looked up by: an id, a
+ * slug, a token, an email. Pass the id whenever the lookup had one.
+ */
+export function notFound(entityType: string, entityId?: string): EntityNotFoundError {
+  return new EntityNotFoundError(entityType, entityId);
 }
 
 export function validationError(message: string, errors?: WorkOSApiError['errors']): WorkOSApiError {
