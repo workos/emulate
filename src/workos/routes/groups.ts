@@ -6,9 +6,68 @@ import {
   parseJsonBody,
   parseListParams,
   cursorPaginate,
+  ReasonPhraseApiError,
+  WorkOSApiError,
 } from '../../core/index.js';
-import { getWorkOSStore } from '../store.js';
+import { getWorkOSStore, type WorkOSStore } from '../store.js';
 import { formatGroup, formatMembershipBase, formatListResponse } from '../helpers.js';
+
+/** Production's `MAX_GROUP_NAME_LENGTH` and `MAX_GROUP_DESCRIPTION_LENGTH` (`api/src/constants.ts`). */
+export const MAX_GROUP_NAME_LENGTH = 256;
+export const MAX_GROUP_DESCRIPTION_LENGTH = 150;
+/** Production's `DEFAULT_MAX_MEMBERS_PER_GROUP` (`group-memberships.service.ts`), its feature flag's default. */
+export const MAX_MEMBERS_PER_GROUP = 500;
+
+/**
+ * The `name` a request body carries, held to production's DTO: a non-empty string of at most
+ * 256 characters. `required` is whether the body must carry one at all (creation) or may leave
+ * it out (update).
+ */
+function groupName(body: Record<string, unknown>, required: boolean): string | undefined {
+  if (!('name' in body) && !required) return undefined;
+  const name = body.name;
+  if (typeof name !== 'string' || name.length === 0) {
+    throw validationError('Name must be a non-empty string.', [{ field: 'name', code: 'required' }]);
+  }
+  if (name.length > MAX_GROUP_NAME_LENGTH) {
+    throw validationError(`name cannot be more than ${MAX_GROUP_NAME_LENGTH} characters`, [
+      { field: 'name', code: 'invalid' },
+    ]);
+  }
+  return name;
+}
+
+/**
+ * The `description` a request body carries, held to production's DTO: absent or null clears it,
+ * otherwise a non-empty string of at most 150 characters. Undefined when the body omits it.
+ */
+function groupDescription(body: Record<string, unknown>): string | null | undefined {
+  if (!('description' in body)) return undefined;
+  const description = body.description;
+  if (description === null) return null;
+  if (typeof description !== 'string' || description.length === 0) {
+    throw validationError('Description must be a non-empty string.', [{ field: 'description', code: 'invalid' }]);
+  }
+  if (description.length > MAX_GROUP_DESCRIPTION_LENGTH) {
+    throw validationError(`description cannot be more than ${MAX_GROUP_DESCRIPTION_LENGTH} characters`, [
+      { field: 'description', code: 'invalid' },
+    ]);
+  }
+  return description;
+}
+
+/**
+ * Production keeps group names unique within an organization with a database constraint and
+ * reports a collision as a bare 409 — the message alone, with no `code`.
+ */
+function assertGroupNameFree(ws: WorkOSStore, organizationId: string, name: string, exceptGroupId?: string): void {
+  const taken = ws.groups
+    .findBy('organization_id', organizationId)
+    .some((g) => g.name === name && g.id !== exceptGroupId);
+  if (taken) {
+    throw new ReasonPhraseApiError(409, `A group with name: ${name} already exists in the organization.`, 'Conflict');
+  }
+}
 
 /**
  * AuthKit Groups (`/organizations/{organizationId}/groups`) — the org-scoped groups product
@@ -29,16 +88,15 @@ export function groupRoutes(ctx: RouteContext): void {
     if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
     const body = await parseJsonBody(c);
-    const name = body.name;
-    if (typeof name !== 'string' || name.length === 0) {
-      throw validationError('name is required', [{ field: 'name', code: 'required' }]);
-    }
+    const name = groupName(body, true)!;
+    const description = groupDescription(body) ?? null;
+    assertGroupNameFree(ws, organizationId, name);
 
     const group = ws.groups.insert({
       object: 'group',
       organization_id: organizationId,
       name,
-      description: typeof body.description === 'string' ? body.description : null,
+      description,
     });
 
     return c.json(formatGroup(group), 201);
@@ -76,15 +134,13 @@ export function groupRoutes(ctx: RouteContext): void {
     const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
 
-    if ('name' in body) {
-      if (typeof body.name !== 'string' || body.name.length === 0) {
-        throw validationError('name must be a non-empty string', [{ field: 'name', code: 'invalid' }]);
-      }
-      updates.name = body.name;
+    const name = groupName(body, false);
+    if (name !== undefined) {
+      assertGroupNameFree(ws, group.organization_id, name, group.id);
+      updates.name = name;
     }
-    if ('description' in body) {
-      updates.description = typeof body.description === 'string' ? body.description : null;
-    }
+    const description = groupDescription(body);
+    if (description !== undefined) updates.description = description;
 
     const updated = ws.groups.update(group.id, updates);
     return c.json(formatGroup(updated!));
@@ -128,11 +184,22 @@ export function groupRoutes(ctx: RouteContext): void {
       ]);
     }
 
+    // Production checks the group's size before it looks for the member, so a full group refuses
+    // even a member it already holds. Rows whose membership is gone (a deleted user leaves them
+    // behind, see the list endpoint) are not members and do not count.
+    const rows = ws.groupMemberships.findBy('group_id', group.id);
+    const memberCount = rows.filter((gm) => ws.organizationMemberships.get(gm.organization_membership_id)).length;
+    if (memberCount >= MAX_MEMBERS_PER_GROUP) {
+      throw new WorkOSApiError(
+        400,
+        `Group '${group.id}' cannot have more than ${MAX_MEMBERS_PER_GROUP} members.`,
+        'group_membership_limit_exceeded',
+      );
+    }
+
     // Idempotent: adding an existing member returns the group rather than erroring, matching
     // production's tolerant re-add.
-    const existing = ws.groupMemberships
-      .findBy('group_id', group.id)
-      .find((gm) => gm.organization_membership_id === omId);
+    const existing = rows.find((gm) => gm.organization_membership_id === omId);
     if (!existing) {
       ws.groupMemberships.insert({ group_id: group.id, organization_membership_id: omId });
     }

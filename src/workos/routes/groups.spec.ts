@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { createServer, type ApiKeyMap } from '../../core/index.js';
+import { createServer, type ApiKeyMap, type Store } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
+import { getWorkOSStore } from '../store.js';
 
 const apiKeys: ApiKeyMap = { sk_test_grp: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_grp', 'Content-Type': 'application/json' };
@@ -11,9 +12,12 @@ function createTestApp() {
 
 describe('Group routes', () => {
   let app: ReturnType<typeof createTestApp>['app'];
+  let store: Store;
 
   beforeEach(() => {
-    app = createTestApp().app;
+    const server = createTestApp();
+    app = server.app;
+    store = server.store;
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -82,6 +86,134 @@ describe('Group routes', () => {
       body: JSON.stringify({ name: 'X' }),
     });
     expect(res.status).toBe(404);
+  });
+
+  describe('what production refuses', () => {
+    // Production keeps names unique per organization with a database constraint and reports the
+    // collision as Nest renders a bare ConflictException: the message and reason phrase, no code.
+    it('409s a duplicate name in the same organization, on create and on update', async () => {
+      const org = await createOrg('Dup Org');
+      await createGroup(org.id, 'Engineering');
+      const res = await req(`/organizations/${org.id}/groups`, {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Engineering' }),
+      });
+      expect(res.status).toBe(409);
+      expect(await json(res)).toEqual({
+        message: 'A group with name: Engineering already exists in the organization.',
+        error: 'Conflict',
+      });
+
+      const other = await createGroup(org.id, 'Design');
+      const renamed = await req(`/organizations/${org.id}/groups/${other.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Engineering' }),
+      });
+      expect(renamed.status).toBe(409);
+      // Restating a group's own name is not a collision, and another organization is another namespace.
+      const same = await req(`/organizations/${org.id}/groups/${other.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Design' }),
+      });
+      expect(same.status).toBe(200);
+      const elsewhere = await createOrg('Other Org');
+      expect(
+        (
+          await req(`/organizations/${elsewhere.id}/groups`, {
+            method: 'POST',
+            body: JSON.stringify({ name: 'Engineering' }),
+          })
+        ).status,
+      ).toBe(201);
+    });
+
+    it('holds name to 256 characters and description to a non-empty 150', async () => {
+      const org = await createOrg('Limits Org');
+      const create = (body: Record<string, unknown>) =>
+        req(`/organizations/${org.id}/groups`, { method: 'POST', body: JSON.stringify(body) });
+
+      expect((await create({ name: 'n'.repeat(256) })).status).toBe(201);
+      const longName = await create({ name: 'n'.repeat(257) });
+      expect(longName.status).toBe(422);
+      expect((await json(longName)).message).toBe('name cannot be more than 256 characters');
+
+      expect((await create({ name: 'Described', description: 'd'.repeat(150) })).status).toBe(201);
+      const longDescription = await create({ name: 'Described more', description: 'd'.repeat(151) });
+      expect(longDescription.status).toBe(422);
+      expect((await json(longDescription)).message).toBe('description cannot be more than 150 characters');
+      expect((await create({ name: 'Blank', description: '' })).status).toBe(422);
+      expect((await create({ name: 'Numeric', description: 7 })).status).toBe(422);
+      // Null clears the description, as an absent one leaves it unset.
+      const cleared = await json(await create({ name: 'Cleared', description: null }));
+      expect(cleared.description).toBeNull();
+
+      const group = await createGroup(org.id, 'Patched');
+      const patch = (body: Record<string, unknown>) =>
+        req(`/organizations/${org.id}/groups/${group.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      expect((await patch({ description: '' })).status).toBe(422);
+      expect((await patch({ name: 'n'.repeat(257) })).status).toBe(422);
+      expect((await json(await patch({ description: null }))).description).toBeNull();
+    });
+
+    it('caps a group at 500 members', async () => {
+      const org = await createOrg('Crowd Org');
+      const group = await createGroup(org.id, 'Everyone');
+      // Written straight to the store: 500 users and memberships over HTTP is a slow fixture.
+      const ws = getWorkOSStore(store);
+      const membershipIds: string[] = [];
+      for (let i = 0; i < 501; i++) {
+        const user = ws.users.insert({
+          object: 'user',
+          email: `crowd-${i}@test.com`,
+          name: null,
+          first_name: null,
+          last_name: null,
+          email_verified: false,
+          profile_picture_url: null,
+          last_sign_in_at: null,
+          external_id: null,
+          metadata: {},
+          locale: null,
+          password_hash: null,
+          impersonator: null,
+        });
+        const m = ws.organizationMemberships.insert({
+          object: 'organization_membership',
+          organization_id: org.id,
+          user_id: user.id,
+          role: { slug: 'member' },
+          roles: [{ slug: 'member' }],
+          status: 'active',
+          external_id: null,
+          metadata: {},
+        });
+        membershipIds.push(m.id);
+      }
+      for (const id of membershipIds.slice(0, 500)) {
+        ws.groupMemberships.insert({ group_id: group.id, organization_membership_id: id });
+      }
+
+      const add = (id: string) =>
+        req(`/organizations/${org.id}/groups/${group.id}/organization-memberships`, {
+          method: 'POST',
+          body: JSON.stringify({ organization_membership_id: id }),
+        });
+      const res = await add(membershipIds[500]);
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        message: `Group '${group.id}' cannot have more than 500 members.`,
+        code: 'group_membership_limit_exceeded',
+      });
+      // Production checks the size before it looks for the member, so a full group refuses a
+      // member it already holds too.
+      expect((await add(membershipIds[0])).status).toBe(400);
+
+      // Removing one makes room again.
+      await req(`/organizations/${org.id}/groups/${group.id}/organization-memberships/${membershipIds[0]}`, {
+        method: 'DELETE',
+      });
+      expect((await add(membershipIds[500])).status).toBe(200);
+    });
   });
 
   it('422s creating a group without a name', async () => {
