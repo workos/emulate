@@ -199,6 +199,9 @@ export function widgetRoutes(ctx: RouteContext): void {
     if (rawUserId != null && typeof rawUserId !== 'string') messages.push('user_id must be a string');
     if (scopes != null) {
       if (!Array.isArray(scopes)) {
+        // Both constraints run on a non-array: `IsEnum` first (decorators register bottom-up),
+        // which a scalar passes only by being a scope itself, then `IsArray`.
+        if (!(typeof scopes === 'string' && isWidgetSessionScope(scopes))) messages.push(INVALID_SCOPE_MESSAGE);
         messages.push('scopes must be an array');
       } else if (!scopes.every((scope) => typeof scope === 'string' && isWidgetSessionScope(scope))) {
         messages.push(INVALID_SCOPE_MESSAGE);
