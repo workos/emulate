@@ -570,8 +570,10 @@ describe('Interactive Auth Mode with the password step', () => {
   // sent since the page sent its own retires the page's, and the code it accepts is redeemed
   // rather than dropped, so a replay of it anywhere reads as previously used.
   it("verifies the user's latest code, not only the one the page sent", async () => {
-    await createUser('resent@example.com', { password: 'correct-horse' });
-    const token = tokenIn(await (await submit({ email: 'resent@example.com', password: 'correct-horse' })).text());
+    await createUser('resent@example.com', { password: 'correct-horse-battery-staple' });
+    const token = tokenIn(
+      await (await submit({ email: 'resent@example.com', password: 'correct-horse-battery-staple' })).text(),
+    );
     const ws = getWorkOSStore(emulator.store);
     // Known codes, since two random six-digit codes can coincide.
     ws.emailVerifications.update(loginFor(token)!.email_verification_id!, { code: '111111' });
