@@ -144,7 +144,8 @@ export const FEATURES: FeatureDef[] = [
     name: 'SSO',
     tags: ['sso', 'connections'],
     seedKeys: ['connections'],
-    notes: 'Seeded connections carry `profiles`, which drive the SSO login flow.',
+    notes:
+      'Seeded connections carry `profiles`, which drive the SSO login flow. `POST /connections` follows production: one SSO connection per organization (`connection_already_exists_for_organization`, with `organization_id` in the body), SAML and OIDC types only with their `saml_options` / `oidc_options` present, no `domains` field (seed-only), and a created connection starts `validating` until the first login through it activates it and emits `connection.activated`. `GET /connections` lists SSO connections only. `GET /sso/authorize` requires `client_id`, sends a `validating` connection through and redirects an `inactive` one back with `error=connection_unlinked`; `POST /sso/token` requires `client_id` and `client_secret` (an environment API key); authorization codes live five minutes.',
   },
   {
     name: 'Directory Sync',

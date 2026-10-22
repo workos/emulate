@@ -1009,14 +1009,15 @@ mapping. The resolved role is set on the directory user and, where `users` and
 membership — which is what an app reads, and where production puts it too.
 
 A membership matching a seeded directory user reports `directory_managed: true`, whether or
-not a role mapped. Where two directories in one organization map the same person, the first
-in declaration order keeps the role.
+not a role mapped.
 
-`DELETE /directories/:id` clears `directory_managed` only once no directory in the
-organization still lists that person. While one does, the membership stays managed, and the
-first surviving directory that maps a role takes the role over. A membership no directory
-ever claimed is left alone, so an application-owned membership survives an unrelated
-directory being deleted.
+An organization holds one directory, as it does in production (a second one is
+`directory_already_exists_for_organization` there); a seed that declares two for one
+organization fails the boot, naming the organization and both directories.
+
+`DELETE /directories/:id` clears `directory_managed` on every membership the directory
+claimed. A membership no directory ever claimed is left alone, so an application-owned
+membership survives the directory being deleted.
 
 Seeding a directory creates no AuthKit user and no organization membership: seed `users`
 and `memberships` for those.
@@ -1476,6 +1477,22 @@ A code from `GET /sso/authorize` redeems at `POST /user_management/authenticate`
 The session is scoped to the connection's organization. A profile with no user-management account yet gets one, verified — the IdP asserted the address — the way AuthKit provisions on a first SSO login.
 
 As with `/user_management/authorize`, `/sso/authorize` is public and signs in whoever `login_hint` names: there is no IdP here to prove an identity with, and inventing a profile for any address is what lets a test drive an SSO login at all. Both endpoints will therefore hand out a session for any account you ask them for. That is the emulator being a test double, not an authorization server — do not point anything at it that you would not also let sign in as your users.
+
+### SSO connections follow production's rules
+
+`POST /connections` enforces what production's create endpoint enforces, so a suite that passes here does not meet a 400 on the real API:
+
+- **One SSO connection per organization.** A second one is `400 {"message": "Organization 'org_…' already has a Connection.", "code": "connection_already_exists_for_organization", "organization_id": "org_…"}` — production's body exactly, which the OpenAPI spec does not list. Delete the connection first to replace it. OAuth connections do not count: they are environment-level in production, and an organization a seed binds one to can still hold its SSO connection. The same rule holds for directories, where the seed is the only way to create one: a second directory for an organization fails the boot.
+- **SAML and OIDC types only**, with the protocol's options present: `saml_options` carries `idp_metadata_url` or the manual IdP fields (`idp_sso_url` and at least one `idp_signing_certs` entry), `oidc_options` carries `discovery_endpoint`, `client_id` and a `client_secret` (or `token_authentication_method: private_key_jwt`). `connection_type` may be omitted and is then `GenericSAML` or `GenericOIDC` — production infers a vendor from the IdP, which the emulator cannot do. An OAuth or internal type is `connection_type_not_supported`; the cross-field failures (`connection_type_or_options_required`, `both_saml_and_oidc_options_provided`, `connection_type_conflicts_with_options`, `saml_options_required`, `oidc_options_required`, `incomplete_saml_options`, `ambiguous_saml_options`, `client_secret_required`) carry production's codes and messages. Certificates are not parsed and URLs are not fetched.
+- **A created connection starts `validating`** and announces nothing, as in production, where an IdP response has to prove the configuration first. The first login through it — `/sso/authorize` sends a `validating` connection through exactly as an active one — turns it `active` and emits `connection.activated`. A seeded connection keeps its declared `state` (default `active`) and its `domains`; the create endpoint has no `domains` field and ignores one, so a connection it makes has none. `name` defaults to the organization's name.
+- `GET /connections` lists SSO connections only: the OAuth, Magic Link and TestIdp types are left out, as production's listing leaves them out.
+
+The authorization and token endpoints check what production checks:
+
+- `GET /sso/authorize` requires `client_id`. Without one production lands on its own error page as `client_id_invalid`, before the `redirect_uri` is read; the emulator has no such page and registers no clients, so an absent id is `400 {"message": "Missing or invalid client_id.", "code": "client_id_invalid"}` and any id that is present is accepted.
+- An `inactive` connection is not a 404 but a redirect back to `redirect_uri` with `error=connection_unlinked`, production's description of the selector (`The connection 'conn_…' is inactive.`, or the organization, domain or provider variant), the `state`, and an `error_uri` pointing at the error-code reference — so a callback handler sees the failure the way it would in production.
+- `POST /sso/token` requires `client_id` and `client_secret`. The secret is an API key of the environment — in production it is looked up among the environment's keys, here among the emulator's (`sk_test_default`, or the keys you configured) — and a wrong one is `400 {"error": "invalid_client", "error_description": "Invalid client secret."}`, with no `authentication.sso_failed` event, since nothing was authenticated. The `client_id` is only required to be present, and becomes the access token's `aud`.
+- An authorization code lives five minutes, as production's do.
 
 ### Refresh tokens rotate, with a 30-second replay grace period
 
@@ -2057,10 +2074,15 @@ permissions:
     name: Write Organizations
 
 connections:
+  # One SSO connection per organization, as production allows; a second one fails the boot.
+  # OAuth connections (GoogleOAuth, MicrosoftOAuth, ...) are exempt, as they are in production.
   - name: Acme SSO
     connection_type: GenericSAML
     organization: Acme Corp
+    # Defaults to active: a seed stands for a connection verified before the suite began.
+    # `POST /connections` starts one `validating` instead, as production does.
     state: active
+    # Seed-only: the create endpoint has no `domains` field, and ignores one.
     domains: [acme.com]
     profiles:
       - email: admin@acme.com
@@ -2112,7 +2134,7 @@ const emulator = await createEmulator({
 
 When interactive mode is on:
 
-1. Your app redirects to `/sso/authorize?connection=...&redirect_uri=...` (or `/user_management/authorize?...`)
+1. Your app redirects to `/sso/authorize?client_id=...&connection=...&redirect_uri=...` (or `/user_management/authorize?...`)
 2. The emulator serves a login page instead of auto-redirecting
 3. The browser (or agent) fills in the email field and submits the form
 4. With the [password option](#requiring-a-password) on, a user who has a password is asked for it next
