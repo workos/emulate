@@ -140,10 +140,12 @@ export function organizationRoutes(ctx: RouteContext): void {
   });
 
   app.put('/organizations/:id', async (c) => {
+    const body = await parseJsonBody(c);
+    // Looked up after the body has been read: the unchanged-field check below must compare against
+    // the organization as it stands now, not as it stood before the request body arrived.
     const org = ws.organizations.get(c.req.param('id'));
     if (!org) throw notFound('Organization', c.req.param('id'));
 
-    const body = await parseJsonBody(c);
     const updates: Record<string, unknown> = {};
 
     if ('name' in body) {
