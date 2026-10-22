@@ -241,14 +241,15 @@ export const FEATURES: FeatureDef[] = [
   {
     name: 'Admin Portal',
     tags: ['admin-portal'],
-    notes: 'Generates a portal link; the portal itself is not served.',
+    notes:
+      "Generates a portal link (`201`) for an existing organization (`404` otherwise) and one of production's intents — `enterprise_managed_authorization` included, which needs an active Okta connection (`400 okta_connection_required`); an unknown or missing intent is a `400 invalid_portal_link_intent`. The portal itself is not served, and `certificate_renewal` is not held to production's expiring-certificate check, since certificates are not modeled.",
   },
   {
     name: 'Widgets',
     tags: ['widgets'],
     emulatorCreateRoutes: ['/_widgets'],
     notes:
-      'Mints widget tokens and serves the private `/_widgets/ApiKeys/*` routes the org-scope `<ApiKeys>` widget calls; that surface is outside the public spec, so it is not counted here. Other widgets and `scope="user"` API keys are not implemented.',
+      "Mints widget tokens (`201`) under production's rules: scopes must be production's, an organization must exist and a user hold an active membership in it (`404`), and a session may be org-only (standalone scopes) or user-only (no scopes); a user's `permissions` are not narrowed to the role's grants. Serves the private `/_widgets/ApiKeys/*` routes the org-scope `<ApiKeys>` widget calls; that surface is outside the public spec, so it is not counted here. Other widgets and `scope=\"user\"` API keys are not implemented.",
   },
   {
     name: 'Radar',

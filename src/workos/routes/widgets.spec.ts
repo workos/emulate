@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap, type Entity } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
 import { getWorkOSStore, type WorkOSStore } from '../store.js';
-import { paginateForWidget, WIDGET_SCOPE_API_KEYS_MANAGE } from './widgets.js';
+import { paginateForWidget, WIDGET_SCOPE_API_KEYS_MANAGE, WIDGET_SESSION_SCOPES } from './widgets.js';
 
 const apiKeys: ApiKeyMap = { sk_test_widgets: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_widgets', 'Content-Type': 'application/json' };
@@ -28,13 +28,48 @@ const insertOrganization = (ws: WorkOSStore, id: string) =>
     entitlements: [],
   });
 
+const insertUser = (ws: WorkOSStore, id: string) =>
+  ws.users.insert({
+    id,
+    object: 'user',
+    email: `${id}@example.com`,
+    name: null,
+    first_name: null,
+    last_name: null,
+    email_verified: true,
+    profile_picture_url: null,
+    last_sign_in_at: null,
+    external_id: null,
+    metadata: {},
+    locale: null,
+    password_hash: null,
+    impersonator: null,
+  });
+
+const insertMembership = (ws: WorkOSStore, organizationId: string, userId: string, status: 'active' | 'inactive') =>
+  ws.organizationMemberships.insert({
+    object: 'organization_membership',
+    organization_id: organizationId,
+    user_id: userId,
+    role: { slug: 'member' },
+    status,
+    external_id: null,
+    metadata: {},
+  });
+
 describe('Widget routes', () => {
   let server: ReturnType<typeof createTestApp>;
   let app: ReturnType<typeof createTestApp>['app'];
+  let ws: WorkOSStore;
 
+  // A token needs a real organization and an active member of it, as in production.
   beforeEach(() => {
     server = createTestApp();
     app = server.app;
+    ws = getWorkOSStore(server.store);
+    insertOrganization(ws, 'org_123');
+    insertUser(ws, 'user_456');
+    insertMembership(ws, 'org_123', 'user_456', 'active');
   });
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
@@ -51,21 +86,20 @@ describe('Widget routes', () => {
         ...overrides,
       }),
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     return (await json(res)).token as string;
   };
 
   describe('POST /widgets/token', () => {
-    it('generates a widgets token', async () => {
-      const res = await req('/widgets/token', {
-        method: 'POST',
-        body: JSON.stringify({
-          organization_id: 'org_123',
-          user_id: 'user_456',
-          scopes: ['widgets:users-table:manage'],
-        }),
+    const issue = (body: unknown) => req('/widgets/token', { method: 'POST', body: JSON.stringify(body) });
+
+    it('generates a widgets token, created', async () => {
+      const res = await issue({
+        organization_id: 'org_123',
+        user_id: 'user_456',
+        scopes: ['widgets:users-table:manage'],
       });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(201);
       const data = await json(res);
       expect(data.token).toBeDefined();
       expect(typeof data.token).toBe('string');
@@ -79,6 +113,8 @@ describe('Widget routes', () => {
       expect(payload.aud).toBe('widgets');
       expect(payload.sub).toBe('user_456');
       expect(payload.org_id).toBe('org_123');
+      expect(payload.sid).toMatch(/^widget_session_[0-9A-Z]{26}$/);
+      expect(typeof payload.jti).toBe('string');
       // The client throws NoAuthTokenError unless `permissions` is an array, and gates each
       // widget on its own scope being in it — so the scopes travel under that claim.
       expect(payload.permissions).toEqual([WIDGET_SCOPE_API_KEYS_MANAGE, 'widgets:users-table:manage']);
@@ -89,37 +125,163 @@ describe('Widget routes', () => {
       expect(payload.exp).toBeLessThanOrEqual(now + 3600);
     });
 
-    it('requires organization_id', async () => {
-      const res = await req('/widgets/token', {
-        method: 'POST',
-        body: JSON.stringify({ user_id: 'user_456', scopes: ['read'] }),
-      });
-      expect(res.status).toBe(422);
+    it('accepts every production scope', async () => {
+      const res = await issue({ organization_id: 'org_123', user_id: 'user_456', scopes: WIDGET_SESSION_SCOPES });
+      expect(res.status).toBe(201);
+      expect(claims((await json(res)).token).permissions).toEqual([...WIDGET_SESSION_SCOPES]);
     });
 
-    it('requires user_id', async () => {
-      const res = await req('/widgets/token', {
-        method: 'POST',
-        body: JSON.stringify({ organization_id: 'org_123', scopes: ['read'] }),
+    describe('body validation, in the shape the Nest pipe answers', () => {
+      it('rejects an unknown scope with the production message, empty list included', async () => {
+        const res = await issue({ organization_id: 'org_123', user_id: 'user_456', scopes: ['widgets:bogus'] });
+        expect(res.status).toBe(400);
+        expect(await json(res)).toEqual({
+          message: ['each value in scopes must be one of the following values: '],
+          error: 'Bad Request',
+        });
       });
-      expect(res.status).toBe(422);
+
+      it('rejects a non-string scope the same way', async () => {
+        const res = await issue({ organization_id: 'org_123', user_id: 'user_456', scopes: [1] });
+        expect(res.status).toBe(400);
+        expect((await json(res)).message).toEqual(['each value in scopes must be one of the following values: ']);
+      });
+
+      it('rejects scopes that are not an array', async () => {
+        const res = await issue({ organization_id: 'org_123', user_id: 'user_456', scopes: 'widgets:sso:manage' });
+        expect(res.status).toBe(400);
+        expect(await json(res)).toEqual({ message: ['scopes must be an array'], error: 'Bad Request' });
+      });
+
+      it('rejects non-string ids, one message per field in field order', async () => {
+        const res = await issue({ organization_id: 7, user_id: ['user_456'], scopes: ['nope'] });
+        expect(res.status).toBe(400);
+        expect((await json(res)).message).toEqual([
+          'organization_id must be a string',
+          'user_id must be a string',
+          'each value in scopes must be one of the following values: ',
+        ]);
+      });
+
+      it('treats null scopes as absent, as the optional field is', async () => {
+        const res = await issue({ organization_id: 'org_123', user_id: 'user_456', scopes: null });
+        expect(res.status).toBe(201);
+        expect(claims((await json(res)).token).permissions).toEqual([]);
+      });
     });
 
-    it('requires scopes', async () => {
-      const res = await req('/widgets/token', {
-        method: 'POST',
-        body: JSON.stringify({ organization_id: 'org_123', user_id: 'user_456' }),
+    it('requires organization_id when scopes are requested', async () => {
+      const res = await issue({ user_id: 'user_456', scopes: [WIDGET_SCOPE_API_KEYS_MANAGE] });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        message: 'organization_id is required when scopes are provided',
+        error: 'Bad Request',
       });
-      expect(res.status).toBe(422);
     });
 
-    it('requires scopes to be strings', async () => {
-      const res = await req('/widgets/token', {
-        method: 'POST',
-        body: JSON.stringify({ organization_id: 'org_123', user_id: 'user_456', scopes: [1] }),
+    it('requires an organization_id or a user_id', async () => {
+      const res = await issue({});
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({
+        message: 'You must provide an organization_id or a user_id',
+        error: 'Bad Request',
       });
-      expect(res.status).toBe(422);
-      expect((await json(res)).errors).toEqual([{ field: 'scopes', code: 'required' }]);
+    });
+
+    it('answers 404 for an organization that does not exist', async () => {
+      const res = await issue({
+        organization_id: 'org_nope',
+        user_id: 'user_456',
+        scopes: [WIDGET_SCOPE_API_KEYS_MANAGE],
+      });
+      expect(res.status).toBe(404);
+      expect((await json(res)).message).toContain('Organization');
+    });
+
+    it('answers 404 for a user who is not a member of the organization', async () => {
+      insertUser(ws, 'user_outsider');
+      const res = await issue({ organization_id: 'org_123', user_id: 'user_outsider', scopes: [] });
+      expect(res.status).toBe(404);
+      expect((await json(res)).message).toContain('UserOrganizationMembership');
+    });
+
+    it('answers the same 404 for an unknown user, which production never looks up on its own', async () => {
+      const res = await issue({ organization_id: 'org_123', user_id: 'user_nobody', scopes: [] });
+      expect(res.status).toBe(404);
+      expect((await json(res)).message).toContain('UserOrganizationMembership');
+    });
+
+    it('requires the membership to be active', async () => {
+      insertUser(ws, 'user_former');
+      insertMembership(ws, 'org_123', 'user_former', 'inactive');
+      const res = await issue({ organization_id: 'org_123', user_id: 'user_former', scopes: [] });
+      expect(res.status).toBe(404);
+    });
+
+    describe('organization-only sessions', () => {
+      it('issues a token for standalone scopes without a user', async () => {
+        const res = await issue({ organization_id: 'org_123', scopes: [WIDGET_SCOPE_API_KEYS_MANAGE] });
+        expect(res.status).toBe(201);
+        const payload = claims((await json(res)).token);
+        // No user to name, so the session itself is the subject.
+        expect(payload.sub).toBe(payload.sid);
+        expect(payload.org_id).toBe('org_123');
+        expect(payload.permissions).toEqual([WIDGET_SCOPE_API_KEYS_MANAGE]);
+      });
+
+      it('mints a token the org-scope widget routes accept', async () => {
+        const res = await issue({ organization_id: 'org_123', scopes: [WIDGET_SCOPE_API_KEYS_MANAGE] });
+        const { token } = await json(res);
+        const list = await app.request('/_widgets/ApiKeys/organization-api-keys', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        expect(list.status).toBe(200);
+      });
+
+      it('requires a user_id for AuthKit scopes, naming them', async () => {
+        const res = await issue({
+          organization_id: 'org_123',
+          scopes: ['widgets:users-table:manage', WIDGET_SCOPE_API_KEYS_MANAGE, 'widgets:user-api-keys:manage-self'],
+        });
+        expect(res.status).toBe(400);
+        expect(await json(res)).toEqual({
+          message:
+            'user_id is required for these scopes: widgets:users-table:manage, widgets:user-api-keys:manage-self',
+          error: 'Bad Request',
+        });
+      });
+
+      it('requires scopes or a user_id', async () => {
+        const res = await issue({ organization_id: 'org_123' });
+        expect(res.status).toBe(400);
+        expect(await json(res)).toEqual({ message: 'You must provide scopes or a user_id', error: 'Bad Request' });
+      });
+    });
+
+    describe('user-only sessions', () => {
+      it('issues a token with no organization and no permissions', async () => {
+        const res = await issue({ user_id: 'user_456' });
+        expect(res.status).toBe(201);
+        const payload = claims((await json(res)).token);
+        expect(payload.sub).toBe('user_456');
+        expect(payload.org_id).toBeUndefined();
+        expect(payload.permissions).toEqual([]);
+        expect(payload.aud).toBe('widgets');
+      });
+
+      it('answers 404 for a user that does not exist', async () => {
+        const res = await issue({ user_id: 'user_nobody' });
+        expect(res.status).toBe(404);
+        expect((await json(res)).message).toContain('User');
+      });
+
+      it('is refused by the org-scope widget routes, which need an organization', async () => {
+        const { token } = await json(await issue({ user_id: 'user_456' }));
+        const list = await app.request('/_widgets/ApiKeys/organization-api-keys', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        expect(list.status).toBe(403);
+      });
     });
   });
 
@@ -188,12 +350,9 @@ describe('Widget routes', () => {
   });
 
   describe('/_widgets/ApiKeys', () => {
-    let ws: WorkOSStore;
     let token: string;
 
     beforeEach(async () => {
-      ws = getWorkOSStore(server.store);
-      insertOrganization(ws, 'org_123');
       token = await mintToken();
     });
 
@@ -244,9 +403,10 @@ describe('Widget routes', () => {
     });
 
     it('refuses to issue a key for an organization that does not exist', async () => {
-      // A token can be minted for any organization id, and the org may be deleted afterwards;
-      // honoring it would create a live credential no organization route can reach.
-      const orphanToken = await mintToken({ organization_id: 'org_missing' });
+      // The organization may be deleted while a token for it is still live; honoring the token
+      // would create a credential no organization route can reach.
+      const orphanToken = await mintToken();
+      ws.organizations.delete('org_123');
       const res = await app.request('/_widgets/ApiKeys/organization-api-keys', {
         method: 'POST',
         headers: { Authorization: `Bearer ${orphanToken}`, 'Content-Type': 'application/json' },

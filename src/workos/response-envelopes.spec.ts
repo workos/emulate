@@ -23,9 +23,8 @@
  * the coverage test, so a catalog entry can't sit unexercised.
  *
  * Scope: response *bodies*, not status codes. Some routes return 200 where the
- * spec says 201 (`/portal/generate_link`, `/widgets/token`,
- * `/auth/challenges/{id}/verify`); status conformance is a separate axis and
- * this loop only requires a 2xx.
+ * spec says 201 (`/auth/challenges/{id}/verify`); status conformance is a
+ * separate axis and this loop only requires a 2xx.
  */
 import { describe, it, expect, beforeAll } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../core/index.js';

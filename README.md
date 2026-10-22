@@ -1187,12 +1187,47 @@ keeps no registry (`POST /audit_logs/actions/{name}/schemas` records a schema, b
 it), so any action, target type and metadata are accepted. The audit log trail is always enabled.
 Exports resolve to a placeholder URL rather than a CSV of the stored events.
 
+## Admin Portal
+
+`POST /portal/generate_link` answers `201` with a link for the organization, validating the
+request as production does. The organization must exist (`404`), and must be resolved before the
+intent is read — so an unknown organization is a `404` whatever the intent. The intent must be one
+of `sso`, `dsync`, `audit_logs`, `log_streams`, `domain_verification`, `certificate_renewal`,
+`bring_your_own_key` or `enterprise_managed_authorization`; anything else, a missing intent
+included, is a `400` `invalid_portal_link_intent` quoting what was sent. The
+`enterprise_managed_authorization` intent is flag-gated per team in production and the emulator
+treats every team as flagged in, but it keeps the rule behind the flag: the organization needs an
+active `OktaSAML` or `OktaOIDC` connection, or the answer is a `400` `okta_connection_required`.
+
+The portal itself is not served, and `certificate_renewal` is not held to production's check that
+the organization has an expiring certificate, because the emulator does not model certificates.
+
 ## Widgets
 
 `POST /widgets/token` mints the session token the `@workos-inc/widgets` components authenticate
-with, as the SDKs' `widgets.getToken()` calls it. The requested scopes are minted under the
-`permissions` claim and the token expires in an hour — the two claims the widget client reads to
-decide whether it may render and when to refresh.
+with, as the SDKs' `widgets.getToken()` calls it, answering `201`. The requested scopes are minted
+under the `permissions` claim and the token expires in an hour — the two claims the widget client
+reads to decide whether it may render and when to refresh.
+
+The body is validated as production validates it. `scopes` must be drawn from the production list
+(`widgets:users-table:manage`, `widgets:user-api-keys:manage-self`,
+`widgets:user-api-keys:manage-all`, `widgets:domain-verification:manage`, `widgets:sso:manage`,
+`widgets:api-keys:manage`, `widgets:dsync:manage`, `widgets:audit-log-streaming:manage`,
+`widgets:pipes:manage`); an unknown one, or a non-string `organization_id` or `user_id`, is the
+`400` the spec documents for this route: `{ message: [...], error: 'Bad Request' }`, one
+class-validator message per failed field. A session carries a user, an organization, or both:
+
+- `organization_id` with `user_id`: the organization must exist (`404`) and the user must hold an
+  active membership in it (`404 UserOrganizationMembership`). `scopes` may be empty.
+- `organization_id` alone: a standalone session for the org-scope widgets. `scopes` must name at
+  least one, and none of the AuthKit scopes (`widgets:users-table:manage`,
+  `widgets:user-api-keys:*`), which only a user can hold; either is a `400` naming the problem.
+  The token's `sub` is the session id.
+- `user_id` alone: a user-only session for widgets like `UserProfile`, with no organization and
+  no permissions. The user must exist (`404`). Any `scopes` need an `organization_id` (`400`).
+
+The emulator does not narrow `permissions` to what the user's role grants, as production does for
+a user session; the token carries the requested scopes as is.
 
 The components never call the public REST API; they call a private `/_widgets/*` surface. The
 emulator serves the routes the org-scope `<ApiKeys>` widget uses, as a translation layer over the
