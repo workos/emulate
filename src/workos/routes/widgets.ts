@@ -4,6 +4,8 @@ import {
   type RouteContext,
   type WidgetAuthContext,
   type WorkOSAppEnv,
+  generateId,
+  generateUlid,
   notFound,
   parseJsonBody,
   validationError,
@@ -19,6 +21,49 @@ import { getWorkOSStore } from '../store.js';
  * in the Node SDK, and the `permissions` entry the widget itself checks before it renders.
  */
 export const WIDGET_SCOPE_API_KEYS_MANAGE = 'widgets:api-keys:manage';
+
+/**
+ * The scopes only an AuthKit user can hold — `AuthkitWidgetScopes` in production
+ * (packages/api-entities-zod/src/entities/widget-session.ts). Requesting one without a
+ * `user_id` is refused, since the session would have no user to grant it to.
+ */
+export const AUTHKIT_WIDGET_SCOPES: ReadonlySet<string> = new Set([
+  'widgets:users-table:manage',
+  'widgets:user-api-keys:manage-self',
+  'widgets:user-api-keys:manage-all',
+]);
+
+/**
+ * The scopes a widget session can be minted with: production's `WidgetSessionScope` enum —
+ * the AuthKit scopes above plus the standalone ones, which need an organization but no user.
+ */
+export const WIDGET_SESSION_SCOPES: readonly string[] = [
+  ...AUTHKIT_WIDGET_SCOPES,
+  'widgets:domain-verification:manage',
+  'widgets:sso:manage',
+  WIDGET_SCOPE_API_KEYS_MANAGE,
+  'widgets:dsync:manage',
+  'widgets:audit-log-streaming:manage',
+  'widgets:pipes:manage',
+];
+
+const isWidgetSessionScope = (scope: string): boolean => WIDGET_SESSION_SCOPES.includes(scope);
+
+/**
+ * Production's message for an unknown scope, verbatim — including the empty list after the
+ * colon. Its `IsEnum` is handed the zod enum's `.options` array, and class-validator 0.14 builds
+ * the list from the non-numeric keys of what it is given, of which an array has none.
+ */
+const INVALID_SCOPE_MESSAGE = 'each value in scopes must be one of the following values: ';
+
+/**
+ * The 400 Nest's `BadRequestException` renders from a bare message, and the one its default
+ * `ValidationPipe` renders from a list of them: `{ message, error: 'Bad Request' }` with no
+ * `code`, which is the shape the spec documents for this route and the only 400 it answers.
+ */
+function nestBadRequest(c: Context<WorkOSAppEnv>, message: string | string[]) {
+  return c.json({ message, error: 'Bad Request' }, 400);
+}
 
 interface WidgetListParams {
   limit: number;
@@ -141,18 +186,70 @@ export function widgetRoutes(ctx: RouteContext): void {
 
   app.post('/widgets/token', async (c) => {
     const body = await parseJsonBody(c);
-    const organizationId = body.organization_id as string | undefined;
-    const userId = body.user_id as string | undefined;
-    const scopes = body.scopes;
 
-    if (!organizationId) {
-      throw validationError('organization_id is required', [{ field: 'organization_id', code: 'required' }]);
+    // Production validates the body with Nest's default ValidationPipe, whose failure is the
+    // `{ message: string[], error: 'Bad Request' }` body the spec documents for this route's
+    // 400 — one class-validator message per failed field, in field order. An optional field
+    // that is null or absent is skipped, so neither counts as a failure.
+    const messages: string[] = [];
+    const { organization_id: rawOrganizationId, user_id: rawUserId, scopes } = body;
+    if (rawOrganizationId != null && typeof rawOrganizationId !== 'string') {
+      messages.push('organization_id must be a string');
     }
-    if (!userId) {
-      throw validationError('user_id is required', [{ field: 'user_id', code: 'required' }]);
+    if (rawUserId != null && typeof rawUserId !== 'string') messages.push('user_id must be a string');
+    if (scopes != null) {
+      if (!Array.isArray(scopes)) {
+        messages.push('scopes must be an array');
+      } else if (!scopes.every((scope) => typeof scope === 'string' && isWidgetSessionScope(scope))) {
+        messages.push(INVALID_SCOPE_MESSAGE);
+      }
     }
-    if (!Array.isArray(scopes) || !scopes.every((scope) => typeof scope === 'string')) {
-      throw validationError('scopes is required', [{ field: 'scopes', code: 'required' }]);
+    if (messages.length > 0) return nestBadRequest(c, messages);
+
+    // Past validation each id is a string or absent, and an empty string reads as absent, as it
+    // does to production's truthiness checks.
+    const organizationId = typeof rawOrganizationId === 'string' && rawOrganizationId ? rawOrganizationId : undefined;
+    const userId = typeof rawUserId === 'string' && rawUserId ? rawUserId : undefined;
+    const requestedScopes: string[] = Array.isArray(scopes) ? scopes : [];
+
+    if (requestedScopes.length > 0 && !organizationId) {
+      return nestBadRequest(c, 'organization_id is required when scopes are provided');
+    }
+    if (!organizationId && !userId) {
+      return nestBadRequest(c, 'You must provide an organization_id or a user_id');
+    }
+
+    // A widget session carries a user, an organization, or both: `sub` is the user when there is
+    // one and the session id otherwise, as production mints it.
+    const sessionId = generateId('widget_session');
+    let subject: string;
+
+    if (organizationId) {
+      if (!ws.organizations.get(organizationId)) throw notFound('Organization');
+
+      // user_id is required when no scopes are requested (an AuthKit profile or org switcher
+      // session) and when any AuthKit scope is, which only a user can hold.
+      if (!userId) {
+        const authkitScopes = requestedScopes.filter((scope) => AUTHKIT_WIDGET_SCOPES.has(scope));
+        if (authkitScopes.length > 0) {
+          return nestBadRequest(c, `user_id is required for these scopes: ${authkitScopes.join(', ')}`);
+        }
+        if (requestedScopes.length === 0) return nestBadRequest(c, 'You must provide scopes or a user_id');
+        subject = sessionId;
+      } else {
+        // The user must hold an *active* membership in the organization; production never
+        // looks the user up on its own here, so an unknown user fails the same way.
+        const membership = ws.organizationMemberships
+          .findBy('organization_id', organizationId)
+          .find((m) => m.user_id === userId && m.status === 'active');
+        if (!membership) throw notFound('UserOrganizationMembership');
+        subject = userId;
+      }
+    } else {
+      // A user-only session, for the widgets that need no organization context. Scopes are
+      // necessarily empty here (any scope requires an organization), so the token carries none.
+      if (!userId || !ws.users.get(userId)) throw notFound('User');
+      subject = userId;
     }
 
     // The widget client decodes this token itself: it refuses to render unless `permissions` is
@@ -160,13 +257,15 @@ export function widgetRoutes(ctx: RouteContext): void {
     // `sign` always sets. The scopes therefore travel under `permissions` — the claim the
     // client reads — rather than a `scopes` claim nothing does.
     const token = jwt.sign({
-      sub: userId,
-      org_id: organizationId,
+      sub: subject,
+      sid: sessionId,
+      ...(organizationId ? { org_id: organizationId } : {}),
       aud: WIDGET_TOKEN_AUDIENCE,
-      permissions: scopes as string[],
+      jti: generateUlid(),
+      permissions: requestedScopes,
     });
 
-    return c.json({ token });
+    return c.json({ token }, 201);
   });
 
   // ---------------------------------------------------------------------------
