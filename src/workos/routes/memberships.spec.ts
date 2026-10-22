@@ -39,6 +39,19 @@ describe('Membership routes', () => {
     );
   }
 
+  /** An environment role, so a slug beyond the built-in `member` and `admin` resolves. */
+  async function createRole(slug: string) {
+    return json(await req('/authorization/roles', { method: 'POST', body: JSON.stringify({ slug, name: slug }) }));
+  }
+
+  /**
+   * Environment roles at one priority, so a role set reads in the order it was written: a role
+   * the store holds outranks one it does not, built-ins included.
+   */
+  async function createRoles(...slugs: string[]) {
+    for (const slug of slugs) await createRole(slug);
+  }
+
   it('creates a membership', async () => {
     const org = await createOrg('Mem Org');
     const user = await createUser('member@test.com');
@@ -365,6 +378,7 @@ describe('Membership routes', () => {
   it('creates a membership holding several roles', async () => {
     const org = await createOrg('Multi Role Org');
     const user = await createUser('multi@test.com');
+    await createRoles('member', 'admin', 'guardian-analyst');
 
     const res = await req('/user_management/organization_memberships', {
       method: 'POST',
@@ -379,6 +393,7 @@ describe('Membership routes', () => {
   it('replaces the whole role set on update, by role_slugs or a single role_slug', async () => {
     const org = await createOrg('Role Set Org');
     const user = await createUser('roleset@test.com');
+    await createRoles('member', 'admin', 'guardian-analyst');
     const created = await json(
       await req('/user_management/organization_memberships', {
         method: 'POST',
@@ -443,6 +458,7 @@ describe('Membership routes', () => {
   it('carries role and roles on organization_membership events, without the user', async () => {
     const org = await createOrg('Event Org');
     const user = await createUser('event@test.com');
+    await createRoles('member', 'admin', 'guardian-analyst');
     const m = await json(
       await req('/user_management/organization_memberships', {
         method: 'POST',
@@ -471,13 +487,108 @@ describe('Membership routes', () => {
   it('rejects an empty or malformed role_slugs', async () => {
     const org = await createOrg('Bad Roles Org');
     const user = await createUser('badroles@test.com');
-    for (const role_slugs of [[], ['admin', 7], 'admin']) {
+    for (const role_slugs of [['admin', 7], 'admin']) {
       const res = await req('/user_management/organization_memberships', {
         method: 'POST',
         body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slugs }),
       });
       expect(res.status).toBe(422);
     }
+    // An empty array passes production's body validation and fails as a role that names nothing.
+    const empty = await req('/user_management/organization_memberships', {
+      method: 'POST',
+      body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slugs: [] }),
+    });
+    expect(empty.status).toBe(422);
+    expect(await json(empty)).toEqual({ message: 'The role is invalid.', code: 'invalid_role' });
+  });
+
+  describe('role slugs must name a role', () => {
+    it('422s a slug that names no role on create, before any membership exists', async () => {
+      const org = await createOrg('Unknown Role Org');
+      const user = await createUser('unknown-role@test.com');
+      for (const body of [{ role_slug: 'no-such-role' }, { role_slugs: ['admin', 'no-such-role'] }]) {
+        const res = await req('/user_management/organization_memberships', {
+          method: 'POST',
+          body: JSON.stringify({ organization_id: org.id, user_id: user.id, ...body }),
+        });
+        expect(res.status).toBe(422);
+        expect(await json(res)).toEqual({ message: 'The role is invalid.', code: 'invalid_role' });
+      }
+      const list = await json(await req(`/user_management/organization_memberships?organization_id=${org.id}`));
+      expect(list.data).toHaveLength(0);
+    });
+
+    it('422s a slug that names no role on update, leaving the roles alone', async () => {
+      const org = await createOrg('Unknown Role Update Org');
+      const user = await createUser('unknown-role-update@test.com');
+      const m = await json(
+        await req('/user_management/organization_memberships', {
+          method: 'POST',
+          body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slug: 'admin' }),
+        }),
+      );
+      const res = await req(`/user_management/organization_memberships/${m.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ role_slug: 'no-such-role' }),
+      });
+      expect(res.status).toBe(422);
+      expect((await json(res)).code).toBe('invalid_role');
+      expect((await json(await req(`/user_management/organization_memberships/${m.id}`))).role).toEqual({
+        slug: 'admin',
+      });
+    });
+
+    // `member` and `admin` come with every production environment, so they need no seeding; a
+    // role of another organization is not this organization's.
+    it("resolves the built-in environment roles, environment roles, and this organization's roles", async () => {
+      const org = await createOrg('Resolving Org');
+      const other = await createOrg('Other Org');
+      const user = await createUser('resolving@test.com');
+      await createRole('env-role');
+      await req(`/authorization/organizations/${other.id}/roles`, {
+        method: 'POST',
+        body: JSON.stringify({ slug: 'other-org-role', name: 'Other' }),
+      });
+      await req(`/authorization/organizations/${org.id}/roles`, {
+        method: 'POST',
+        body: JSON.stringify({ slug: 'own-org-role', name: 'Own' }),
+      });
+
+      const create = (role_slugs: string[]) =>
+        req('/user_management/organization_memberships', {
+          method: 'POST',
+          body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slugs }),
+        });
+      expect((await create(['other-org-role'])).status).toBe(422);
+      const res = await create(['member', 'admin', 'env-role', 'own-org-role']);
+      expect(res.status).toBe(201);
+      expect((await json(res)).roles.map((r: { slug: string }) => r.slug).sort()).toEqual([
+        'admin',
+        'env-role',
+        'member',
+        'own-org-role',
+      ]);
+    });
+  });
+
+  it('refuses to list memberships without an organization_id or user_id', async () => {
+    const res = await req('/user_management/organization_memberships');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toEqual({
+      message: 'At least one of organization_id or user_id must be provided.',
+      code: 'missing_user_id_or_organization_id',
+    });
+
+    const org = await createOrg('Filtered Org');
+    const user = await createUser('filtered@test.com');
+    await req('/user_management/organization_memberships', {
+      method: 'POST',
+      body: JSON.stringify({ organization_id: org.id, user_id: user.id }),
+    });
+    expect((await json(await req(`/user_management/organization_memberships?user_id=${user.id}`))).data).toHaveLength(
+      1,
+    );
   });
 });
 

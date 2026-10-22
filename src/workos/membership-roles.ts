@@ -1,5 +1,5 @@
-import { validationError } from '../core/index.js';
-import type { WorkOSOrganizationMembership } from './entities.js';
+import { validationError, WorkOSApiError } from '../core/index.js';
+import type { WorkOSOrganizationMembership, WorkOSRole } from './entities.js';
 import type { WorkOSStore } from './store.js';
 
 /**
@@ -31,12 +31,42 @@ export function orderRoleSlugs(ws: WorkOSStore, organizationId: string, slugs: r
   return unique.sort((a, b) => rank.get(a)! - rank.get(b)!);
 }
 
-function rolePriority(ws: WorkOSStore, organizationId: string, slug: string): number {
+/**
+ * The role a slug names for an organization, the way production's `findActiveBySlug` resolves
+ * it: the organization's own role under that slug, else the environment role.
+ */
+function findRole(ws: WorkOSStore, organizationId: string, slug: string): WorkOSRole | undefined {
   const candidates = ws.roles.findBy('slug', slug);
-  const role =
+  return (
     candidates.find((r) => r.organization_id === organizationId) ??
-    candidates.find((r) => r.type === 'EnvironmentRole' && r.organization_id === null);
+    candidates.find((r) => r.type === 'EnvironmentRole' && r.organization_id === null)
+  );
+}
+
+function rolePriority(ws: WorkOSStore, organizationId: string, slug: string): number {
+  const role = findRole(ws, organizationId, slug);
   return role ? role.priority : Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * The two environment roles production creates with every environment (`roles-orchestrator.ts`:
+ * `member`, the default role, and `admin`). They exist before anything is seeded, so a slug naming
+ * one is always valid here too, whether or not the seed defines them.
+ */
+const BUILT_IN_ROLE_SLUGS = new Set(['member', 'admin']);
+
+/**
+ * The first of `slugs` that names no role an organization membership can hold — no role of
+ * that organization, no environment role, and not one of the built-in two — or undefined when
+ * all resolve. Production answers such a slug with `invalid_role`; the status differs by route
+ * (422 on memberships, 400 on invitations), so the caller raises the error.
+ */
+export function undefinedRoleSlug(
+  ws: WorkOSStore,
+  organizationId: string,
+  slugs: readonly string[],
+): string | undefined {
+  return slugs.find((slug) => !BUILT_IN_ROLE_SLUGS.has(slug) && !findRole(ws, organizationId, slug));
 }
 
 /**
@@ -65,11 +95,12 @@ export function roleSlugsFromBody(body: Record<string, unknown>): string[] | und
   }
   if ('role_slugs' in body) {
     const slugs = body.role_slugs;
-    if (!Array.isArray(slugs) || slugs.length === 0 || !slugs.every(isSlug)) {
-      throw validationError('role_slugs must be a non-empty array of role slugs', [
-        { field: 'role_slugs', code: 'invalid' },
-      ]);
+    if (!Array.isArray(slugs) || !slugs.every(isSlug)) {
+      throw validationError('role_slugs must be an array of role slugs', [{ field: 'role_slugs', code: 'invalid' }]);
     }
+    // An empty array passes production's request validation and is refused by the controller
+    // as a role that names nothing, under the same code an unknown slug gets.
+    if (slugs.length === 0) throw invalidRole(422);
     return slugs as string[];
   }
   if ('role_slug' in body) {
@@ -82,3 +113,11 @@ export function roleSlugsFromBody(body: Record<string, unknown>): string[] | und
 }
 
 const isSlug = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+/**
+ * Production's answer to a role slug that resolves to no role: the body is the same everywhere,
+ * the status is the route's — 422 from the membership endpoints, 400 from invitations.
+ */
+export function invalidRole(status: 400 | 422): WorkOSApiError {
+  return new WorkOSApiError(status, 'The role is invalid.', 'invalid_role');
+}

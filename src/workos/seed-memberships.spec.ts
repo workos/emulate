@@ -18,6 +18,13 @@ describe('Seeding organization memberships', () => {
 
   const auth = (apiKey: string) => ({ Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' });
 
+  /** The memberships of the one seeded organization — the list wants an organization or a user named. */
+  async function listMemberships(e: Emulator): Promise<Response> {
+    const headers = auth(e.apiKey);
+    const orgs = (await (await fetch(`${e.url}/organizations`, { headers })).json()) as any;
+    return fetch(`${e.url}/user_management/organization_memberships?organization_id=${orgs.data[0].id}`, { headers });
+  }
+
   it('seeds a membership joined to its user by email', async () => {
     emulator = await createEmulator({
       port: 0,
@@ -32,9 +39,7 @@ describe('Seeding organization memberships', () => {
       },
     });
 
-    const res = await fetch(`${emulator.url}/user_management/organization_memberships`, {
-      headers: auth(emulator.apiKey),
-    });
+    const res = await listMemberships(emulator);
     expect(res.status).toBe(200);
     const list = (await res.json()) as any;
     expect(list.data).toHaveLength(1);
@@ -60,9 +65,7 @@ describe('Seeding organization memberships', () => {
       },
     });
 
-    const res = await fetch(`${emulator.url}/user_management/organization_memberships`, {
-      headers: auth(emulator.apiKey),
-    });
+    const res = await listMemberships(emulator);
     const list = (await res.json()) as any;
     expect(list.data).toHaveLength(1);
     // Stored under the case that seeded it, reached by the case the membership named.
@@ -347,9 +350,7 @@ describe('Seeding organization memberships', () => {
       });
 
       const headers = auth(emulator.apiKey);
-      const m = (
-        (await (await fetch(`${emulator.url}/user_management/organization_memberships`, { headers })).json()) as any
-      ).data[0];
+      const m = ((await (await listMemberships(emulator)).json()) as any).data[0];
       expect(m.role).toEqual({ slug: 'admin' });
       expect(m.roles).toEqual([{ slug: 'admin' }, { slug: 'viewer' }]);
 
@@ -372,9 +373,7 @@ describe('Seeding organization memberships', () => {
         },
       });
 
-      const res = await fetch(`${emulator.url}/user_management/organization_memberships`, {
-        headers: auth(emulator.apiKey),
-      });
+      const res = await listMemberships(emulator);
       const m = ((await res.json()) as any).data[0];
       expect(m.role).toEqual({ slug: 'admin' });
       expect(m.roles).toEqual([{ slug: 'admin' }, { slug: 'analyst' }]);

@@ -9,7 +9,7 @@ import {
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { formatMembership, formatListResponse, liveMembershipFor } from '../helpers.js';
-import { membershipRoleFields, roleSlugsFromBody } from '../membership-roles.js';
+import { invalidRole, membershipRoleFields, roleSlugsFromBody, undefinedRoleSlug } from '../membership-roles.js';
 import { deleteAgentInstancesForMembership, revokeAgentSessionsForMembership } from '../agent-sessions.js';
 
 export function membershipRoutes(ctx: RouteContext): void {
@@ -36,6 +36,11 @@ export function membershipRoutes(ctx: RouteContext): void {
     const user = ws.users.get(userId);
     if (!user) throw notFound('User', userId);
 
+    // Production resolves the requested roles before it looks at any existing membership, and
+    // a slug that names no role of this organization or of the environment is a 422.
+    const requestedSlugs = roleSlugsFromBody(body);
+    if (requestedSlugs && undefinedRoleSlug(ws, organizationId, requestedSlugs)) throw invalidRole(422);
+
     const existing = liveMembershipFor(ws, organizationId, userId);
     // The API reference: a pending membership is an unaccepted invitation, which the user has to
     // accept; creating over it is a 400. An active one is answered with the membership as it is,
@@ -50,7 +55,7 @@ export function membershipRoutes(ctx: RouteContext): void {
     }
     if (existing) return c.json(formatMembership(existing, ws), 201);
 
-    const roleFields = membershipRoleFields(ws, organizationId, roleSlugsFromBody(body) ?? ['member']);
+    const roleFields = membershipRoleFields(ws, organizationId, requestedSlugs ?? ['member']);
 
     // The API reference: creating over an inactive membership activates it with the requested
     // role(s), so the user keeps one membership and its id rather than gaining a second.
@@ -80,6 +85,15 @@ export function membershipRoutes(ctx: RouteContext): void {
     const params = parseListParams(url);
     const orgFilter = url.searchParams.get('organization_id') ?? undefined;
     const userFilter = url.searchParams.get('user_id') ?? undefined;
+    // Production lists memberships of a user, of an organization, or of both, never of the whole
+    // environment.
+    if (!orgFilter && !userFilter) {
+      throw new WorkOSApiError(
+        400,
+        'At least one of organization_id or user_id must be provided.',
+        'missing_user_id_or_organization_id',
+      );
+    }
     // Production returns only active memberships when the request names no status.
     const requestedStatuses = parseArrayParam(url, 'statuses');
     const statuses = requestedStatuses.length > 0 ? requestedStatuses : ['active'];
@@ -111,7 +125,10 @@ export function membershipRoutes(ctx: RouteContext): void {
     const updates: Record<string, unknown> = {};
 
     const roleSlugs = roleSlugsFromBody(body);
-    if (roleSlugs) Object.assign(updates, membershipRoleFields(ws, m.organization_id, roleSlugs));
+    if (roleSlugs) {
+      if (undefinedRoleSlug(ws, m.organization_id, roleSlugs)) throw invalidRole(422);
+      Object.assign(updates, membershipRoleFields(ws, m.organization_id, roleSlugs));
+    }
     if ('external_id' in body) {
       updates.external_id = body.external_id ?? null;
     }

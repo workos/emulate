@@ -38,13 +38,6 @@ describe('Authorization check + role assignment routes', () => {
     });
     const org = await json(orgRes);
 
-    // Create membership with role_slug 'editor'
-    const memRes = await req('/user_management/organization_memberships', {
-      method: 'POST',
-      body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slug: 'editor' }),
-    });
-    const membership = await json(memRes);
-
     // Create permissions
     await req('/authorization/permissions', {
       method: 'POST',
@@ -79,6 +72,14 @@ describe('Authorization check + role assignment routes', () => {
       method: 'PUT',
       body: JSON.stringify({ permissions: ['admin:manage'] }),
     });
+
+    // Create membership with role_slug 'editor' — after the role, since a slug naming no role is
+    // refused.
+    const memRes = await req('/user_management/organization_memberships', {
+      method: 'POST',
+      body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slug: 'editor' }),
+    });
+    const membership = await json(memRes);
 
     return { user, org, membership, adminRole };
   }
