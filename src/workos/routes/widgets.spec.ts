@@ -147,10 +147,21 @@ describe('Widget routes', () => {
         expect((await json(res)).message).toEqual(['each value in scopes must be one of the following values: ']);
       });
 
-      it('rejects scopes that are not an array', async () => {
+      it('rejects scopes that are not an array, with only that message when the scalar is a scope', async () => {
         const res = await issue({ organization_id: 'org_123', user_id: 'user_456', scopes: 'widgets:sso:manage' });
         expect(res.status).toBe(400);
         expect(await json(res)).toEqual({ message: ['scopes must be an array'], error: 'Bad Request' });
+      });
+
+      it('reports a non-array that is no scope either against both constraints, enum first', async () => {
+        for (const scopes of [42, 'widgets:bogus', {}, true]) {
+          const res = await issue({ organization_id: 'org_123', user_id: 'user_456', scopes });
+          expect(res.status).toBe(400);
+          expect((await json(res)).message).toEqual([
+            'each value in scopes must be one of the following values: ',
+            'scopes must be an array',
+          ]);
+        }
       });
 
       it('rejects non-string ids, one message per field in field order', async () => {
