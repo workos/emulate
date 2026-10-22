@@ -54,7 +54,7 @@ export function portalRoutes(ctx: RouteContext): void {
     // Production resolves the organization before it reads the intent
     // (portal-sessions.controller.ts, `locateTarget` then `IntentDto.decode`), so an unknown
     // organization is a 404 whatever the intent says.
-    if (!ws.organizations.get(organization)) throw notFound('Organization');
+    if (!ws.organizations.get(organization)) throw notFound('Organization', organization);
 
     // `intent` is optional in the DTO but an organization target has nothing to infer one from,
     // so a missing intent fails the same way an unknown one does.

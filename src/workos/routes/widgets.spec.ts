@@ -206,20 +206,29 @@ describe('Widget routes', () => {
         scopes: [WIDGET_SCOPE_API_KEYS_MANAGE],
       });
       expect(res.status).toBe(404);
-      expect((await json(res)).message).toContain('Organization');
+      expect(await json(res)).toEqual({
+        message: "Organization not found: 'org_nope'.",
+        code: 'entity_not_found',
+        entity_id: 'org_nope',
+      });
     });
 
     it('answers 404 for a user who is not a member of the organization', async () => {
       insertUser(ws, 'user_outsider');
       const res = await issue({ organization_id: 'org_123', user_id: 'user_outsider', scopes: [] });
       expect(res.status).toBe(404);
-      expect((await json(res)).message).toContain('UserOrganizationMembership');
+      // Production names the organization, not the user, as the missing entity.
+      expect(await json(res)).toEqual({
+        message: "UserOrganizationMembership not found: 'org_123'.",
+        code: 'entity_not_found',
+        entity_id: 'org_123',
+      });
     });
 
     it('answers the same 404 for an unknown user, which production never looks up on its own', async () => {
       const res = await issue({ organization_id: 'org_123', user_id: 'user_nobody', scopes: [] });
       expect(res.status).toBe(404);
-      expect((await json(res)).message).toContain('UserOrganizationMembership');
+      expect((await json(res)).message).toBe("UserOrganizationMembership not found: 'org_123'.");
     });
 
     it('requires the membership to be active', async () => {
@@ -283,7 +292,11 @@ describe('Widget routes', () => {
       it('answers 404 for a user that does not exist', async () => {
         const res = await issue({ user_id: 'user_nobody' });
         expect(res.status).toBe(404);
-        expect((await json(res)).message).toContain('User');
+        expect(await json(res)).toEqual({
+          message: "User not found: 'user_nobody'.",
+          code: 'entity_not_found',
+          entity_id: 'user_nobody',
+        });
       });
 
       it('is refused by the org-scope widget routes, which need an organization', async () => {
@@ -424,7 +437,7 @@ describe('Widget routes', () => {
         body: JSON.stringify({ name: 'Orphan', permissions: [] }),
       });
       expect(res.status).toBe(404);
-      expect((await json(res)).message).toBe("Organization not found: 'org_missing'.");
+      expect((await json(res)).message).toBe("Organization not found: 'org_123'.");
       expect(ws.apiKeyRecords.all()).toHaveLength(0);
     });
 

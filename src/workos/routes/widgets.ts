@@ -228,7 +228,7 @@ export function widgetRoutes(ctx: RouteContext): void {
     let subject: string;
 
     if (organizationId) {
-      if (!ws.organizations.get(organizationId)) throw notFound('Organization');
+      if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
       // user_id is required when no scopes are requested (an AuthKit profile or org switcher
       // session) and when any AuthKit scope is, which only a user can hold.
@@ -245,14 +245,17 @@ export function widgetRoutes(ctx: RouteContext): void {
         const membership = ws.organizationMemberships
           .findBy('organization_id', organizationId)
           .find((m) => m.user_id === userId && m.status === 'active');
-        if (!membership) throw notFound('UserOrganizationMembership');
+        if (!membership) throw notFound('UserOrganizationMembership', organizationId);
         subject = userId;
       }
-    } else {
+    } else if (userId) {
       // A user-only session, for the widgets that need no organization context. Scopes are
       // necessarily empty here (any scope requires an organization), so the token carries none.
-      if (!userId || !ws.users.get(userId)) throw notFound('User');
+      if (!ws.users.get(userId)) throw notFound('User', userId);
       subject = userId;
+    } else {
+      // Already refused above; production re-checks here too, and so does the type narrowing.
+      return nestBadRequest(c, 'You must provide an organization_id or a user_id');
     }
 
     // The widget client decodes this token itself: it refuses to render unless `permissions` is
