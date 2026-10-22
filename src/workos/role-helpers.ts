@@ -166,14 +166,19 @@ export function emitRolePermissionsUpdated(store: Store, ws: WorkOSStore, role: 
  * because an organization role shadows an environment role), its resource-scoped
  * assignments, and the ones a native group's grant derives for each of the group's members.
  * The emulator materializes those derived assignments when they are read rather than
- * storing them, so a group grant counts while its group still has a member.
+ * storing them, so a group grant counts while its group still has a live member: a deleted
+ * membership leaves its group link behind, and a link to nothing derives nothing.
  */
 export function roleHasAssignments(ws: WorkOSStore, role: WorkOSRole): boolean {
   if (ws.roleAssignments.findBy('role_id', role.id).length > 0) return true;
   const heldThroughGroup = ws.groupRoleAssignments
     .findBy('role_id', role.id)
     .some(
-      (grant) => ws.groups.get(grant.group_id) && ws.groupMemberships.findBy('group_id', grant.group_id).length > 0,
+      (grant) =>
+        ws.groups.get(grant.group_id) &&
+        ws.groupMemberships
+          .findBy('group_id', grant.group_id)
+          .some((link) => ws.organizationMemberships.get(link.organization_membership_id) !== undefined),
     );
   if (heldThroughGroup) return true;
   if (role.organization_id === null) return false;

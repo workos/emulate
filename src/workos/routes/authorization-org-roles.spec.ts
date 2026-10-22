@@ -410,6 +410,40 @@ describe('Authorization org role routes', () => {
     expect((await req(`/authorization/groups/${group.id}/role_assignments/${grant.id}`)).status).toBe(404);
   });
 
+  it('ignores a group link whose membership was deleted when deciding if a role is held', async () => {
+    const org = await createOrg('Ghost Link Org');
+    await createOrgRole(org.id, { slug: 'org-ghosted', name: 'Ghosted' });
+    const user = await json(
+      await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'ghosted@test.com' }) }),
+    );
+    const membership = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: user.id, role_slug: 'member' }),
+      }),
+    );
+    const group = await json(
+      await req(`/organizations/${org.id}/groups`, { method: 'POST', body: JSON.stringify({ name: 'Ghosted' }) }),
+    );
+    await req(`/authorization/groups/${group.id}/role_assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ role_slug: 'org-ghosted' }),
+    });
+    await req(`/organizations/${org.id}/groups/${group.id}/organization-memberships`, {
+      method: 'POST',
+      body: JSON.stringify({ organization_membership_id: membership.id }),
+    });
+
+    // Deleting the membership itself (not its group link) leaves the link pointing at nothing,
+    // which must not count as the group still holding the role.
+    expect((await req(`/user_management/organization_memberships/${membership.id}`, { method: 'DELETE' })).status).toBe(
+      204,
+    );
+    expect((await req(`/authorization/organizations/${org.id}/roles/org-ghosted`, { method: 'DELETE' })).status).toBe(
+      204,
+    );
+  });
+
   it('does not count a membership of another organization that holds the same slug', async () => {
     const org = await createOrg('Mine Org');
     const other = await createOrg('Theirs Org');
