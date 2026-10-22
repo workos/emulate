@@ -48,19 +48,12 @@ describe('Concurrent Webhook Delivery', () => {
 
   beforeAll(async () => {
     receiver = await startWebhookReceiver();
-    emulator = await createEmulator({ port: 0 });
-
-    // Register webhook endpoint
-    await fetch(`${emulator.url}/webhook_endpoints`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${emulator.apiKey}`,
-      },
-      body: JSON.stringify({
-        endpoint_url: receiver.url,
-        events: [],
-      }),
+    // Seeded, not registered over the API: the receiver is plain `http://`, which
+    // `POST /webhook_endpoints` refuses as production does, and an empty `events` list
+    // (every event) is a seed-only convenience.
+    emulator = await createEmulator({
+      port: 0,
+      seed: { webhookEndpoints: [{ endpoint_url: receiver.url, events: [] }] },
     });
   });
 
@@ -213,9 +206,10 @@ describe('Concurrent Webhook Delivery', () => {
   });
 
   it('should handle webhook endpoint failures gracefully', async () => {
-    // Create a second receiver that will fail
+    // Create a second receiver that will fail. HTTPS, since the API requires it, and a port
+    // nothing listens on, so every delivery is refused.
     const failingReceiver: WebhookReceiver = {
-      url: 'http://127.0.0.1:59999/webhooks', // Non-existent port
+      url: 'https://127.0.0.1:59999/webhooks',
       received: [],
       close: async () => {},
     };
@@ -229,7 +223,7 @@ describe('Concurrent Webhook Delivery', () => {
       },
       body: JSON.stringify({
         endpoint_url: failingReceiver.url,
-        events: [],
+        events: ['user.created'],
       }),
     });
     expect(res.status).toBe(201);

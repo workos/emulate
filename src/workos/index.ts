@@ -46,7 +46,13 @@ import { dataIntegrationRoutes } from './routes/data-integrations.js';
 import { webhookEndpointRoutes } from './routes/webhook-endpoints.js';
 import { eventRoutes } from './routes/events.js';
 import { EventBus } from './event-bus.js';
-import { STORE_KEYS, EVENTS, DEFAULT_RESOURCE_TYPE_SLUG } from './constants.js';
+import {
+  STORE_KEYS,
+  EVENTS,
+  SUBSCRIBABLE_EVENTS,
+  DEFAULT_RESOURCE_TYPE_SLUG,
+  type WorkOSEventName,
+} from './constants.js';
 import { membershipRoleFields } from './membership-roles.js';
 import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
@@ -80,6 +86,7 @@ import {
   formatAgentInstance,
   formatAgentInstanceSessionEvent,
   generateClientId,
+  generateWebhookSecret,
   findUserByEmail,
   provisionInvitee,
   formatConnectedAccountEvent,
@@ -299,10 +306,23 @@ export interface WorkOSSeedPermission {
 }
 
 export interface WorkOSSeedWebhookEndpoint {
+  /**
+   * Where deliveries go. Any URL the receiver answers on: the API holds `POST /webhook_endpoints`
+   * to HTTPS as production does, so a plain `http://` receiver — the usual local setup — is
+   * registered here.
+   */
   endpoint_url?: string;
   /** @deprecated Use endpoint_url */
   url?: string;
+  /**
+   * Event names to deliver, from the subscribable catalog in `src/workos/generated/events.ts`.
+   * Omitted or empty subscribes the endpoint to every event — a seed-only convenience; the API
+   * requires at least one name, as production does.
+   */
   events?: string[];
+  /** `enabled` (the default) or `disabled`, as `PATCH /webhook_endpoints/:id` sets it. */
+  status?: 'enabled' | 'disabled';
+  /** @deprecated Use status */
   enabled?: boolean;
   /**
    * Pinned signing secret. Generated if omitted. Pin it to bake the secret into a
@@ -916,13 +936,27 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
       if (!endpointUrl || typeof endpointUrl !== 'string') {
         throw new Error('workos seed config: webhookEndpoints[].endpoint_url is required');
       }
+      const status = whConfig.status ?? (whConfig.enabled === false ? 'disabled' : 'enabled');
+      if (status !== 'enabled' && status !== 'disabled') {
+        throw new Error(
+          `workos seed config: webhookEndpoints[].status must be "enabled" or "disabled", got ${JSON.stringify(status)}`,
+        );
+      }
+      // A name outside the subscribable catalog can never match an emitted event, and production
+      // refuses to hold one, so a typo here is a config error rather than an endpoint that never fires.
+      const events = whConfig.events ?? [];
+      const unknownEvents = events.filter((event) => !SUBSCRIBABLE_EVENTS.includes(event as WorkOSEventName));
+      if (unknownEvents.length > 0) {
+        throw new Error(
+          `workos seed config: webhookEndpoints[].events contains unknown event names: ${unknownEvents.join(', ')}`,
+        );
+      }
       ws.webhookEndpoints.insert({
         object: 'webhook_endpoint',
         endpoint_url: endpointUrl,
-        secret: whConfig.secret ?? randomBytes(32).toString('hex'),
-        enabled: whConfig.enabled !== false,
-        events: whConfig.events ?? [],
-        description: null,
+        secret: whConfig.secret ?? generateWebhookSecret(),
+        status,
+        events: [...new Set(events)],
       });
     }
   }

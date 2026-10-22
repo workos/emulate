@@ -54,7 +54,7 @@ export class EventBus {
     this.catchAllEndpoints.clear();
     const ws = getWorkOSStore(this.store);
     for (const ep of ws.webhookEndpoints.all()) {
-      if (!ep.enabled) continue;
+      if (ep.status !== 'enabled') continue;
       if (ep.events.length === 0) {
         this.catchAllEndpoints.add(ep.id);
       } else {

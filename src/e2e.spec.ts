@@ -120,13 +120,13 @@ describe('end-to-end login flow (workos.com/docs story)', () => {
   beforeAll(async () => {
     webhookSecret = randomBytes(32).toString('hex');
     receiver = await startWebhookReceiver();
-    emulator = await createEmulator({ port: 0 });
-
-    const res = await api('/webhook_endpoints', {
-      method: 'POST',
-      body: JSON.stringify({ endpoint_url: receiver.url, secret: webhookSecret, events: [] }),
+    // Seeded, not registered over the API: the receiver is plain `http://`, which
+    // `POST /webhook_endpoints` refuses as production does, and an empty `events` list
+    // (every event) is a seed-only convenience.
+    emulator = await createEmulator({
+      port: 0,
+      seed: { webhookEndpoints: [{ endpoint_url: receiver.url, secret: webhookSecret, events: [] }] },
     });
-    expect(res.status).toBe(201);
   });
 
   afterAll(async () => {

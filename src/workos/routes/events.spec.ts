@@ -28,12 +28,74 @@ describe('Events routes', () => {
     ws.events.insert({ ...eventRow, event: 'user.created', data: { id: 'user_1' } });
     ws.events.insert({ ...eventRow, event: 'organization.created', data: { id: 'org_1' }, organization_id: 'org_1' });
 
-    const res = await req('/events');
+    const res = await req('/events?events=user.created,organization.created');
     expect(res.status).toBe(200);
     const list = await json(res);
     expect(list.object).toBe('list');
     expect(list.data).toHaveLength(2);
     expect(list.data[0].object).toBe('event');
+  });
+
+  // Production has no "all events" listing: `EventsController.list` rejects a request without
+  // the filter before it reads anything, so a poller cannot drift onto a shape the real API
+  // never serves.
+  it('requires the events parameter, as production does', async () => {
+    const ws = getWorkOSStore(store);
+    ws.events.insert({ ...eventRow, event: 'user.created' });
+
+    const res = await req('/events');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toStrictEqual({
+      message: 'One or more event names (e.g. dsync.user.created) must be provided using the events parameter.',
+      code: 'invalid_events_request',
+    });
+  });
+
+  it('rejects an event name outside the catalog', async () => {
+    const res = await req('/events?events=user.created,directory_sync.activated');
+    expect(res.status).toBe(400);
+    expect(await json(res)).toStrictEqual({
+      message: "Invalid name parameter, received: 'directory_sync.activated'. You must pass in valid event names",
+      code: 'invalid_events_request',
+    });
+  });
+
+  it('rejects an empty events parameter as an invalid name', async () => {
+    const res = await req('/events?events=');
+    expect(res.status).toBe(400);
+    expect((await json(res)).message).toBe("Invalid name parameter, received: ''. You must pass in valid event names");
+  });
+
+  // `dsync.deactivated` was retired from the catalog but a poller that still sends it keeps
+  // working: production drops the name before validating the rest, and only complains when
+  // nothing is left.
+  it('silently drops a deprecated event name', async () => {
+    const ws = getWorkOSStore(store);
+    ws.events.insert({ ...eventRow, event: 'dsync.activated' });
+
+    const list = await json(await req('/events?events[]=dsync.activated&events[]=dsync.deactivated'));
+    expect(list.data.map((e: any) => e.event)).toEqual(['dsync.activated']);
+
+    const res = await req('/events?events[]=dsync.deactivated');
+    expect(res.status).toBe(400);
+    expect((await json(res)).message).toBe(
+      'One or more event names (e.g. dsync.user.created) must be provided using the events parameter.',
+    );
+  });
+
+  it('rejects range_start combined with after, even an empty after', async () => {
+    const ws = getWorkOSStore(store);
+    const first = ws.events.insert({ ...eventRow, event: 'user.created' });
+    const rangeStart = encodeURIComponent(new Date(Date.now() - 60_000).toISOString());
+
+    for (const after of [first.id, '']) {
+      const res = await req(`/events?events=user.created&range_start=${rangeStart}&after=${after}`);
+      expect(res.status).toBe(400);
+      expect(await json(res)).toStrictEqual({
+        message: 'Only one of range_start and after may be provided.',
+        code: 'invalid_events_request',
+      });
+    }
   });
 
   it('filters events by type', async () => {
@@ -49,7 +111,7 @@ describe('Events routes', () => {
   });
 
   it('returns empty list when no events', async () => {
-    const res = await req('/events');
+    const res = await req('/events?events=user.created');
     const list = await json(res);
     expect(list.data).toHaveLength(0);
   });
@@ -90,15 +152,16 @@ describe('Events routes', () => {
 
     const past = new Date(Date.now() - 60_000).toISOString();
     const future = new Date(Date.now() + 60_000).toISOString();
+    const base = '/events?events=dsync.user.created';
 
-    const kept = await json(await req(`/events?organization_id=org_1&range_start=${encodeURIComponent(past)}`));
+    const kept = await json(await req(`${base}&organization_id=org_1&range_start=${encodeURIComponent(past)}`));
     expect(kept.data).toHaveLength(1);
     expect(kept.data[0].data.organization_id).toBe('org_1');
 
-    const later = await json(await req(`/events?range_start=${encodeURIComponent(future)}`));
+    const later = await json(await req(`${base}&range_start=${encodeURIComponent(future)}`));
     expect(later.data).toHaveLength(0);
 
-    const ended = await json(await req(`/events?range_end=${encodeURIComponent(past)}`));
+    const ended = await json(await req(`${base}&range_end=${encodeURIComponent(past)}`));
     expect(ended.data).toHaveLength(0);
   });
 
@@ -157,7 +220,9 @@ describe('Events routes', () => {
     // land in the organization's history once nothing it refers to exists.
     await req(`/directories/${directory.id}`, { method: 'DELETE' });
 
-    const scoped = await json(await req(`/events?organization_id=${org.id}&limit=100`));
+    const scopeFilter =
+      'events=organization.created,user.created,group.member_added,dsync.group.user_added,dsync.group.user_removed';
+    const scoped = await json(await req(`/events?${scopeFilter}&organization_id=${org.id}&limit=100`));
     const types = scoped.data.map((e: any) => e.event);
     expect(types).toContain('organization.created');
     expect(types).toContain('group.member_added');
@@ -167,7 +232,7 @@ describe('Events routes', () => {
     // The scope is the emulator's, not the spec's: it never reaches the wire.
     expect(scoped.data.some((e: any) => 'organization_id' in e)).toBe(false);
 
-    const others = await json(await req(`/events?organization_id=${other.id}`));
+    const others = await json(await req(`/events?${scopeFilter}&organization_id=${other.id}`));
     expect(others.data.map((e: any) => e.event)).toEqual(['organization.created']);
   });
 
@@ -178,7 +243,7 @@ describe('Events routes', () => {
       body: JSON.stringify({ email: 'test@example.com', password: 'password123' }),
     });
 
-    const res = await req('/events');
+    const res = await req('/events?events=user.created');
     const list = await json(res);
     const userEvents = list.data.filter((e: any) => e.event === 'user.created');
     expect(userEvents.length).toBeGreaterThanOrEqual(1);

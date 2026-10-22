@@ -1,4 +1,4 @@
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, randomInt, createHash } from 'node:crypto';
 import { isIPv6 } from 'node:net';
 import { domainToASCII } from 'node:url';
 import {
@@ -1532,21 +1532,32 @@ export function formatEvent(e: WorkOSEvent): Record<string, unknown> {
   return formatEntity(e, { exclude: EVENT_EXCLUDE });
 }
 
-export function formatWebhookEndpoint(
-  ep: WorkOSWebhookEndpoint,
-  opts?: { includeSecret?: boolean },
-): Record<string, unknown> {
+/**
+ * The `WebhookEndpointJson` shape. Production serializes the signing secret on every read —
+ * create, get, list and update alike (`webhook-endpoints.serializer.ts`) — so there is no
+ * masked variant.
+ */
+export function formatWebhookEndpoint(ep: WorkOSWebhookEndpoint): Record<string, unknown> {
   return {
     object: 'webhook_endpoint',
     id: ep.id,
     endpoint_url: ep.endpoint_url,
-    secret: opts?.includeSecret ? ep.secret : `${ep.secret.slice(0, 8)}****`,
-    enabled: ep.enabled,
+    secret: ep.secret,
+    status: ep.status,
     events: ep.events,
-    description: ep.description,
     created_at: ep.created_at,
     updated_at: ep.updated_at,
   };
+}
+
+const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+/**
+ * A webhook signing secret shaped like production's: 25 base62 characters
+ * (`WebhookEndpointsService.create`, `generateToken('base62', 25)`), no prefix.
+ */
+export function generateWebhookSecret(): string {
+  return Array.from({ length: 25 }, () => BASE62[randomInt(BASE62.length)]).join('');
 }
 
 export function formatAgentBlueprint(b: WorkOSAgentBlueprint): Record<string, unknown> {

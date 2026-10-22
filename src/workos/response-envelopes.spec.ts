@@ -165,7 +165,8 @@ const CASES: readonly EnvelopeCase[] = [
     request: (app, f) => get(`/organizations/${f.organizationId}/it_contacts`)(app),
   },
   { operation: 'GET /webhook_endpoints', request: get('/webhook_endpoints') },
-  { operation: 'GET /events', request: get('/events') },
+  // `events` is required, as in production; the seeded organization recorded this one.
+  { operation: 'GET /events', request: get('/events?events=organization.created') },
   {
     operation: 'GET /organizations/{organizationId}/api_keys',
     request: (app, f) => get(`/organizations/${f.organizationId}/api_keys`)(app),
