@@ -253,6 +253,43 @@ await emulator.close();
 const newEmulator = await createEmulator({ port: 0 });
 ```
 
+### Roles, permissions, and resources
+
+Role, permission, and resource bodies are validated the way production's DTOs validate them: a
+failure is a `422` with `message: "Validation failed"` and one `{ field, code }` per failing field,
+`code` being the message of the first constraint that failed, unknown properties first. An
+environment role slug matches `^[a-z0-9]+(?:[-_][a-z0-9]+)*$`. An organization role slug must carry
+the `org-` prefix (`^org-[a-z0-9]+(?:[-_][a-z0-9]+)*$`) and may be omitted, in which case one is
+generated from the name plus the last six characters of the role id (`billing-manager-k4m2xq`, no
+prefix), as production generates it. A permission slug matches `^[a-z0-9*]+(?:[-_.:][a-z0-9*]+)*$`.
+Slugs and names are at most 48 characters, descriptions 150, and a resource `external_id` is ASCII
+and at most 128. Bodies accept only the fields the spec's DTOs declare, so `priority`,
+`is_default_role`, a role's `slug` on update, and a resource's `metadata` are refused with
+`property <name> should not exist`; the one exception is organization role creation, which ignores
+unknown properties as production's unwhitelisted pipe does. A role's priority is seed-only: a role
+created through the API joins the end of the priority order, and `GET /authorization/roles` lists
+environment roles unpaged in that order, as the organization list does.
+
+There is no `DELETE /authorization/roles/{slug}`; production deletes environment roles from the
+dashboard only. `DELETE /authorization/organizations/{id}/roles/{slug}` answers `409`
+`role_has_assignments` while a membership holds the role, through its roles or a resource-scoped
+assignment (one derived from a native group's grant included); production's
+`role_has_group_role_mappings` cannot arise, because the emulator resolves directory group
+mappings onto memberships when it seeds them. Attaching an unknown permission slug to a role is
+`422` `invalid_permission_slug`; removing a permission an organization role does not hold answers
+with the role unchanged.
+
+`PUT /authorization/organizations/{id}/roles/priority` takes `role_priority_order`: every slug that
+applies to the organization, environment roles included (an organization role shadows an
+environment role with its slug), each exactly once. Duplicates are `400` `duplicate_role_slugs`, an
+unknown slug `400` `unknown_role_slugs`, and an incomplete list `400` `bad_request`. The emulator
+stores one priority per role, so reordering an environment role through one organization reorders
+it for every organization.
+
+`GET /authorization/resources` requires `organization_id` or `resource_type_slug` (`400`
+`missing_organization_id_or_resource_type_slug`), and the memberships-for-resource routes require
+`permission_slug` (`422`; a slug that names no permission is a `404`).
+
 ### Native group authorization
 
 Native AuthKit groups can receive scoped roles through
