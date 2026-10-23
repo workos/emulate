@@ -7,51 +7,11 @@ WorkOS account, no network and no dashboard.
 - **Answers like production.** Routes accept and refuse what the real API does, down to the error
   codes, and every event name and payload shape is generated from the
   [WorkOS OpenAPI spec](https://www.npmjs.com/package/@workos/openapi-spec).
-- **Seeded from a file.** Users, organizations, connections, roles, M2M credentials and more exist
-  before anything talks to the emulator, so `docker compose up` comes with working fixtures.
+- **Seeded from a file.** Users, organizations, connections, roles, M2M credentials can be generated as working fixtures.
 - **Built for tests.** Force failures with error hooks, receive signed webhooks locally, and drive
   browser suites against a real login page.
 
-**[Which features are supported?](SUPPORTED.md)** — a per-feature matrix of endpoint coverage and
-how data gets in, regenerated from the spec and the routes on every build.
-
-## Quickstart
-
-```bash
-brew install workos/tap/workos-emulate
-workos-emulate
-# listening on http://localhost:4100, API key sk_test_default
-```
-
-Point your SDK at it and carry on as normal:
-
-```ts
-import { WorkOS } from '@workos-inc/node';
-
-const workos = new WorkOS({ apiKey: 'sk_test_default', apiHostname: 'localhost', port: 4100, https: false });
-const user = await workos.userManagement.createUser({ email: 'alice@example.com' });
-```
-
-Or start one inside a test, on a free port, with its own fixtures:
-
-```ts
-import { createEmulator } from '@workos/emulate';
-
-const emulator = await createEmulator({
-  port: 0,
-  seed: { users: [{ email: 'test@example.com', password: 'secret' }] },
-});
-
-const res = await fetch(`${emulator.url}/user_management/users`, {
-  headers: { Authorization: `Bearer ${emulator.apiKey}` },
-});
-
-emulator.reset();
-await emulator.close();
-```
-
-Any language with a WorkOS SDK works the same way: override the SDK's base URL. See
-[Using from any language](docs/testing.md#using-from-any-language).
+For the list of supported features, see [SUPPORTED.md](SUPPORTED.md).
 
 ## Installation
 
@@ -65,7 +25,7 @@ Any language with a WorkOS SDK works the same way: override the SDK's base URL. 
 ### Docker
 
 Stable releases are tagged `:latest` and `:<version>`; prereleases are tagged `:beta` and
-`:<version>`. With `docker-compose.yml`:
+`:<version>`.
 
 ```yaml
 services:
@@ -104,7 +64,41 @@ curl -fsSL -o workos-emulate https://github.com/workos/emulate/releases/latest/d
 chmod +x workos-emulate
 ```
 
-On Windows, download the `.exe` and run it directly; there is no Homebrew path for Windows.
+On Windows, download the `.exe` and run it directly.
+
+## Quickstart
+
+When you launch emulate, it starts a server that listens on http://localhost:4100, and uses the API key `sk_test_default`.
+
+Point your SDK at it and carry on as normal:
+
+```ts
+import { WorkOS } from '@workos-inc/node';
+
+const workos = new WorkOS({ apiKey: 'sk_test_default', apiHostname: 'localhost', port: 4100, https: false });
+const user = await workos.userManagement.createUser({ email: 'alice@example.com' });
+```
+
+Or, for JS/TS projects, start an emulator inside a test, on a free port, with its own fixtures:
+
+```ts
+import { createEmulator } from '@workos/emulate';
+
+const emulator = await createEmulator({
+  port: 0,
+  seed: { users: [{ email: 'test@example.com', password: 'secret' }] },
+});
+
+const res = await fetch(`${emulator.url}/user_management/users`, {
+  headers: { Authorization: `Bearer ${emulator.apiKey}` },
+});
+
+emulator.reset();
+await emulator.close();
+```
+
+For more help using emulate with the WorkOS SDKs, see
+[Using from any language](docs/testing.md#using-from-any-language).
 
 ## CLI
 
