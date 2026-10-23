@@ -15,6 +15,11 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const requiredFiles = [
   'LICENSE.txt',
   'README.md',
+  'SUPPORTED.md',
+  'docs/behavior.md',
+  'docs/seeding.md',
+  'docs/testing.md',
+  'docs/tokens.md',
   'dist/cli.js',
   'dist/core/index.d.ts',
   'dist/core/index.js',
@@ -39,7 +44,10 @@ try {
   }
 
   const unexpected = packedFiles.filter(
-    (path) => !path.startsWith('dist/') && !['LICENSE.txt', 'README.md', 'package.json'].includes(path),
+    (path) =>
+      !path.startsWith('dist/') &&
+      !path.startsWith('docs/') &&
+      !['LICENSE.txt', 'README.md', 'SUPPORTED.md', 'package.json'].includes(path),
   );
   assert.deepEqual(unexpected, [], `npm package contains unexpected files: ${unexpected.join(', ')}`);
 

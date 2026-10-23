@@ -19,7 +19,9 @@
   },
   "files": [
     "dist",
+    "docs",
     "README.md",
+    "SUPPORTED.md",
     "LICENSE",
     "package.json"
   ],
