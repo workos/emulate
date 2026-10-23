@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.17.0](https://github.com/workos/emulate/compare/v0.16.0...v0.17.0) (2026-10-23)
+
+
+### Features
+
+* support per-instance AuthKit token lifetimes ([#168](https://github.com/workos/emulate/issues/168)) ([0a45553](https://github.com/workos/emulate/commit/0a45553f9cb57b210f80afd76cf7df71d9f89886))
+
+
+### Bug Fixes
+
+* **audit-logs:** accept the production event body shape ([#158](https://github.com/workos/emulate/issues/158)) ([12d5f2b](https://github.com/workos/emulate/commit/12d5f2bc8b12a1598732f3ee30bc89b0af1913be))
+* **auth:** enforce step-bound pending tokens and refresh org membership ([#164](https://github.com/workos/emulate/issues/164)) ([a7926a5](https://github.com/workos/emulate/commit/a7926a59acb8921e1623a4850c3e4596981bbf87))
+* **auth:** one-time-code errors, lockouts and verified-only totp factors ([#159](https://github.com/workos/emulate/issues/159)) ([7bca006](https://github.com/workos/emulate/commit/7bca0061c47cf543fdf33fd3c61f4ddbce85caa4))
+* **authorization:** list the environment roles that apply to an organization ([#153](https://github.com/workos/emulate/issues/153)) ([cb173ed](https://github.com/workos/emulate/commit/cb173ed8fcaa8d59c63c93a1059865d6b229b987))
+* **authorization:** production slug, deletion and resource list rules ([#160](https://github.com/workos/emulate/issues/160)) ([f6c05da](https://github.com/workos/emulate/commit/f6c05daa7c47e8dfa82ea68d1eb19c8d37c20733))
+* **errors:** answer 404s with production's entity_not_found body ([#157](https://github.com/workos/emulate/issues/157)) ([ed8b984](https://github.com/workos/emulate/commit/ed8b984fab182b91a667bdd9f283ab3bc8a5bdb7))
+* **organizations:** verify starts dns, domain rules, unique external_id ([#161](https://github.com/workos/emulate/issues/161)) ([4ac1425](https://github.com/workos/emulate/commit/4ac1425bf1585756774da4869a70b51efd812e3b))
+* **portal:** validate portal link intents and widget token scopes ([#165](https://github.com/workos/emulate/issues/165)) ([49c6b86](https://github.com/workos/emulate/commit/49c6b86b74937bda10eee2269863d6b8f59ee05f))
+* **sso:** one connection per org, create rules, authorize states ([#163](https://github.com/workos/emulate/issues/163)) ([102d2bd](https://github.com/workos/emulate/commit/102d2bd957830439ae51d492c7713f9b7a156980))
+* **user-management:** reject what production rejects ([#162](https://github.com/workos/emulate/issues/162)) ([ef8fc50](https://github.com/workos/emulate/commit/ef8fc50f0288afd2bdfe7f3a52475edf14d7473a))
+* **webhooks:** PATCH endpoint updates, validate URLs and events, require events on list ([#156](https://github.com/workos/emulate/issues/156)) ([cdde3fa](https://github.com/workos/emulate/commit/cdde3fa2a792510d37a2f6cfd34eccc15cc131e5))
+
 ## [0.16.0](https://github.com/workos/emulate/compare/v0.15.0...v0.16.0) (2026-10-20)
 
 
