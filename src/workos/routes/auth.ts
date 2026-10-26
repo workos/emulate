@@ -31,6 +31,7 @@ import {
   requireEmailString,
   emailsMatch,
   activeOrganizationsFor,
+  organizationSsoConnections,
   startLoginSession,
   issueEmailVerificationCode,
   latestOneTimeCode,
@@ -63,6 +64,16 @@ import {
   renderPasswordPage,
   renderCodePage,
 } from '../login-page.js';
+
+/**
+ * Whether `codeVerifier` reproduces `challenge` under `method` (RFC 7636 §4.6). An absent method
+ * is `S256`, the only one production accepts; `plain` compares the strings as they are.
+ */
+function codeVerifierMatches(challenge: string, method: string | null, codeVerifier: string): boolean {
+  const derived =
+    (method ?? 'S256') === 'S256' ? createHash('sha256').update(codeVerifier).digest('base64url') : codeVerifier;
+  return derived === challenge;
+}
 
 /**
  * The step that issued a pending_authentication_token, named as production names it. A token
@@ -656,6 +667,35 @@ export function authRoutes(ctx: RouteContext): void {
     // here, not after someone has filled the form in.
     assertAllowedRedirectUri(redirectUri, store);
 
+    // Production's selectors are exclusive — `provider`, `connection_id` or `organization_id` —
+    // and the two ids "initiate SSO": the person goes to that connection's IdP, not to the hosted
+    // sign-in. The emulator's stand-in for the IdP is /sso/authorize, which already resolves both
+    // selectors and mints a code the exchange redeems as an SSO login, so a request naming one is
+    // handed there with what the callback and the exchange need. A `provider` keeps the request
+    // here: with `provider=authkit`, an `organization_id` pre-selects the organization on the
+    // hosted flow rather than naming a connection. So does an organization holding no SSO
+    // connection, where production would refuse to initiate SSO: the hosted flow honoured
+    // `organization_id` as a pre-selection before the selectors were routed, and suites written
+    // against that keep working.
+    if (!connect && !url.searchParams.get('provider')) {
+      const connectionId = url.searchParams.get('connection_id');
+      const selector: Record<string, string> | null = connectionId
+        ? { connection: connectionId }
+        : organizationId && organizationSsoConnections(ws, organizationId).length > 0
+          ? { organization: organizationId }
+          : null;
+      if (selector) {
+        const sso = new URLSearchParams(selector);
+        // /sso/authorize requires client_id, as production requires it here; the SDKs always send it.
+        const carried = ['client_id', 'redirect_uri', 'state', 'login_hint', 'code_challenge', 'code_challenge_method'];
+        for (const key of carried) {
+          const value = url.searchParams.get(key);
+          if (value) sso.set(key, value);
+        }
+        return c.redirect(`/sso/authorize?${sso.toString()}`);
+      }
+    }
+
     const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
     if (interactive) {
       const hiddenFields: Record<string, string> = { redirect_uri: redirectUri };
@@ -874,6 +914,32 @@ export function authRoutes(ctx: RouteContext): void {
           },
           new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
         );
+      }
+
+      // A challenge bound this code when /user_management/authorize handed the request to
+      // /sso/authorize, and the exchange holds it to the verifier exactly as it holds a hosted
+      // code (RFC 7636 §4.6): a missing verifier is a malformed request, a wrong one fails the
+      // grant the way an unknown code does, and either leaves the code unspent.
+      if (ssoAuth.code_challenge) {
+        const codeVerifier = body.code_verifier as string | undefined;
+        if (!codeVerifier) {
+          throw new OauthApiError(400, 'invalid_request', 'code_verifier is required.');
+        }
+        if (!codeVerifierMatches(ssoAuth.code_challenge, ssoAuth.code_challenge_method, codeVerifier)) {
+          failAuth(
+            'SSO',
+            {
+              email: profile?.email,
+              userId: findUserByEmail(ws, profile?.email ?? '')?.id ?? null,
+              sso: {
+                organization_id: ssoAuth.organization_id,
+                connection_id: ssoAuth.connection_id,
+                session_id: null,
+              },
+            },
+            new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`),
+          );
+        }
       }
 
       // The same emulator-state failure /sso/token names, for the same reason: an authorization
@@ -1101,14 +1167,7 @@ export function authRoutes(ctx: RouteContext): void {
           if (!codeVerifier) {
             throw new OauthApiError(400, 'invalid_request', 'code_verifier is required.');
           }
-          const method = authCode.code_challenge_method ?? 'S256';
-          let challenge: string;
-          if (method === 'S256') {
-            challenge = createHash('sha256').update(codeVerifier).digest('base64url');
-          } else {
-            challenge = codeVerifier;
-          }
-          if (challenge !== authCode.code_challenge) {
+          if (!codeVerifierMatches(authCode.code_challenge, authCode.code_challenge_method, codeVerifier)) {
             // A failed verifier is a failure of the authorization_code grant, so it fails the
             // same OAuth-style way an unknown code does (RFC 7636 §4.6). Leaving it plain put
             // the shape of a failure at odds with the reason for it, on the one path every

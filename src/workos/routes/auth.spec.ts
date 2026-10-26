@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
-import { workosPlugin } from '../index.js';
+import { createHash } from 'node:crypto';
+import { workosPlugin, seedFromConfig } from '../index.js';
 import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
 import { hashPassword } from '../helpers.js';
@@ -3161,6 +3162,160 @@ describe('Auth routes', () => {
     });
     expect(res.status).toBe(200);
     expect((await json(res)).access_token).toBeDefined();
+  });
+
+  describe('GET /user_management/authorize with an SSO selector', () => {
+    const callback = 'http://localhost:3000/callback';
+
+    /** An organization holding a SAML connection, seeded the way a config file would. */
+    function seedSsoOrg(name: string, domain: string) {
+      seedFromConfig(store, 'http://localhost:0', {
+        organizations: [{ name }],
+        connections: [{ name: `${name} SAML`, organization: name, connection_type: 'GenericSAML', domains: [domain] }],
+      });
+      const ws = getWorkOSStore(store);
+      const org = ws.organizations.findOneBy('name', name)!;
+      const conn = ws.connections.findOneBy('organization_id', org.id)!;
+      return { org, conn };
+    }
+
+    /** Join `userId` to an organization that already exists. */
+    function join(userId: string, orgId: string) {
+      getWorkOSStore(store).organizationMemberships.insert({
+        object: 'organization_membership',
+        organization_id: orgId,
+        user_id: userId,
+        role: { slug: 'member' },
+        status: 'active',
+        external_id: null,
+        metadata: {},
+      });
+    }
+
+    /**
+     * Start at the hosted endpoint and follow its redirects to the app's callback, as a browser
+     * would, returning the hop to /sso/authorize if there was one.
+     */
+    async function follow(query: string) {
+      const first = await app.request(`/user_management/authorize?${query}`);
+      expect(first.status).toBe(302);
+      const hop = first.headers.get('location')!;
+      if (!hop.startsWith('/sso/authorize?')) return { hop: null, landed: new URL(hop) };
+      const second = await app.request(hop);
+      expect(second.status).toBe(302);
+      return { hop: new URL(hop, 'http://localhost:0'), landed: new URL(second.headers.get('location')!) };
+    }
+
+    const exchange = (code: string, extra: Record<string, unknown> = {}) =>
+      app.request('/user_management/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'authorization_code', code, client_id: 'client_x', ...extra }),
+      });
+
+    it('connection_id sends the request to that connection, and the exchange is an SSO login', async () => {
+      const { org, conn } = seedSsoOrg('Acme', 'acme.example.com');
+      // The first seeded user, in another organization: who the hosted flow signed in before.
+      const other = await createUser('first@elsewhere.example.com');
+      joinOrg(other.id, 'Elsewhere');
+
+      const { hop, landed } = await follow(
+        `client_id=client_x&redirect_uri=${callback}&state=abc&connection_id=${conn.id}&login_hint=jo%40acme.example.com`,
+      );
+      expect(hop?.searchParams.get('connection')).toBe(conn.id);
+      expect(hop?.searchParams.get('client_id')).toBe('client_x');
+      expect(hop?.searchParams.get('redirect_uri')).toBe(callback);
+      expect(hop?.searchParams.get('state')).toBe('abc');
+      expect(hop?.searchParams.get('login_hint')).toBe('jo@acme.example.com');
+      expect(landed.origin + landed.pathname).toBe(callback);
+      expect(landed.searchParams.get('state')).toBe('abc');
+
+      const res = await exchange(landed.searchParams.get('code')!);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.authentication_method).toBe('SSO');
+      expect(body.organization_id).toBe(org.id);
+      expect(body.user.email).toBe('jo@acme.example.com');
+      expect(getWorkOSStore(store).authCodes.all()).toHaveLength(0);
+    });
+
+    it('organization_id alone initiates SSO when the organization holds a connection', async () => {
+      const { org } = seedSsoOrg('Acme', 'acme.example.com');
+
+      const { hop, landed } = await follow(`client_id=client_x&redirect_uri=${callback}&organization_id=${org.id}`);
+      expect(hop?.searchParams.get('organization')).toBe(org.id);
+
+      const body = await json(await exchange(landed.searchParams.get('code')!));
+      expect(body.authentication_method).toBe('SSO');
+      expect(body.organization_id).toBe(org.id);
+    });
+
+    it('provider=authkit keeps organization_id as a pre-selection on the hosted flow', async () => {
+      const { org } = seedSsoOrg('Acme', 'acme.example.com');
+      const user = await createUser('member@acme.example.com');
+      join(user.id, org.id);
+
+      const { hop, landed } = await follow(
+        `client_id=client_x&provider=authkit&redirect_uri=${callback}&organization_id=${org.id}&login_hint=member%40acme.example.com`,
+      );
+      expect(hop).toBeNull();
+      expect(landed.origin + landed.pathname).toBe(callback);
+      const ws = getWorkOSStore(store);
+      expect(ws.authCodes.findOneBy('code', landed.searchParams.get('code')!)?.organization_id).toBe(org.id);
+      expect(ws.ssoAuthorizations.all()).toHaveLength(0);
+    });
+
+    it('organization_id for an organization without an SSO connection stays on the hosted flow', async () => {
+      const user = await createUser('member@plain.example.com');
+      const org = joinOrg(user.id, 'Plain Org');
+
+      const { hop, landed } = await follow(`client_id=client_x&redirect_uri=${callback}&organization_id=${org.id}`);
+      expect(hop).toBeNull();
+      expect(landed.origin + landed.pathname).toBe(callback);
+      const code = landed.searchParams.get('code')!;
+      expect(getWorkOSStore(store).authCodes.findOneBy('code', code)?.organization_id).toBe(org.id);
+    });
+
+    it('a PKCE challenge travels with the request and binds the SSO code', async () => {
+      const { conn } = seedSsoOrg('Acme', 'acme.example.com');
+      const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+      const challenge = createHash('sha256').update(verifier).digest('base64url');
+
+      const { hop, landed } = await follow(
+        `client_id=client_x&redirect_uri=${callback}&connection_id=${conn.id}&code_challenge=${challenge}&code_challenge_method=S256`,
+      );
+      expect(hop?.searchParams.get('code_challenge')).toBe(challenge);
+      expect(hop?.searchParams.get('code_challenge_method')).toBe('S256');
+      const code = landed.searchParams.get('code')!;
+
+      const missing = await exchange(code);
+      expect(missing.status).toBe(400);
+      expect((await json(missing)).error).toBe('invalid_request');
+
+      const wrong = await exchange(code, { code_verifier: 'not-the-verifier' });
+      expect(wrong.status).toBe(400);
+      expect((await json(wrong)).error).toBe('invalid_grant');
+
+      // Neither failure spent the code.
+      const right = await exchange(code, { code_verifier: verifier });
+      expect(right.status).toBe(200);
+      expect((await json(right)).authentication_method).toBe('SSO');
+    });
+
+    it('with --interactive, a connection-bound request lands on the SSO login page', async () => {
+      store.setData(STORE_KEYS.interactiveAuth, true);
+      const { conn } = seedSsoOrg('Acme', 'acme.example.com');
+
+      const first = await app.request(
+        `/user_management/authorize?client_id=client_x&redirect_uri=${callback}&connection_id=${conn.id}`,
+      );
+      expect(first.status).toBe(302);
+      const page = await app.request(first.headers.get('location')!);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('SSO Login');
+      expect(html).toContain('action="/sso/authorize"');
+    });
   });
 });
 

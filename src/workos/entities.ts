@@ -360,6 +360,14 @@ export interface WorkOSSSOAuthorization extends Entity {
   profile_id: string;
   redirect_uri: string;
   state: string | null;
+  /**
+   * PKCE, carried from a `/user_management/authorize` request that named a connection or an
+   * organization and was handed to `/sso/authorize`: the exchange at
+   * `/user_management/authenticate` holds the code to it as it holds a hosted one. Null for an
+   * authorization `/sso/authorize` started on its own, which takes no challenge.
+   */
+  code_challenge: string | null;
+  code_challenge_method: string | null;
   expires_at: string;
 }
 
