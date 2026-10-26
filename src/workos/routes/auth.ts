@@ -1139,9 +1139,10 @@ export function authRoutes(ctx: RouteContext): void {
             user = redeemSsoAuthorization(ssoAuth, code);
             organizationId = ssoAuth.organization_id;
             ssoContext = { organization_id: ssoAuth.organization_id, connection_id: ssoAuth.connection_id };
-            // An SSO authorization records no client_id, so the redeeming request is the only
-            // client identity there is — the same fallback a client-less /authorize gets.
-            grantClientId = clientId;
+            // Bound to the client that started the authorization, as a hosted code is, not to
+            // the unvalidated redemption-time parameter; a record from before the field was
+            // kept falls back to the redeeming request, the way a client-less /authorize does.
+            grantClientId = ssoAuth.client_id ?? clientId;
             authMethod = 'SSO';
             break;
           }

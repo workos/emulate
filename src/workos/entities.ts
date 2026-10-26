@@ -361,6 +361,12 @@ export interface WorkOSSSOAuthorization extends Entity {
   redirect_uri: string;
   state: string | null;
   /**
+   * The client that started the authorization. The exchange binds the token to it, as it binds
+   * a hosted code's, rather than to whatever `client_id` the redeeming request sends; null only
+   * on a record persisted before the field was recorded.
+   */
+  client_id: string | null;
+  /**
    * PKCE, carried from a `/user_management/authorize` request that named a connection or an
    * organization and was handed to `/sso/authorize`: the exchange at
    * `/user_management/authenticate` holds the code to it as it holds a hosted one. Null for an

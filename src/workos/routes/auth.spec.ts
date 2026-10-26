@@ -3239,6 +3239,15 @@ describe('Auth routes', () => {
       expect(getWorkOSStore(store).authCodes.all()).toHaveLength(0);
     });
 
+    it('binds the token to the client that started the authorization, not the one redeeming it', async () => {
+      const { conn } = seedSsoOrg('Acme', 'acme.example.com');
+      const { landed } = await follow(`client_id=original_client&redirect_uri=${callback}&connection_id=${conn.id}`);
+
+      const body = await json(await exchange(landed.searchParams.get('code')!, { client_id: 'other_client' }));
+      expect(decodeJwt(body.access_token).client_id).toBe('original_client');
+      expect(decodeJwt(body.access_token).aud).toBe('original_client');
+    });
+
     it('organization_id alone initiates SSO when the organization holds a connection', async () => {
       const { org } = seedSsoOrg('Acme', 'acme.example.com');
 
@@ -3296,7 +3305,22 @@ describe('Auth routes', () => {
       expect(wrong.status).toBe(400);
       expect((await json(wrong)).error).toBe('invalid_grant');
 
-      // Neither failure spent the code.
+      // Nor is the code /sso/token's to spend: production's standalone token endpoint takes no
+      // verifier, so a bound code is AuthKit's alone.
+      const standalone = await app.request('/sso/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code,
+          client_id: 'client_x',
+          client_secret: 'sk_test_auth',
+        }),
+      });
+      expect(standalone.status).toBe(400);
+      expect((await json(standalone)).error).toBe('invalid_grant');
+
+      // None of the failures spent the code.
       const right = await exchange(code, { code_verifier: verifier });
       expect(right.status).toBe(200);
       expect((await json(right)).authentication_method).toBe('SSO');
