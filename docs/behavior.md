@@ -115,7 +115,7 @@ The session is scoped to the connection's organization. A profile with no user-m
 
 As with `/user_management/authorize`, `/sso/authorize` is public and signs in whoever `login_hint` names: there is no IdP here to prove an identity with, and inventing a profile for any address is what lets a test drive an SSO login at all. Both endpoints will therefore hand out a session for any account you ask them for. That is the emulator being a test double, not an authorization server — do not point anything at it that you would not also let sign in as your users.
 
-### `/user_management/authorize` honours the SSO selectors
+### `/user_management/authorize` honors the SSO selectors
 
 Production's `provider`, `connection_id` and `organization_id` are exclusive, and the two ids initiate SSO: the person goes to that connection's IdP, not to the hosted sign-in. A `getAuthorizationUrl({ connectionId })` or `({ organizationId })` URL is therefore handed to `/sso/authorize`, the emulator's stand-in for the IdP, which mints the code the callback receives; the exchange redeems it as an SSO login scoped to the connection's organization, as above. With `--interactive` that is the SSO login page, not the email page.
 
