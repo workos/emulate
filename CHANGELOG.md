@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/workos/emulate/compare/v0.17.0...v0.17.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **auth:** honor connection_id and organization_id on authorize ([#171](https://github.com/workos/emulate/issues/171)) ([6559df5](https://github.com/workos/emulate/commit/6559df574790586dfa1400fc2345beadd298f1d3))
+
 ## [0.17.0](https://github.com/workos/emulate/compare/v0.16.0...v0.17.0) (2026-10-23)
 
 
