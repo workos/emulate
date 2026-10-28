@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/workos/emulate/compare/v0.17.1...v0.18.0) (2026-10-28)
+
+
+### Features
+
+* **seed:** pin organization membership ids ([#174](https://github.com/workos/emulate/issues/174)) ([90d0c92](https://github.com/workos/emulate/commit/90d0c926a1ff6a37d7f98c361f05813a3b338b71))
+
 ## [0.17.1](https://github.com/workos/emulate/compare/v0.17.0...v0.17.1) (2026-10-27)
 
 
