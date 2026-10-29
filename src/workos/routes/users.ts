@@ -229,6 +229,10 @@ export function userRoutes(ctx: RouteContext): void {
     for (const ma of ws.magicAuths.findBy('user_id', user.id)) {
       ws.magicAuths.delete(ma.id);
     }
+    // An organization's account outlives the member who established it; the field stops naming them.
+    for (const ca of ws.connectedAccounts.findBy('established_by_user_id', user.id)) {
+      ws.connectedAccounts.update(ca.id, { established_by_user_id: null });
+    }
     // Through the delete hook this also emits pipes.connected_account.disconnected for each:
     // the accounts stop existing with the user, and their stored tokens go with them.
     for (const ca of ws.connectedAccounts.findBy('user_id', user.id)) {

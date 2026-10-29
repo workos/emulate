@@ -7,8 +7,14 @@ import {
   parseJsonBody,
   WorkOSApiError,
 } from '../../core/index.js';
-import { getWorkOSStore } from '../store.js';
-import { formatConnectedAccount, dataIntegrationIdFor, findConnectedAccount } from '../helpers.js';
+import { getWorkOSStore, type WorkOSStore } from '../store.js';
+import {
+  formatConnectedAccount,
+  findConnectedAccount,
+  insertConnectedAccount,
+  findOrganizationConnectedAccount,
+  assertActiveMember,
+} from '../helpers.js';
 import type { ConnectedAccountState, WorkOSConnectedAccount } from '../entities.js';
 
 /**
@@ -25,8 +31,9 @@ interface ConnectedAccountDto {
 
 const DTO_STATES: ConnectedAccountState[] = ['connected', 'needs_reauthorization'];
 
-// All four verbs live on the one spec path; naming it once keeps the param typing exact.
+// All four verbs live on each spec path; naming them once keeps the param typing exact.
 const ACCOUNT_PATH = '/user_management/users/:user_id/connected_accounts/:slug';
+const ORGANIZATION_ACCOUNT_PATH = '/organizations/:organization_id/connected_accounts/:slug';
 
 function parseDto(body: Record<string, unknown>): ConnectedAccountDto {
   const dto: ConnectedAccountDto = {};
@@ -73,6 +80,50 @@ function deriveState(dto: ConnectedAccountDto): ConnectedAccountState {
   }
   if (dto.refresh_token) return 'connected';
   throw validationError('a state or at least one token is required');
+}
+
+/** POST on either path: the account fields an import takes from its DTO. */
+function importedFields(
+  dto: ConnectedAccountDto,
+): Pick<WorkOSConnectedAccount, 'scopes' | 'state' | 'access_token' | 'refresh_token' | 'token_expires_at'> {
+  return {
+    scopes: dto.scopes ?? [],
+    state: deriveState(dto),
+    access_token: dto.access_token ?? null,
+    refresh_token: dto.refresh_token ?? null,
+    token_expires_at: dto.expires_at ?? null,
+  };
+}
+
+/** PUT on either path: merge the DTO into the account, re-deriving its state as described inline. */
+function updateAccount(
+  ws: WorkOSStore,
+  account: WorkOSConnectedAccount,
+  dto: ConnectedAccountDto,
+): WorkOSConnectedAccount {
+  // Without an explicit state, an update touching the credentials re-derives it from the
+  // merged token set — the DTO alone cannot see a retained refresh token — while a
+  // scopes-only update must not silently reconnect a needs_reauthorization account.
+  const credentialsTouched =
+    dto.access_token !== undefined || dto.refresh_token !== undefined || dto.expires_at !== undefined;
+  // An expiry describes its access token: a replacement token sent without one is unexpired, and
+  // the previous token's expiry must not linger on the row to expire it later.
+  const tokenExpiresAt = dto.expires_at ?? (dto.access_token === undefined ? account.token_expires_at : null);
+  const merged: ConnectedAccountDto = {
+    access_token: dto.access_token ?? account.access_token ?? undefined,
+    refresh_token: dto.refresh_token ?? account.refresh_token ?? undefined,
+    expires_at: tokenExpiresAt ?? undefined,
+  };
+  const canDerive = merged.access_token !== undefined || merged.refresh_token !== undefined;
+  const state = dto.state ?? (credentialsTouched && canDerive ? deriveState(merged) : account.state);
+
+  return ws.connectedAccounts.update(account.id, {
+    ...(dto.scopes !== undefined ? { scopes: dto.scopes } : {}),
+    ...(dto.access_token !== undefined ? { access_token: dto.access_token } : {}),
+    ...(dto.refresh_token !== undefined ? { refresh_token: dto.refresh_token } : {}),
+    token_expires_at: tokenExpiresAt,
+    state,
+  })!;
 }
 
 export function connectedAccountRoutes(ctx: RouteContext): void {
@@ -135,21 +186,12 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
     }
 
     const dto = parseDto(await parseJsonBody(c));
-    const state = deriveState(dto);
-
-    const created = ws.connectedAccounts.insert({
-      object: 'connected_account',
+    const created = insertConnectedAccount(ws, {
       user_id: userId,
       organization_id: organizationId,
       provider: slug,
-      data_integration_id: dataIntegrationIdFor(ws, slug),
-      scopes: dto.scopes ?? [],
-      auth_method: 'oauth',
-      api_key_last_4: null,
-      state,
-      access_token: dto.access_token ?? null,
-      refresh_token: dto.refresh_token ?? null,
-      token_expires_at: dto.expires_at ?? null,
+      established_by_user_id: null,
+      ...importedFields(dto),
     });
     return c.json(formatConnectedAccount(created), 201);
   });
@@ -158,30 +200,8 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
     const account = requireAccount(resolveTarget(c));
 
     const dto = parseDto(await parseJsonBody(c));
-    // Without an explicit state, an update touching the credentials re-derives it from the
-    // merged token set — the DTO alone cannot see a retained refresh token — while a
-    // scopes-only update must not silently reconnect a needs_reauthorization account.
-    const credentialsTouched =
-      dto.access_token !== undefined || dto.refresh_token !== undefined || dto.expires_at !== undefined;
-    // An expiry describes its access token: a replacement token sent without one is unexpired, and
-    // the previous token's expiry must not linger on the row to expire it later.
-    const tokenExpiresAt = dto.expires_at ?? (dto.access_token === undefined ? account.token_expires_at : null);
-    const merged: ConnectedAccountDto = {
-      access_token: dto.access_token ?? account.access_token ?? undefined,
-      refresh_token: dto.refresh_token ?? account.refresh_token ?? undefined,
-      expires_at: tokenExpiresAt ?? undefined,
-    };
-    const canDerive = merged.access_token !== undefined || merged.refresh_token !== undefined;
-    const state = dto.state ?? (credentialsTouched && canDerive ? deriveState(merged) : account.state);
-
-    const updated = ws.connectedAccounts.update(account.id, {
-      ...(dto.scopes !== undefined ? { scopes: dto.scopes } : {}),
-      ...(dto.access_token !== undefined ? { access_token: dto.access_token } : {}),
-      ...(dto.refresh_token !== undefined ? { refresh_token: dto.refresh_token } : {}),
-      token_expires_at: tokenExpiresAt,
-      state,
-    });
-    return c.json(formatConnectedAccount(updated!));
+    const updated = updateAccount(ws, account, dto);
+    return c.json(formatConnectedAccount(updated));
   });
 
   app.delete(ACCOUNT_PATH, (c) => {
@@ -189,6 +209,83 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
     // Deleting is what "disconnects": the row (and the tokens the spec says are removed with
     // it) goes away, so a later import is a fresh 201 rather than a 409 against a dead link.
     // The pipes.connected_account.disconnected event is emitted by the collection hook.
+    ws.connectedAccounts.delete(account.id);
+    return c.body(null, 204);
+  });
+
+  // Organization-owned accounts: one per (organization, slug), with no `user_id` of their own.
+
+  function resolveOrganizationTarget(c: Context<WorkOSAppEnv, typeof ORGANIZATION_ACCOUNT_PATH>): {
+    organizationId: string;
+    slug: string;
+    account: WorkOSConnectedAccount | undefined;
+  } {
+    const organizationId = c.req.param('organization_id');
+    if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
+    const slug = c.req.param('slug');
+    return { organizationId, slug, account: findOrganizationConnectedAccount(ws, organizationId, slug) };
+  }
+
+  const requireOrganizationAccount = (target: ReturnType<typeof resolveOrganizationTarget>): WorkOSConnectedAccount => {
+    if (target.account) return target.account;
+    throw notFound('Data Installation', `slug=${target.slug} organization_id=${target.organizationId}`);
+  };
+
+  /** Import and update name the member acting for the organization; they must be an active one. */
+  function actingMember(body: Record<string, unknown>, organizationId: string): string {
+    if (body.user_id === undefined) {
+      throw validationError('user_id is required', [{ field: 'user_id', code: 'required' }]);
+    }
+    if (typeof body.user_id !== 'string' || !body.user_id) {
+      throw validationError('user_id must be a non-empty string', [{ field: 'user_id', code: 'invalid' }]);
+    }
+    if (!ws.users.get(body.user_id)) throw notFound('User', body.user_id);
+    assertActiveMember(ws, organizationId, body.user_id);
+    return body.user_id;
+  }
+
+  app.get(ORGANIZATION_ACCOUNT_PATH, (c) => {
+    const account = requireOrganizationAccount(resolveOrganizationTarget(c));
+    return c.json(formatConnectedAccount(account));
+  });
+
+  // Both read the account after awaiting the body, so an overlapping request's write is seen.
+  app.post(ORGANIZATION_ACCOUNT_PATH, async (c) => {
+    const body = await parseJsonBody(c);
+    const { organizationId, slug, account } = resolveOrganizationTarget(c);
+    const userId = actingMember(body, organizationId);
+    if (account) {
+      throw new WorkOSApiError(
+        409,
+        `Connected account already exists for provider '${slug}' in organization '${organizationId}'`,
+        'conflict',
+      );
+    }
+
+    const dto = parseDto(body);
+    const created = insertConnectedAccount(ws, {
+      user_id: null,
+      organization_id: organizationId,
+      provider: slug,
+      established_by_user_id: userId,
+      ...importedFields(dto),
+    });
+    return c.json(formatConnectedAccount(created), 201);
+  });
+
+  app.put(ORGANIZATION_ACCOUNT_PATH, async (c) => {
+    const body = await parseJsonBody(c);
+    const target = resolveOrganizationTarget(c);
+    actingMember(body, target.organizationId);
+    const account = requireOrganizationAccount(target);
+
+    const dto = parseDto(body);
+    const updated = updateAccount(ws, account, dto);
+    return c.json(formatConnectedAccount(updated));
+  });
+
+  app.delete(ORGANIZATION_ACCOUNT_PATH, (c) => {
+    const account = requireOrganizationAccount(resolveOrganizationTarget(c));
     ws.connectedAccounts.delete(account.id);
     return c.body(null, 204);
   });

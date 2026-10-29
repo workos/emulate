@@ -21,7 +21,7 @@ in [Seed data](docs/seeding.md).
 
 <!-- gen:supported:begin -->
 
-The emulator implements **203 of 266** endpoints in the WorkOS OpenAPI spec (`@workos/openapi-spec@0.133.0`) (**76.3%**).
+The emulator implements **207 of 266** endpoints in the WorkOS OpenAPI spec (`@workos/openapi-spec@0.133.0`) (**77.8%**).
 
 | Feature                                                               | Read     | Write    | Set up                         |
 | --------------------------------------------------------------------- | -------- | -------- | ------------------------------ |
@@ -39,7 +39,7 @@ The emulator implements **203 of 266** endpoints in the WorkOS OpenAPI spec (`@w
 | [Vault](docs/behavior.md#vault)                                       | ✅ 5/5   | ⚠️ 3/6   | ⚠️ API only                    |
 | [Feature Flags](docs/behavior.md#feature-flags)                       | ✅ 4/4   | ✅ 4/4   | ✅ seed `featureFlags`         |
 | [API Keys](docs/behavior.md#api-keys)                                 | ✅ 2/2   | ✅ 5/5   | ✅ seed `apiKeys`              |
-| [Pipes / Connected Apps](docs/behavior.md#pipes--connected-apps)      | ⚠️ 2/8   | ⚠️ 4/19  | ✅ seed `connectedAccounts`    |
+| [Pipes / Connected Apps](docs/behavior.md#pipes--connected-apps)      | ⚠️ 3/8   | ⚠️ 7/19  | ✅ seed `connectedAccounts`    |
 | [Applications](docs/behavior.md#applications)                         | ✅ 5/5   | ✅ 8/8   | ✅ seed `connectApplications`  |
 | [JWT Templates](docs/behavior.md#jwt-templates)                       | ✅ 1/1   | ✅ 1/1   | ✅ seed `jwtTemplate`          |
 | [Webhooks](docs/behavior.md#webhooks)                                 | ✅ 1/1   | ✅ 3/3   | ✅ seed `webhookEndpoints`     |

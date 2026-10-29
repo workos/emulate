@@ -250,9 +250,10 @@ production infrastructure state. Both can still be injected per-route through th
 ## Pipes connected accounts
 
 `GET|POST|PUT|DELETE /user_management/users/{id}/connected_accounts/{slug}` serve a user's
-[connected accounts](https://workos.com/docs/reference/pipes/connected-account). Seed them
-with `connectedAccounts`, referencing a user by email (the same join key memberships use)
-and, for an org-scoped connection, an organization by name:
+[connected accounts](https://workos.com/docs/reference/pipes/connected-account), and
+`/organizations/{id}/connected_accounts/{slug}` an organization's. Seed them with
+`connectedAccounts`, referencing a user by email (the same join key memberships use) and, for an
+org-scoped connection, an organization by name:
 
 ```yaml
 users:
@@ -267,7 +268,14 @@ connectedAccounts:
     provider: slack
     organization: Acme Corp # scoped to that organization's id
     state: needs_reauthorization # defaults to connected
+  - owner: organization # the organization's own account; defaults to user
+    organization: Acme Corp # required for an organization-owned account
+    provider: google-calendar
+    email: alice@acme.com # optional: the member who established it
 ```
+
+An organization owns one account per provider, apart from any its members hold. It has
+`user_id: null`, and `established_by_user_id` is the user `email` names, or `null` without one.
 
 Accounts are keyed by (user, provider, organization scope). `POST` imports an account from
 OAuth tokens under exactly that key — an omitted `state` is derived from the token combination

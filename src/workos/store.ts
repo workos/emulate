@@ -216,7 +216,7 @@ export function getWorkOSStore(store: Store): WorkOSStore {
     connectedAccounts: store.collection<WorkOSConnectedAccount>(
       'workos.connected_accounts',
       ID_PREFIXES.connected_account,
-      ['user_id', 'provider'],
+      ['user_id', 'provider', 'organization_id'],
     ),
     roles: store.collection<WorkOSRole>('workos.roles', ID_PREFIXES.role, ['slug', 'organization_id']),
     permissions: store.collection<WorkOSPermission>('workos.permissions', ID_PREFIXES.permission, ['slug']),
