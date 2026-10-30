@@ -2,6 +2,7 @@ import { randomBytes, randomInt, createHash } from 'node:crypto';
 import { isIPv6 } from 'node:net';
 import { domainToASCII } from 'node:url';
 import {
+  PlainApiError,
   WorkOSApiError,
   validationError,
   generateId,
@@ -1145,6 +1146,84 @@ export function findConnectedAccount(
     );
   }
   return matches[0];
+}
+
+/**
+ * Inserts an OAuth connected account, the one auth method the import DTO and the seed
+ * describe. Fires the `pipes.connected_account.*` event for its state.
+ */
+export function insertConnectedAccount(
+  ws: WorkOSStore,
+  account: Pick<
+    WorkOSConnectedAccount,
+    'user_id' | 'organization_id' | 'provider' | 'state' | 'established_by_user_id'
+  > &
+    Partial<Pick<WorkOSConnectedAccount, 'scopes' | 'access_token' | 'refresh_token' | 'token_expires_at'>>,
+): WorkOSConnectedAccount {
+  return ws.connectedAccounts.insert({
+    object: 'connected_account',
+    data_integration_id: dataIntegrationIdFor(ws, account.provider),
+    auth_method: 'oauth',
+    api_key_last_4: null,
+    scopes: [],
+    access_token: null,
+    refresh_token: null,
+    token_expires_at: null,
+    ...account,
+  });
+}
+
+/**
+ * The account an organization owns for a provider. Organization-owned accounts have no
+ * `user_id`, which keeps them out of every per-user lookup above.
+ */
+export function findOrganizationConnectedAccount(
+  ws: WorkOSStore,
+  organizationId: string,
+  slug: string,
+): WorkOSConnectedAccount | undefined {
+  return ws.connectedAccounts
+    .findBy('organization_id', organizationId)
+    .find((a) => a.user_id === null && a.provider === slug);
+}
+
+/**
+ * Acting for an organization's connected account requires an active membership, which the
+ * spec answers with a bare 403 `{ message }` otherwise.
+ */
+export function assertActiveMember(ws: WorkOSStore, organizationId: string, userId: string): void {
+  if (liveMembershipFor(ws, organizationId, userId)?.status !== 'active') {
+    throw new PlainApiError(
+      403,
+      `User '${userId}' is not an active member of organization '${organizationId}'.`,
+      'forbidden',
+    );
+  }
+}
+
+/**
+ * The account with a usable access token, or `undefined` when it needs reauthorization. Shared
+ * by `/token` and `/credentials`, which vend the same token in different envelopes.
+ */
+export function vendAccessToken(ws: WorkOSStore, account: WorkOSConnectedAccount): WorkOSConnectedAccount | undefined {
+  const expired = account.token_expires_at !== null && isExpired(account.token_expires_at);
+  if (account.state === 'connected' && expired && !account.refresh_token) {
+    // Production's refresh attempt fails on an unrefreshable token and flips the account;
+    // the collection hook emits reauthorization_needed.
+    account = ws.connectedAccounts.update(account.id, { state: 'needs_reauthorization' })!;
+  }
+  if (account.state !== 'connected') return undefined;
+
+  if (!account.access_token || expired) {
+    // A connected account always has a usable token. The emulator cannot reach the provider,
+    // so a refresh — or an account that was never given credentials — mints one locally, as
+    // the legacy code exchange does. Stored, so repeat calls return the same one.
+    account = ws.connectedAccounts.update(account.id, {
+      access_token: `di_mock_${account.provider}_${generateVerificationToken().slice(0, 8)}`,
+      token_expires_at: account.refresh_token ? expiresIn(60) : null,
+    })!;
+  }
+  return account;
 }
 
 /** Redirect URI hosts the emulator's authorize endpoints accept with no configuration. */

@@ -1,16 +1,65 @@
-import { type RouteContext, parseJsonBody, WorkOSApiError, notFound, validationError } from '../../core/index.js';
+import {
+  type RouteContext,
+  parseJsonBody,
+  badRequest,
+  WorkOSApiError,
+  notFound,
+  validationError,
+} from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import {
+  assertActiveMember,
   assertAllowedRedirectUri,
   generateVerificationToken,
   expiresIn,
   isExpired,
   findConnectedAccount,
+  findOrganizationConnectedAccount,
+  vendAccessToken,
 } from '../helpers.js';
+import type { ConnectionOwner, WorkOSUser } from '../entities.js';
+
+const CONNECTION_OWNERS: ConnectionOwner[] = ['user', 'organization'];
+
+/** Who a request acts for: `user_id` always, and the organization when it owns or scopes the account. */
+interface Owner {
+  connectionOwner: ConnectionOwner;
+  user: WorkOSUser;
+  organizationId: string | null;
+}
 
 export function dataIntegrationRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
   const ws = getWorkOSStore(store);
+
+  /**
+   * The owner `/credentials` names in its body. Naming an organization, for
+   * either owner, requires the user to be an active member of it: the spec's 403 covers both an
+   * organization connection and an organization-scoped personal one. A malformed body is the
+   * spec's 400 for this route, not the 422 `/token` answers.
+   */
+  function resolveOwner(body: Record<string, unknown>): Owner {
+    if (typeof body.user_id !== 'string' || !body.user_id) throw badRequest('user_id must be a string');
+    const organizationId = body.organization_id ?? null;
+    if (organizationId !== null && (typeof organizationId !== 'string' || !organizationId)) {
+      throw badRequest('organization_id must be a string');
+    }
+    const connectionOwner = (body.connection_owner ?? 'user') as ConnectionOwner;
+    if (!CONNECTION_OWNERS.includes(connectionOwner)) {
+      throw badRequest(`connection_owner must be one of the following values: ${CONNECTION_OWNERS.join(', ')}`);
+    }
+    if (connectionOwner === 'organization' && !organizationId) {
+      throw badRequest('organization_id is required when connection_owner is organization');
+    }
+
+    const user = ws.users.get(body.user_id);
+    if (!user) throw notFound('User', body.user_id);
+    if (organizationId) {
+      if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
+      assertActiveMember(ws, organizationId, user.id);
+    }
+    return { connectionOwner, user, organizationId };
+  }
 
   // Authorize (public endpoint — no auth required)
   app.get('/data-integrations/:slug/authorize', (c) => {
@@ -40,6 +89,36 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
     return c.redirect(redirect.toString(), 302);
   });
 
+  // The spec's credential vend, for user- and organization-owned accounts alike.
+  app.post('/data-integrations/:slug/credentials', async (c) => {
+    const slug = c.req.param('slug');
+    const owner = resolveOwner(await parseJsonBody(c));
+
+    const account =
+      owner.connectionOwner === 'organization'
+        ? findOrganizationConnectedAccount(ws, owner.organizationId!, slug)
+        : findConnectedAccount(ws, owner.user.id, slug, owner.organizationId);
+    if (!account) return c.json({ active: false, error: 'not_installed' });
+    // A personal account scoped to an organization needs the membership even when the request
+    // leaves `organization_id` out and the account is the only one for the provider.
+    if (account.organization_id) assertActiveMember(ws, account.organization_id, owner.user.id);
+
+    const vended = vendAccessToken(ws, account);
+    if (!vended) return c.json({ active: false, error: 'needs_reauthorization' });
+    return c.json({
+      active: true,
+      credential: {
+        object: 'credential',
+        auth_method: 'oauth',
+        value: vended.access_token,
+        expires_at: vended.token_expires_at,
+        scopes: vended.scopes,
+        missing_scopes: [],
+        config: {},
+      },
+    });
+  });
+
   // Retrieve a connected account's token (the spec's request), or exchange a legacy authorization code.
   app.post('/data-integrations/:slug/token', async (c) => {
     const slug = c.req.param('slug');
@@ -61,34 +140,19 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
       if (!ws.users.get(body.user_id)) throw notFound('User', body.user_id);
       if (organizationId && !ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
 
-      let account = findConnectedAccount(ws, body.user_id, slug, organizationId);
+      const account = findConnectedAccount(ws, body.user_id, slug, organizationId);
       if (!account) return c.json({ active: false, error: 'not_installed' });
 
-      const expired = account.token_expires_at !== null && isExpired(account.token_expires_at);
-      if (account.state === 'connected' && expired && !account.refresh_token) {
-        // Production's refresh attempt fails on an unrefreshable token and flips the account;
-        // the collection hook emits reauthorization_needed.
-        account = ws.connectedAccounts.update(account.id, { state: 'needs_reauthorization' })!;
-      }
-      if (account.state !== 'connected') return c.json({ active: false, error: 'needs_reauthorization' });
-
-      if (!account.access_token || expired) {
-        // A connected account always has a usable token. The emulator cannot reach the provider,
-        // so a refresh — or a seeded account that was never given credentials — mints one
-        // locally, as the legacy exchange below does. Stored, so repeat calls return the same one.
-        account = ws.connectedAccounts.update(account.id, {
-          access_token: `di_mock_${slug}_${generateVerificationToken().slice(0, 8)}`,
-          token_expires_at: account.refresh_token ? expiresIn(60) : null,
-        })!;
-      }
+      const vended = vendAccessToken(ws, account);
+      if (!vended) return c.json({ active: false, error: 'needs_reauthorization' });
 
       return c.json({
         active: true,
         access_token: {
           object: 'access_token',
-          access_token: account.access_token,
-          expires_at: account.token_expires_at,
-          scopes: account.scopes,
+          access_token: vended.access_token,
+          expires_at: vended.token_expires_at,
+          scopes: vended.scopes,
           missing_scopes: [],
         },
       });

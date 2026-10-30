@@ -296,4 +296,139 @@ describe('Data Integrations routes', () => {
       expect(res.status).toBe(401);
     });
   });
+
+  describe('credentials', () => {
+    let userId: string;
+    let organizationId: string;
+
+    beforeEach(async () => {
+      const user = await json(
+        await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'member@acme.test' }) }),
+      );
+      const org = await json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'Acme' }) }));
+      userId = user.id;
+      organizationId = org.id;
+      const membership = await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, organization_id: organizationId }),
+      });
+      expect(membership.status).toBe(201);
+    });
+
+    const organizationOwner = () => ({
+      connection_owner: 'organization',
+      organization_id: organizationId,
+      user_id: userId,
+    });
+    const credentials = (body: Record<string, unknown>) =>
+      req('/data-integrations/google-calendar/credentials', { method: 'POST', body: JSON.stringify(body) });
+    const organizationAccount = () => `/organizations/${organizationId}/connected_accounts/google-calendar`;
+
+    it('vends the organization’s token, then reports reauthorization and disconnection', async () => {
+      expect(await json(await credentials(organizationOwner()))).toEqual({ active: false, error: 'not_installed' });
+      const imported = await req(organizationAccount(), {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, access_token: 'ya29.org', scopes: ['calendar'] }),
+      });
+      expect(imported.status).toBe(201);
+
+      expect(await json(await credentials(organizationOwner()))).toEqual({
+        active: true,
+        credential: {
+          object: 'credential',
+          auth_method: 'oauth',
+          value: 'ya29.org',
+          expires_at: null,
+          scopes: ['calendar'],
+          missing_scopes: [],
+          config: {},
+        },
+      });
+
+      await req(organizationAccount(), {
+        method: 'PUT',
+        body: JSON.stringify({ user_id: userId, state: 'needs_reauthorization' }),
+      });
+      expect(await json(await credentials(organizationOwner()))).toEqual({
+        active: false,
+        error: 'needs_reauthorization',
+      });
+
+      expect((await req(organizationAccount(), { method: 'DELETE' })).status).toBe(204);
+      expect(await json(await credentials(organizationOwner()))).toEqual({ active: false, error: 'not_installed' });
+    });
+
+    it('vends a user’s own token through the SDK, apart from the organization’s', async () => {
+      await req(`/user_management/users/${userId}/connected_accounts/google-calendar`, {
+        method: 'POST',
+        body: JSON.stringify({ access_token: 'ya29.personal' }),
+      });
+
+      const workos = sdkClient(app, 'sk_test_org');
+      const vended = await workos.pipes.createDataIntegrationCredential({ slug: 'google-calendar', userId });
+      expect(vended).toMatchObject({ active: true, credential: { authMethod: 'oauth', value: 'ya29.personal' } });
+      expect(await json(await credentials(organizationOwner()))).toEqual({ active: false, error: 'not_installed' });
+    });
+
+    it('requires an active membership of the organization named, for either owner', async () => {
+      const outsider = await json(
+        await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'outsider@acme.test' }) }),
+      );
+      const refused = await credentials({ ...organizationOwner(), user_id: outsider.id });
+      expect(refused.status).toBe(403);
+      expect(await json(refused)).toEqual({
+        message: `User '${outsider.id}' is not an active member of organization '${organizationId}'.`,
+      });
+      // An organization-scoped personal connection is held to the same rule.
+      expect((await credentials({ user_id: outsider.id, organization_id: organizationId })).status).toBe(403);
+    });
+
+    it('requires the membership of a scoped personal account the request does not name', async () => {
+      await req(
+        `/user_management/users/${userId}/connected_accounts/google-calendar?organization_id=${organizationId}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ access_token: 'ya29.scoped' }),
+        },
+      );
+      expect((await json(await credentials({ user_id: userId }))).active).toBe(true);
+
+      const memberships = await json(await req(`/user_management/organization_memberships?user_id=${userId}`));
+      await req(`/user_management/organization_memberships/${memberships.data[0].id}/deactivate`, { method: 'PUT' });
+      expect((await credentials({ user_id: userId })).status).toBe(403);
+    });
+
+    it.each([
+      [{}, 'user_id must be a string'],
+      [
+        { user_id: 'user_x', connection_owner: 'team' },
+        'connection_owner must be one of the following values: user, organization',
+      ],
+      [
+        { user_id: 'user_x', connection_owner: 'organization' },
+        'organization_id is required when connection_owner is organization',
+      ],
+      [{ user_id: 'user_x', organization_id: 7 }, 'organization_id must be a string'],
+    ])('rejects a malformed owner: %j', async (body, message) => {
+      const res = await credentials(body);
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({ message, error: 'Bad Request' });
+    });
+
+    it('404s an unknown user or organization', async () => {
+      expect((await credentials({ user_id: 'user_missing' })).status).toBe(404);
+      const res = await credentials({ ...organizationOwner(), organization_id: 'org_missing' });
+      expect(res.status).toBe(404);
+      expect(await json(res)).toMatchObject({ code: 'entity_not_found' });
+    });
+
+    it('requires an API key', async () => {
+      const res = await app.request('/data-integrations/google-calendar/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(organizationOwner()),
+      });
+      expect(res.status).toBe(401);
+    });
+  });
 });

@@ -435,9 +435,13 @@ export interface WorkOSAuthorizedApplication extends Entity {
  */
 export type ConnectedAccountState = 'connected' | 'needs_reauthorization';
 
+/** Who owns a connected account: the user, or the organization they act for. */
+export type ConnectionOwner = 'user' | 'organization';
+
 export interface WorkOSConnectedAccount extends Entity {
   object: 'connected_account';
-  user_id: string;
+  /** `null` for an organization-owned account: the organization owns it, not the member who connected it. */
+  user_id: string | null;
   organization_id: string | null;
   /** Provider slug the account is addressed by (`github`, `slack`, …). Not part of the spec's REST shape — requests carry it in the path, events as `provider_slug`. */
   provider: string;
@@ -448,6 +452,12 @@ export interface WorkOSConnectedAccount extends Entity {
   auth_method: 'oauth';
   api_key_last_4: null;
   state: ConnectedAccountState;
+  /**
+   * The member who established an organization's account: who imported it, or was seeded as
+   * establishing it. `null` for a user's own imported or seeded account, which is
+   * developer-managed, and once that member is deleted.
+   */
+  established_by_user_id: string | null;
   /** Tokens the import/update endpoints were given. Kept because deleting the account is specified to remove them; never serialized. */
   access_token: string | null;
   refresh_token: string | null;

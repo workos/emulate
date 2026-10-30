@@ -1,9 +1,11 @@
 /**
  * Pipes connected accounts. The spec models them on
- * `/user_management/users/{user_id}/connected_accounts/{slug}` with all four verbs: GET,
+ * `/user_management/users/{user_id}/connected_accounts/{slug}` and
+ * `/organizations/{organization_id}/connected_accounts/{slug}`, each with all four verbs: GET,
  * POST (import with OAuth tokens), PUT (update tokens/scopes/state), DELETE (disconnect).
- * Accounts are keyed by (user, slug, organization scope), can be seeded, and state
- * transitions emit the spec's `pipes.connected_account.*` events.
+ * A user's accounts are keyed by (user, slug, organization scope) and an organization's by
+ * (organization, slug). Both can be seeded, and state transitions emit the spec's
+ * `pipes.connected_account.*` events.
  */
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
@@ -19,6 +21,7 @@ const RESPONSE_KEYS = [
   'api_key_last_4',
   'auth_method',
   'created_at',
+  'established_by_user_id',
   'id',
   'object',
   'organization_id',
@@ -162,6 +165,56 @@ describe('Connected account routes', () => {
       });
       expect(duplicate.valid).toBe(false);
       expect(duplicate.errors[0].path).toBe('connectedAccounts[1]');
+    });
+
+    it('seeds an organization-owned account, with or without who established it', async () => {
+      seed({
+        users: [{ email: 'admin@acme.test' }],
+        organizations: [{ name: 'Acme' }, { name: 'Globex' }],
+        connectedAccounts: [
+          { owner: 'organization', organization: 'Acme', provider: 'google-calendar', email: 'admin@acme.test' },
+          {
+            owner: 'organization',
+            organization: 'Globex',
+            provider: 'google-calendar',
+            state: 'needs_reauthorization',
+          },
+        ],
+      });
+      const ws = getWorkOSStore(store);
+      const [acme, globex] = ['Acme', 'Globex'].map((name) => ws.organizations.findOneBy('name', name)!);
+      const read = async (orgId: string) =>
+        json(await req(`/organizations/${orgId}/connected_accounts/google-calendar`));
+
+      expect(await read(acme.id)).toMatchObject({
+        user_id: null,
+        established_by_user_id: ws.users.findOneBy('email', 'admin@acme.test')!.id,
+        state: 'connected',
+      });
+      expect(await read(globex.id)).toMatchObject({ established_by_user_id: null, state: 'needs_reauthorization' });
+    });
+
+    it('validates organization-owned seed entries', () => {
+      const base = { users: [{ email: 'admin@acme.test' }], organizations: [{ name: 'Acme' }] };
+      const errors = (connectedAccounts: unknown[]) =>
+        validateSeedConfig({ ...base, connectedAccounts } as WorkOSSeedConfig).errors.map((e) => [e.path, e.message]);
+
+      expect(errors([{ owner: 'organization', organization: 'Acme', provider: 'google-calendar' }])).toEqual([]);
+      expect(errors([{ owner: 'organization', provider: 'google-calendar' }])).toEqual([
+        ['connectedAccounts[0].organization', 'organization is required when owner is "organization"'],
+      ]);
+      expect(errors([{ owner: 'team', email: 'admin@acme.test', provider: 'google-calendar' }])).toEqual([
+        ['connectedAccounts[0].owner', 'owner must be "user" or "organization" if provided'],
+      ]);
+      expect(
+        errors([
+          { owner: 'organization', organization: 'Acme', provider: 'google-calendar' },
+          { owner: 'organization', organization: 'Acme', provider: 'google-calendar', email: 'admin@acme.test' },
+          { email: 'admin@acme.test', organization: 'Acme', provider: 'google-calendar' },
+        ]),
+      ).toEqual([
+        ['connectedAccounts[1]', 'duplicate organization-owned connected account for this provider and organization'],
+      ]);
     });
   });
 
@@ -411,6 +464,126 @@ describe('Connected account routes', () => {
       expect((await req(`/user_management/users/${user.id}`, { method: 'DELETE' })).status).toBe(204);
       expect(getWorkOSStore(store).connectedAccounts.findBy('user_id', user.id)).toHaveLength(0);
       expect(eventsNamed('pipes.connected_account.disconnected')).toHaveLength(1);
+    });
+  });
+
+  describe('organization-owned accounts', () => {
+    let userId: string;
+    let organizationId: string;
+    let path: string;
+
+    beforeEach(async () => {
+      userId = (await createUser('admin@acme.test')).id;
+      organizationId = (
+        await json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'Acme' }) }))
+      ).id;
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, organization_id: organizationId }),
+      });
+      path = `/organizations/${organizationId}/connected_accounts/google-calendar`;
+    });
+
+    const send = (method: string, body: Record<string, unknown>) => req(path, { method, body: JSON.stringify(body) });
+
+    it('imports, reads, updates, and deletes the organization’s account', async () => {
+      const created = await send('POST', { user_id: userId, access_token: 'ya29.org', scopes: ['calendar'] });
+      expect(created.status).toBe(201);
+      const account = await json(created);
+      expect(Object.keys(account).sort()).toEqual(RESPONSE_KEYS);
+      expect(account).toMatchObject({
+        user_id: null,
+        organization_id: organizationId,
+        established_by_user_id: userId,
+        scopes: ['calendar'],
+        state: 'connected',
+      });
+      expect(eventsNamed('pipes.connected_account.connected')).toHaveLength(1);
+
+      expect(await json(await req(path))).toEqual(account);
+
+      const updated = await send('PUT', { user_id: userId, state: 'needs_reauthorization' });
+      expect(updated.status).toBe(200);
+      expect((await json(updated)).state).toBe('needs_reauthorization');
+      expect(eventsNamed('pipes.connected_account.reauthorization_needed')).toHaveLength(1);
+
+      expect((await req(path, { method: 'DELETE' })).status).toBe(204);
+      expect(eventsNamed('pipes.connected_account.disconnected')).toHaveLength(1);
+      const gone = await req(path);
+      expect(gone.status).toBe(404);
+      expect(await json(gone)).toEqual({
+        message: `Data Installation not found: 'slug=google-calendar organization_id=${organizationId}'.`,
+        code: 'entity_not_found',
+        entity_id: `slug=google-calendar organization_id=${organizationId}`,
+      });
+      expect((await req(path, { method: 'DELETE' })).status).toBe(404);
+    });
+
+    it('holds one account per organization and provider, apart from its members’ own', async () => {
+      await req(
+        `/user_management/users/${userId}/connected_accounts/google-calendar?organization_id=${organizationId}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ access_token: 'ya29.personal' }),
+        },
+      );
+      expect((await req(path)).status).toBe(404);
+
+      expect((await send('POST', { user_id: userId, access_token: 'ya29.org' })).status).toBe(201);
+      const again = await send('POST', { user_id: userId, access_token: 'ya29.org2' });
+      expect(again.status).toBe(409);
+      expect((await json(again)).code).toBe('conflict');
+    });
+
+    it('creates one account from overlapping imports', async () => {
+      const statuses = await Promise.all(
+        ['ya29.a', 'ya29.b'].map(
+          async (token) => (await send('POST', { user_id: userId, access_token: token })).status,
+        ),
+      );
+      expect(statuses.sort()).toEqual([201, 409]);
+      expect(getWorkOSStore(store).connectedAccounts.all()).toHaveLength(1);
+    });
+
+    it('requires the acting user to be an active member', async () => {
+      const outsider = await createUser('outsider@acme.test');
+      const missing = await send('POST', { access_token: 'ya29.org' });
+      expect(missing.status).toBe(422);
+      expect((await json(missing)).errors).toEqual([{ field: 'user_id', code: 'required' }]);
+      expect((await send('POST', { user_id: 'user_missing', access_token: 'ya29.org' })).status).toBe(404);
+      const refused = await send('POST', { user_id: outsider.id, access_token: 'ya29.org' });
+      expect(refused.status).toBe(403);
+      expect(await json(refused)).toEqual({
+        message: `User '${outsider.id}' is not an active member of organization '${organizationId}'.`,
+      });
+
+      await send('POST', { user_id: userId, access_token: 'ya29.org' });
+      expect((await send('PUT', { user_id: outsider.id, scopes: [] })).status).toBe(403);
+    });
+
+    it('stops naming the establishing member once they are deleted', async () => {
+      await send('POST', { user_id: userId, access_token: 'ya29.org' });
+      expect((await req(`/user_management/users/${userId}`, { method: 'DELETE' })).status).toBe(204);
+      expect(await json(await req(path))).toMatchObject({ user_id: null, established_by_user_id: null });
+    });
+
+    it('404s an unknown organization before the account', async () => {
+      const res = await req('/organizations/org_missing/connected_accounts/google-calendar');
+      expect(res.status).toBe(404);
+      expect((await json(res)).message).toBe("Organization not found: 'org_missing'.");
+    });
+
+    it('disconnects the organization’s accounts and its members’ scoped to it when it is deleted', async () => {
+      await send('POST', { user_id: userId, access_token: 'ya29.org' });
+      await req(
+        `/user_management/users/${userId}/connected_accounts/google-calendar?organization_id=${organizationId}`,
+        { method: 'POST', body: JSON.stringify({ access_token: 'ya29.personal' }) },
+      );
+      expect(getWorkOSStore(store).connectedAccounts.all()).toHaveLength(2);
+
+      expect((await req(`/organizations/${organizationId}`, { method: 'DELETE' })).status).toBe(204);
+      expect(getWorkOSStore(store).connectedAccounts.all()).toHaveLength(0);
+      expect(eventsNamed('pipes.connected_account.disconnected')).toHaveLength(2);
     });
   });
 });

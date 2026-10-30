@@ -94,7 +94,7 @@ import {
   findUserByEmail,
   provisionInvitee,
   formatConnectedAccountEvent,
-  dataIntegrationIdFor,
+  insertConnectedAccount,
   linkOAuthIdentity,
   liveMembershipFor,
   newTotp,
@@ -108,6 +108,7 @@ import type {
   PipeProvider,
   PipeConnectionStatus,
   ConnectedAccountState,
+  ConnectionOwner,
   WorkOSApiKeyOwner,
   WorkOSJwtTemplate,
   WorkOSSessionSettings,
@@ -269,9 +270,15 @@ export interface WorkOSSeedPipeConnection {
 export interface WorkOSSeedConnectedAccount {
   /**
    * Email of a user defined in `users` — the same join key memberships use, because seeded
-   * user ids are generated at startup unless pinned.
+   * user ids are generated at startup unless pinned. Required for a user-owned account; for an
+   * organization-owned one it is optional and names the member who established it.
    */
-  email: string;
+  email?: string;
+  /**
+   * `organization` seeds the organization's own account, which `organization` must name and
+   * `/organizations/{id}/connected_accounts/{slug}` serves. Defaults to `user`.
+   */
+  owner?: ConnectionOwner;
   /** Provider slug the account is addressed by in the API path (`github`, `slack`, `notion`, …). */
   provider: string;
   /**
@@ -934,23 +941,18 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
     for (const ca of config.connectedAccounts) {
       // Both references were cross-checked by validateSeedConfig against this same config,
       // so they resolve; the guards only keep a future validator gap from crashing startup.
-      const user = findUserByEmail(ws, ca.email);
-      if (!user) continue;
+      const organizationOwned = ca.owner === 'organization';
+      const user = ca.email ? findUserByEmail(ws, ca.email) : undefined;
+      if (!user && !organizationOwned) continue;
       const org = ca.organization ? ws.organizations.findOneBy('name', ca.organization) : undefined;
       if (ca.organization && !org) continue;
-      ws.connectedAccounts.insert({
-        object: 'connected_account',
-        user_id: user.id,
+      insertConnectedAccount(ws, {
+        user_id: organizationOwned ? null : user!.id,
         organization_id: org?.id ?? null,
         provider: ca.provider,
-        data_integration_id: dataIntegrationIdFor(ws, ca.provider),
         scopes: ca.scopes ?? [],
-        auth_method: 'oauth',
-        api_key_last_4: null,
         state: ca.state ?? 'connected',
-        access_token: null,
-        refresh_token: null,
-        token_expires_at: null,
+        established_by_user_id: organizationOwned ? (user?.id ?? null) : null,
       });
     }
   }
