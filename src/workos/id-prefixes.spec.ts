@@ -37,6 +37,7 @@ const NO_SPEC_ID_EXAMPLE: Record<string, string> = {
   audit_log_event: 'Ingestion (AuditLogEventDto) is write-only; no id-bearing event object is documented.',
   authorization_code: 'OAuth codes are opaque strings in the spec (`code`), not a resource; the emulator stores one.',
   data_integration_auth: 'Emulator-internal: the OAuth handoff behind a data integration install.',
+  data_integration_authorization: 'Emulator-internal: the pending connect behind an authorize URL.',
   device_authorization: 'The device grant is addressed by `device_code`/`user_code`; the record is emulator-internal.',
   external_auth_session:
     'Not an object in the spec, but its `external_auth_id` example is `ext_auth_…`, which this matches.',

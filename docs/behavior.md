@@ -332,9 +332,44 @@ real requests the way the default key does.
 
 ## Pipes / Connected Apps
 
-User-owned connected-account CRUD and access-token retrieval are supported; a refresh mints a local
-`di_mock_` token rather than contacting the provider. Organization-owned connected accounts are not
-implemented. The older `/pipes/connections` routes remain emulator-specific.
+User- and organization-owned connected-account CRUD, authorize URLs and access-token retrieval are
+supported; a refresh mints a local `di_mock_` token rather than contacting the provider. The older
+`/pipes/connections` routes remain emulator-specific.
+
+An organization holds one account per provider, with `user_id: null`. `POST` and `PUT` on
+`/organizations/{id}/connected_accounts/{slug}` take the acting member in `user_id`.
+`established_by_user_id` names the member who connected the account through `/authorize`, imported
+it, or was seeded as establishing it, and becomes `null` when that member is deleted. Production
+invalidates the account when that member's membership ends (`needs_reauthorization`,
+`state_reason: establishing_member_membership_ended`, credentials cleared); the emulator leaves it
+as it is. Deleting an organization deletes its accounts and its members' accounts scoped to it, each
+emitting `pipes.connected_account.disconnected`.
+
+`POST /data-integrations/{slug}/credentials` vends the token of the account `connection_owner`
+names: `user` by default, or `organization`, which needs `organization_id`. Without a usable account
+the answer is `{ "active": false }` with `error` `not_installed` or `needs_reauthorization`.
+`/token` serves user-owned accounts only: it ignores `connection_owner`, does not check membership,
+and answers a missing or invalid field with `422`.
+
+The `url` that `POST /data-integrations/{slug}/authorize` returns serves no provider consent screen:
+visiting it connects the account at once, or under `--interactive` after an **Allow** page, then
+redirects to `return_to`, or shows a confirmation page when `return_to` is omitted. The link works
+once and expires after 10 minutes, and deleting its user or organization deletes it. A reconnect
+keeps the account's id and drops its stored tokens.
+
+| Request                                                                                                   | Outcome                         |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Organization `POST` or `PUT` without `user_id`                                                            | `422`                           |
+| Organization `POST` or `PUT` whose `user_id` is not an active member                                      | `403`                           |
+| Organization `POST` when the organization already has an account for the provider                         | `409 conflict`                  |
+| `/credentials` or `/authorize` with a missing or invalid field                                            | `400`, `"error": "Bad Request"` |
+| `/credentials` or `/authorize` naming an organization the user is not an active member of                 | `403`                           |
+| `/credentials` resolving a personal account scoped to an organization the user is not an active member of | `403`                           |
+| Visiting the `url` after the user's membership of the organization ended                                  | `403` page, nothing connected   |
+
+The multiple-connections contract (`connection_intent`, `connected_account_id`,
+`supports_multiple_connections`) is not implemented, and `account_display_name`,
+`account_identifier`, `connection_role` and `config` are not stored.
 
 ## Applications
 

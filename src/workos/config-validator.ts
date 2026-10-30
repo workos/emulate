@@ -725,8 +725,9 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           ? config.organizations.map((o) => o.name).filter((n): n is string => typeof n === 'string')
           : [],
       );
-      // (user, provider, organization) is the key requests address; a duplicate would seed
-      // the pair POST answers 409 for, and every lookup would only ever resolve the first.
+      // (owner, provider, organization) is the key requests address, the owner being the user or,
+      // for an organization-owned account, the organization itself. A duplicate would seed the
+      // pair POST answers 409 for, and every lookup would only ever resolve the first.
       const seenAccounts = new Set<string>();
       config.connectedAccounts.forEach((account, index) => {
         // A non-object entry (e.g. `connectedAccounts: [null]` from a YAML typo) would throw
@@ -739,8 +740,25 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           });
           return;
         }
+        const organizationOwned = account.owner === 'organization';
+        if (account.owner !== undefined && account.owner !== 'user' && !organizationOwned) {
+          errors.push({
+            path: `connectedAccounts[${index}].owner`,
+            message: 'owner must be "user" or "organization" if provided',
+            value: account.owner,
+          });
+        }
+        if (organizationOwned && account.organization === undefined) {
+          errors.push({
+            path: `connectedAccounts[${index}].organization`,
+            message: 'organization is required when owner is "organization"',
+            value: account.organization,
+          });
+        }
         const email = seedEmail(account.email);
-        if (!email.ok) {
+        // An organization's account need not name who established it, so its email is optional.
+        const emailRequired = !organizationOwned || account.email !== undefined;
+        if (emailRequired && !email.ok) {
           errors.push({
             path: `connectedAccounts[${index}].email`,
             message:
@@ -749,7 +767,7 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
                 : 'email is required and must be the email of a user defined in users',
             value: account.email,
           });
-        } else if (!userEmails.has(email.email.toLowerCase())) {
+        } else if (email.ok && !userEmails.has(email.email.toLowerCase())) {
           errors.push({
             path: `connectedAccounts[${index}].email`,
             message: 'email must match a user defined in users',
@@ -791,16 +809,20 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: account.state,
           });
         }
-        if (email.ok && typeof account.provider === 'string' && account.provider) {
+        // An organization owns one account per provider, whoever established it.
+        const owner = organizationOwned ? 'organization' : email.ok ? `user ${email.email.toLowerCase()}` : undefined;
+        if (owner && typeof account.provider === 'string' && account.provider) {
           const key = [
-            email.email.toLowerCase(),
+            owner,
             account.provider,
             typeof account.organization === 'string' ? account.organization : '',
           ].join('\u0000');
           if (seenAccounts.has(key)) {
             errors.push({
               path: `connectedAccounts[${index}]`,
-              message: 'duplicate connected account for this user, provider, and organization',
+              message: organizationOwned
+                ? 'duplicate organization-owned connected account for this provider and organization'
+                : 'duplicate connected account for this user, provider, and organization',
               value: { email: account.email, provider: account.provider, organization: account.organization },
             });
           }

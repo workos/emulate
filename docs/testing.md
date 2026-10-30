@@ -419,10 +419,11 @@ const emulator = await createEmulator({
 
 ### What changes
 
-| Endpoint                         | Default (auto)                                   | Interactive                                                                                             |
-| -------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `GET /sso/authorize`             | Immediately redirects to callback with auth code | Serves an HTML login page with an email field                                                           |
-| `GET /user_management/authorize` | Immediately redirects to callback with auth code | Serves an HTML login page with an email field, plus a collapsed list of the accounts the emulator holds |
+| Endpoint                                                  | Default (auto)                                    | Interactive                                                                                             |
+| --------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET /sso/authorize`                                      | Immediately redirects to callback with auth code  | Serves an HTML login page with an email field                                                           |
+| `GET /user_management/authorize`                          | Immediately redirects to callback with auth code  | Serves an HTML login page with an email field, plus a collapsed list of the accounts the emulator holds |
+| The `url` from `POST /data-integrations/{slug}/authorize` | Connects the account and redirects to `return_to` | Serves an **Allow** page first                                                                          |
 
 When interactive mode is on:
 
