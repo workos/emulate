@@ -146,6 +146,9 @@ describe('Data Integrations routes', () => {
       const org = await workos.organizations.createOrganization({ name: 'Acme' });
       const otherOrg = await workos.organizations.createOrganization({ name: 'Other' });
       const otherUser = await workos.userManagement.createUser({ email: 'other@acme.test' });
+      for (const organizationId of [org.id, otherOrg.id]) {
+        await workos.userManagement.createOrganizationMembership({ userId, organizationId });
+      }
       await importAccount({ access_token: 'org_token' }, org.id);
 
       for (const organizationId of [undefined, null, org.id]) {
@@ -272,8 +275,8 @@ describe('Data Integrations routes', () => {
 
     it('requires user_id when no legacy code is given', async () => {
       const res = await token({});
-      expect(res.status).toBe(422);
-      expect(await json(res)).toMatchObject({ errors: [{ field: 'user_id', code: 'required' }] });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toEqual({ message: 'user_id must be a string', error: 'Bad Request' });
     });
 
     it('rejects nonexistent users and organizations', async () => {
@@ -282,11 +285,11 @@ describe('Data Integrations routes', () => {
     });
 
     it.each(['', 123, null])('rejects invalid user IDs: %j', async (userId) => {
-      expect((await token({ user_id: userId })).status).toBe(422);
+      expect((await token({ user_id: userId })).status).toBe(400);
     });
 
     it.each(['', 123])('rejects invalid organization IDs: %j', async (organizationId) => {
-      expect((await token({ user_id: userId, organization_id: organizationId })).status).toBe(422);
+      expect((await token({ user_id: userId, organization_id: organizationId })).status).toBe(400);
     });
 
     it('requires an API key', async () => {
@@ -324,6 +327,9 @@ describe('Data Integrations routes', () => {
     });
     const credentials = (body: Record<string, unknown>) =>
       req('/data-integrations/google-calendar/credentials', { method: 'POST', body: JSON.stringify(body) });
+    // `/token` takes the same body and resolves the same account; only its envelope differs.
+    const token = (body: Record<string, unknown>) =>
+      req('/data-integrations/google-calendar/token', { method: 'POST', body: JSON.stringify(body) });
     const organizationAccount = () => `/organizations/${organizationId}/connected_accounts/google-calendar`;
 
     it('vends the organization’s token, then reports reauthorization and disconnection', async () => {
@@ -372,17 +378,37 @@ describe('Data Integrations routes', () => {
       expect(await json(await credentials(organizationOwner()))).toEqual({ active: false, error: 'not_installed' });
     });
 
+    it('vends the organization’s token through /token, in its own envelope', async () => {
+      await req(organizationAccount(), {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, access_token: 'ya29.org', scopes: ['calendar'] }),
+      });
+      expect(await json(await token(organizationOwner()))).toEqual({
+        active: true,
+        access_token: {
+          object: 'access_token',
+          access_token: 'ya29.org',
+          expires_at: null,
+          scopes: ['calendar'],
+          missing_scopes: [],
+        },
+      });
+      expect(await json(await token({ user_id: userId }))).toEqual({ active: false, error: 'not_installed' });
+    });
+
     it('requires an active membership of the organization named, for either owner', async () => {
       const outsider = await json(
         await req('/user_management/users', { method: 'POST', body: JSON.stringify({ email: 'outsider@acme.test' }) }),
       );
-      const refused = await credentials({ ...organizationOwner(), user_id: outsider.id });
-      expect(refused.status).toBe(403);
-      expect(await json(refused)).toEqual({
-        message: `User '${outsider.id}' is not an active member of organization '${organizationId}'.`,
-      });
-      // An organization-scoped personal connection is held to the same rule.
-      expect((await credentials({ user_id: outsider.id, organization_id: organizationId })).status).toBe(403);
+      for (const vend of [credentials, token]) {
+        const refused = await vend({ ...organizationOwner(), user_id: outsider.id });
+        expect(refused.status).toBe(403);
+        expect(await json(refused)).toEqual({
+          message: `User '${outsider.id}' is not an active member of organization '${organizationId}'.`,
+        });
+        // An organization-scoped personal connection is held to the same rule.
+        expect((await vend({ user_id: outsider.id, organization_id: organizationId })).status).toBe(403);
+      }
     });
 
     it('requires the membership of a scoped personal account the request does not name', async () => {
@@ -395,9 +421,12 @@ describe('Data Integrations routes', () => {
       );
       expect((await json(await credentials({ user_id: userId }))).active).toBe(true);
 
+      expect((await json(await token({ user_id: userId }))).active).toBe(true);
+
       const memberships = await json(await req(`/user_management/organization_memberships?user_id=${userId}`));
       await req(`/user_management/organization_memberships/${memberships.data[0].id}/deactivate`, { method: 'PUT' });
       expect((await credentials({ user_id: userId })).status).toBe(403);
+      expect((await token({ user_id: userId })).status).toBe(403);
     });
 
     it.each([
@@ -412,9 +441,11 @@ describe('Data Integrations routes', () => {
       ],
       [{ user_id: 'user_x', organization_id: 7 }, 'organization_id must be a string'],
     ])('rejects a malformed owner: %j', async (body, message) => {
-      const res = await credentials(body);
-      expect(res.status).toBe(400);
-      expect(await json(res)).toEqual({ message, error: 'Bad Request' });
+      for (const vend of [credentials, token]) {
+        const res = await vend(body);
+        expect(res.status).toBe(400);
+        expect(await json(res)).toEqual({ message, error: 'Bad Request' });
+      }
     });
 
     it('404s an unknown user or organization', async () => {

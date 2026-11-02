@@ -6,7 +6,6 @@ import {
   badRequest,
   WorkOSApiError,
   notFound,
-  validationError,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
@@ -24,7 +23,12 @@ import {
   vendAccessToken,
 } from '../helpers.js';
 import { renderConnectPage, renderDeviceVerifyPage } from '../login-page.js';
-import type { ConnectionOwner, WorkOSDataIntegrationAuthorization, WorkOSUser } from '../entities.js';
+import type {
+  ConnectionOwner,
+  WorkOSConnectedAccount,
+  WorkOSDataIntegrationAuthorization,
+  WorkOSUser,
+} from '../entities.js';
 
 const CONNECTION_OWNERS: ConnectionOwner[] = ['user', 'organization'];
 
@@ -40,10 +44,10 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
   const ws = getWorkOSStore(store);
 
   /**
-   * The owner `/authorize` and `/credentials` name in their body. Naming an organization, for
-   * either owner, requires the user to be an active member of it: the spec's 403 covers both an
+   * The owner `/authorize`, `/credentials` and `/token` name in their body. Naming an organization,
+   * for either owner, requires the user to be an active member of it: the spec's 403 covers both an
    * organization connection and an organization-scoped personal one. A malformed body is the
-   * spec's 400 for these routes, not the 422 `/token` answers.
+   * spec's 400 for these routes.
    */
   function resolveOwner(body: Record<string, unknown>): Owner {
     if (typeof body.user_id !== 'string' || !body.user_id) throw badRequest('user_id must be a string');
@@ -66,6 +70,23 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
       assertActiveMember(ws, organizationId, user.id);
     }
     return { connectionOwner, user, organizationId };
+  }
+
+  /**
+   * The account the owner a body names holds for the provider, or `undefined` when none is
+   * installed. `/token` and `/credentials` resolve an account the same way, as the spec gives
+   * both the same body and the same membership 403.
+   */
+  function resolveAccount(slug: string, body: Record<string, unknown>): WorkOSConnectedAccount | undefined {
+    const owner = resolveOwner(body);
+    const account =
+      owner.connectionOwner === 'organization'
+        ? findOrganizationConnectedAccount(ws, owner.organizationId!, slug)
+        : findConnectedAccount(ws, owner.user.id, slug, owner.organizationId);
+    // A personal account scoped to an organization needs the membership even when the request
+    // leaves `organization_id` out and the account is the only one for the provider.
+    if (account?.organization_id) assertActiveMember(ws, account.organization_id, owner.user.id);
+    return account;
   }
 
   // Authorize (public endpoint — no auth required)
@@ -247,17 +268,8 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
 
   // The spec's credential vend, for user- and organization-owned accounts alike.
   app.post('/data-integrations/:slug/credentials', async (c) => {
-    const slug = c.req.param('slug');
-    const owner = resolveOwner(await parseJsonBody(c));
-
-    const account =
-      owner.connectionOwner === 'organization'
-        ? findOrganizationConnectedAccount(ws, owner.organizationId!, slug)
-        : findConnectedAccount(ws, owner.user.id, slug, owner.organizationId);
+    const account = resolveAccount(c.req.param('slug'), await parseJsonBody(c));
     if (!account) return c.json({ active: false, error: 'not_installed' });
-    // A personal account scoped to an organization needs the membership even when the request
-    // leaves `organization_id` out and the account is the only one for the provider.
-    if (account.organization_id) assertActiveMember(ws, account.organization_id, owner.user.id);
 
     const vended = vendAccessToken(ws, account);
     if (!vended) return c.json({ active: false, error: 'needs_reauthorization' });
@@ -281,22 +293,7 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
     const body = await parseJsonBody(c);
 
     if (body.code === undefined) {
-      if (body.user_id === undefined) {
-        throw validationError('user_id is required', [{ field: 'user_id', code: 'required' }]);
-      }
-      if (typeof body.user_id !== 'string' || !body.user_id) {
-        throw validationError('user_id must be a non-empty string', [{ field: 'user_id', code: 'invalid' }]);
-      }
-      const organizationId = body.organization_id ?? null;
-      if (organizationId !== null && (typeof organizationId !== 'string' || !organizationId)) {
-        throw validationError('organization_id must be a non-empty string', [
-          { field: 'organization_id', code: 'invalid' },
-        ]);
-      }
-      if (!ws.users.get(body.user_id)) throw notFound('User', body.user_id);
-      if (organizationId && !ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
-
-      const account = findConnectedAccount(ws, body.user_id, slug, organizationId);
+      const account = resolveAccount(slug, body);
       if (!account) return c.json({ active: false, error: 'not_installed' });
 
       const vended = vendAccessToken(ws, account);
