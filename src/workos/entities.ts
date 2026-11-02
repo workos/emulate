@@ -452,6 +452,12 @@ export interface WorkOSConnectedAccount extends Entity {
   auth_method: 'oauth';
   api_key_last_4: null;
   state: ConnectedAccountState;
+  /** Always `compatibility`: without the multiple-connections contract, each owner holds one account per provider. */
+  connection_role: 'compatibility';
+  /** Developer-attested correlation metadata, never a selector. */
+  account_identifier: string | null;
+  /** A mutable, non-unique label. */
+  account_display_name: string | null;
   /**
    * The member who established the account: who connected it through an authorize URL, or who
    * imported or was seeded as establishing an organization's account. `null` for a user's own
@@ -769,6 +775,8 @@ export interface WorkOSDataIntegrationAuthorization extends Entity {
   user_id: string;
   organization_id: string | null;
   return_to: string | null;
+  /** The label connecting applies; omitted when the request left it out, so an existing label is kept. */
+  account_display_name?: string | null;
   expires_at: string;
 }
 

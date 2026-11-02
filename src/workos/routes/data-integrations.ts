@@ -107,6 +107,10 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
     }
     const returnTo = (body.return_to as string | undefined) ?? null;
     if (returnTo) assertAllowedRedirectUri(returnTo, store);
+    const label = body.account_display_name as string | null | undefined;
+    if (label !== undefined && ((label !== null && typeof label !== 'string') || (label?.length ?? 0) > 255)) {
+      throw badRequest('account_display_name must be a string of at most 255 characters, or null');
+    }
 
     // An unvisited link is only dropped once it is opened, so sweep the user's expired ones here.
     for (const stale of ws.dataIntegrationAuthorizations.findBy('user_id', owner.user.id)) {
@@ -119,6 +123,7 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
       user_id: owner.user.id,
       organization_id: owner.organizationId,
       return_to: returnTo,
+      ...(label !== undefined ? { account_display_name: label } : {}),
       expires_at: expiresIn(10),
     });
     return c.json({ url: `${ctx.baseUrl}/data-integrations/${authorization.token}/authorize-redirect` });
@@ -187,6 +192,10 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
       access_token: null,
       refresh_token: null,
       token_expires_at: null,
+      // The spec's "omit to preserve an existing label; null clears it".
+      ...(authorization.account_display_name !== undefined
+        ? { account_display_name: authorization.account_display_name }
+        : {}),
     };
     if (existing) {
       ws.connectedAccounts.update(existing.id, grant);

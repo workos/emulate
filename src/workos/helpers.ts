@@ -1173,13 +1173,21 @@ export function insertConnectedAccount(
     WorkOSConnectedAccount,
     'user_id' | 'organization_id' | 'provider' | 'state' | 'established_by_user_id'
   > &
-    Partial<Pick<WorkOSConnectedAccount, 'scopes' | 'access_token' | 'refresh_token' | 'token_expires_at'>>,
+    Partial<
+      Pick<
+        WorkOSConnectedAccount,
+        'scopes' | 'account_identifier' | 'account_display_name' | 'access_token' | 'refresh_token' | 'token_expires_at'
+      >
+    >,
 ): WorkOSConnectedAccount {
   return ws.connectedAccounts.insert({
     object: 'connected_account',
     data_integration_id: dataIntegrationIdFor(ws, account.provider),
     auth_method: 'oauth',
     api_key_last_4: null,
+    connection_role: 'compatibility',
+    account_identifier: null,
+    account_display_name: null,
     scopes: [],
     access_token: null,
     refresh_token: null,

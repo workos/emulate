@@ -368,8 +368,10 @@ keeps the account's id and drops its stored tokens.
 | Visiting the `url` after the user's membership of the organization ended                                  | `403` page, nothing connected   |
 
 The multiple-connections contract (`connection_intent`, `connected_account_id`,
-`supports_multiple_connections`) is not implemented, and `account_display_name`,
-`account_identifier`, `connection_role` and `config` are not stored.
+`supports_multiple_connections`) is not implemented, so every account's `connection_role` is
+`compatibility`. `account_display_name` and `account_identifier` are stored as imported or updated,
+and `/authorize` applies its `account_display_name` on connect (omitted keeps the label, `null`
+clears it). `config` is not stored.
 
 ## Applications
 

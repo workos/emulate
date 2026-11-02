@@ -28,9 +28,13 @@ interface ConnectedAccountDto {
   expires_at?: string;
   scopes?: string[];
   state?: ConnectedAccountState;
+  /** `null` clears either; omitted leaves it alone. */
+  account_display_name?: string | null;
+  account_identifier?: string | null;
 }
 
 const DTO_STATES: ConnectedAccountState[] = ['connected', 'needs_reauthorization'];
+const DISPLAY_NAME_MAX_LENGTH = 255;
 
 // All four verbs live on each spec path; naming them once keeps the param typing exact.
 const ACCOUNT_PATH = '/user_management/users/:user_id/connected_accounts/:slug';
@@ -64,6 +68,18 @@ function parseDto(body: Record<string, unknown>): ConnectedAccountDto {
     }
     dto.state = body.state as ConnectedAccountState;
   }
+  for (const field of ['account_display_name', 'account_identifier'] as const) {
+    const value = body[field];
+    if (value === undefined) continue;
+    const tooLong =
+      field === 'account_display_name' && typeof value === 'string' && value.length > DISPLAY_NAME_MAX_LENGTH;
+    if ((value !== null && typeof value !== 'string') || tooLong) {
+      throw validationError(`${field} must be a string of at most ${DISPLAY_NAME_MAX_LENGTH} characters, or null`, [
+        { field, code: 'invalid' },
+      ]);
+    }
+    dto[field] = value;
+  }
   return dto;
 }
 
@@ -86,10 +102,21 @@ function deriveState(dto: ConnectedAccountDto): ConnectedAccountState {
 /** POST on either path: the account fields an import takes from its DTO. */
 function importedFields(
   dto: ConnectedAccountDto,
-): Pick<WorkOSConnectedAccount, 'scopes' | 'state' | 'access_token' | 'refresh_token' | 'token_expires_at'> {
+): Pick<
+  WorkOSConnectedAccount,
+  | 'scopes'
+  | 'state'
+  | 'account_display_name'
+  | 'account_identifier'
+  | 'access_token'
+  | 'refresh_token'
+  | 'token_expires_at'
+> {
   return {
     scopes: dto.scopes ?? [],
     state: deriveState(dto),
+    account_display_name: dto.account_display_name ?? null,
+    account_identifier: dto.account_identifier ?? null,
     access_token: dto.access_token ?? null,
     refresh_token: dto.refresh_token ?? null,
     token_expires_at: dto.expires_at ?? null,
@@ -120,6 +147,8 @@ function updateAccount(
 
   return ws.connectedAccounts.update(account.id, {
     ...(dto.scopes !== undefined ? { scopes: dto.scopes } : {}),
+    ...(dto.account_display_name !== undefined ? { account_display_name: dto.account_display_name } : {}),
+    ...(dto.account_identifier !== undefined ? { account_identifier: dto.account_identifier } : {}),
     ...(dto.access_token !== undefined ? { access_token: dto.access_token } : {}),
     ...(dto.refresh_token !== undefined ? { refresh_token: dto.refresh_token } : {}),
     token_expires_at: tokenExpiresAt,

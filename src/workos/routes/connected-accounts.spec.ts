@@ -18,8 +18,11 @@ const headers = { Authorization: 'Bearer sk_test_ca', 'Content-Type': 'applicati
 
 // The spec's ConnectedAccount, exactly: no envelope, no provider (the URL names it), no tokens.
 const RESPONSE_KEYS = [
+  'account_display_name',
+  'account_identifier',
   'api_key_last_4',
   'auth_method',
+  'connection_role',
   'created_at',
   'established_by_user_id',
   'id',
@@ -77,6 +80,9 @@ describe('Connected account routes', () => {
       expect(account.auth_method).toBe('oauth');
       expect(account.api_key_last_4).toBeNull();
       expect(account.state).toBe('connected');
+      expect(account.connection_role).toBe('compatibility');
+      expect(account.account_identifier).toBeNull();
+      expect(account.account_display_name).toBeNull();
     });
 
     it('resolves an org-scoped seed with or without its organization_id named', async () => {
@@ -417,6 +423,31 @@ describe('Connected account routes', () => {
       });
       expect((await json(res)).state).toBe('needs_reauthorization');
       expect(eventsNamed('pipes.connected_account.reauthorization_needed')).toHaveLength(1);
+    });
+
+    it('stores the label and identifier on import, and clears either with null', async () => {
+      const user = await createUser('label@test.com');
+      const path = `/user_management/users/${user.id}/connected_accounts/github`;
+      const imported = await json(
+        await req(path, {
+          method: 'POST',
+          body: JSON.stringify({
+            access_token: 'gho_x',
+            account_display_name: 'Acme production',
+            account_identifier: 'workspace_123',
+          }),
+        }),
+      );
+      expect(imported).toMatchObject({ account_display_name: 'Acme production', account_identifier: 'workspace_123' });
+
+      const cleared = await json(
+        await req(path, { method: 'PUT', body: JSON.stringify({ account_display_name: null }) }),
+      );
+      expect(cleared).toMatchObject({ account_display_name: null, account_identifier: 'workspace_123' });
+
+      for (const body of [{ account_display_name: 'x'.repeat(256) }, { account_identifier: 7 }]) {
+        expect((await req(path, { method: 'PUT', body: JSON.stringify(body) })).status).toBe(422);
+      }
     });
 
     it('404s an update for an account that does not exist', async () => {

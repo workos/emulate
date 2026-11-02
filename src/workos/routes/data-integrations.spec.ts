@@ -567,6 +567,24 @@ describe('Data Integrations routes', () => {
       expect(credential.value).toMatch(/^di_mock_google-calendar_/);
     });
 
+    it('applies account_display_name on connect: omitted keeps the label, null clears it', async () => {
+      const accountPath = `/organizations/${organizationId}/connected_accounts/google-calendar`;
+      await visit(await authorizeUrl({ ...organizationOwner(), account_display_name: 'Acme production' }));
+      expect((await json(await req(accountPath))).account_display_name).toBe('Acme production');
+
+      await visit(await authorizeUrl(organizationOwner()));
+      expect((await json(await req(accountPath))).account_display_name).toBe('Acme production');
+
+      await visit(await authorizeUrl({ ...organizationOwner(), account_display_name: null }));
+      expect((await json(await req(accountPath))).account_display_name).toBeNull();
+
+      const res = await post('/data-integrations/google-calendar/authorize', {
+        ...organizationOwner(),
+        account_display_name: 'x'.repeat(256),
+      });
+      expect(res.status).toBe(400);
+    });
+
     it('percent-encodes the return_to it redirects to', async () => {
       const landed = await visit(
         await authorizeUrl({ ...organizationOwner(), return_to: 'http://localhost:3000/done?x=a b' }),
