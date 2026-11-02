@@ -32,6 +32,22 @@ import type {
 
 const CONNECTION_OWNERS: ConnectionOwner[] = ['user', 'organization'];
 
+/**
+ * Every property the spec's `/authorize` body variants list. The body is `additionalProperties:
+ * false`, so production refuses any other before it looks anything up. `config`,
+ * `connection_intent` and `connected_account_id` are accepted here but not implemented.
+ */
+const AUTHORIZE_BODY_PROPERTIES = new Set([
+  'account_display_name',
+  'user_id',
+  'organization_id',
+  'connection_owner',
+  'return_to',
+  'config',
+  'connection_intent',
+  'connected_account_id',
+]);
+
 /** Who a request acts for: `user_id` always, and the organization when it owns or scopes the account. */
 interface Owner {
   connectionOwner: ConnectionOwner;
@@ -121,6 +137,9 @@ export function dataIntegrationRoutes(ctx: RouteContext): void {
   app.post('/data-integrations/:slug/authorize', async (c) => {
     const slug = c.req.param('slug');
     const body = await parseJsonBody(c);
+    // shortcut: names the first unknown property only; production lists every one in a message array.
+    const unknown = Object.keys(body).find((key) => !AUTHORIZE_BODY_PROPERTIES.has(key));
+    if (unknown) throw badRequest(`property ${unknown} should not exist`);
     const owner = resolveOwner(body);
 
     if (body.return_to !== undefined && typeof body.return_to !== 'string') {

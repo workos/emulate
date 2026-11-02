@@ -722,6 +722,8 @@ describe('Data Integrations routes', () => {
         'organization_id is required when connection_owner is organization',
       ],
       [{ user_id: 'user_x', organization_id: 7 }, 'organization_id must be a string'],
+      // The legacy GET takes `redirect_uri`; the spec's POST body is closed, so it is refused before any lookup.
+      [{ user_id: 'user_x', redirect_uri: 'http://localhost:3000/cb' }, 'property redirect_uri should not exist'],
     ])('rejects a malformed owner: %j', async (body, message) => {
       const res = await post('/data-integrations/google-calendar/authorize', body);
       expect(res.status).toBe(400);
