@@ -183,6 +183,11 @@ export function validationError(message: string, errors?: WorkOSApiError['errors
   return new WorkOSApiError(422, message, 'unprocessable_entity', errors);
 }
 
+/** Production's `BadRequestException('<message>')`: 400 `{ message, error: 'Bad Request' }`, no `code`. */
+export function badRequest(message: string): PlainApiError {
+  return new PlainApiError(400, message, 'bad_request', { error: 'Bad Request' });
+}
+
 /** Production's `UnprocessableEntityException('<message>')`: 422 `{ message, error: 'Unprocessable Entity' }`, no `code`. */
 export function unprocessableEntity(message: string): PlainApiError {
   return new PlainApiError(422, message, 'unprocessable_entity', { error: 'Unprocessable Entity' });

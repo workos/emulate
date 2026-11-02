@@ -116,8 +116,15 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
     if (path.startsWith(WIDGETS_PREFIX)) return widgetAuth(c, next);
     for (const prefix of PUBLIC_PATH_PREFIXES) {
       if (path.startsWith(prefix)) {
-        // data-integrations: only /authorize subpath is public
-        if (prefix === '/data-integrations/' && !path.endsWith('/authorize')) break;
+        // data-integrations: only the browser's hops are public, the legacy GET /authorize and the
+        // page an authorize URL serves. POST /authorize is an API call and needs the key.
+        if (
+          prefix === '/data-integrations/' &&
+          !path.endsWith('/authorize-redirect') &&
+          !(c.req.method === 'GET' && path.endsWith('/authorize'))
+        ) {
+          break;
+        }
         return next();
       }
     }
