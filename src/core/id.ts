@@ -92,6 +92,7 @@ export const ID_PREFIXES = {
   connect_application: 'conn_app',
   client_secret: 'secret',
   data_integration_auth: 'di_auth',
+  data_integration_authorization: 'di_authz',
   radar_attempt: 'radar_att',
   webhook_endpoint: 'we',
   agent_blueprint: 'agent_blueprint',

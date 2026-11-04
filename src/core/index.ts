@@ -30,6 +30,7 @@ export {
   requestIdMiddleware,
   notFound,
   validationError,
+  badRequest,
   unprocessableEntity,
   validationFailed,
   unauthorized,

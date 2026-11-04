@@ -305,6 +305,47 @@ export function renderPasswordPage(options: PasswordPageOptions): string {
 </html>`;
 }
 
+export interface ConnectPageOptions {
+  /** The provider slug being connected, e.g. `google-calendar`. */
+  slug: string;
+  /** Who is authorizing, shown read-only. */
+  email: string;
+  /** The organization the account is connected for; omitted for a personal connection. */
+  organizationName?: string;
+  formAction: string;
+}
+
+/**
+ * The page an authorize URL serves under `--interactive`, standing in for the provider's
+ * consent screen. Submitting it connects the account; production would do that once the
+ * provider redirected back, which the emulator cannot reach.
+ */
+export function renderConnectPage(options: ConnectPageOptions): string {
+  const { slug, email, organizationName, formAction } = options;
+  const forWhom = organizationName ? ` for <strong>${esc(organizationName)}</strong>` : '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect ${esc(slug)} — WorkOS Emulate</title>
+  <style>${STEP_PAGE_STYLE}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">WORKOS EMULATE</div>
+    <h1>Connect ${esc(slug)}</h1>
+    <p class="sub">Authorizing as <strong>${esc(email)}</strong>${forWhom}.</p>
+    <form method="POST" action="${esc(formAction)}">
+        <button type="submit">Allow</button>
+    </form>
+  </div>
+</body>
+</html>`;
+}
+
 export interface CodePageOptions {
   title: string;
   /** The sentence that introduces the address, e.g. "Enter the code we sent to". */
