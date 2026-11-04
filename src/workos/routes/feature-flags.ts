@@ -1,8 +1,15 @@
-import { type RouteContext, WorkOSApiError, cursorPaginate, notFound, parseListParams } from '../../core/index.js';
+import {
+  type RouteContext,
+  PlainApiError,
+  WorkOSApiError,
+  cursorPaginate,
+  notFound,
+  parseListParams,
+} from '../../core/index.js';
 import { getWorkOSStore, type WorkOSStore } from '../store.js';
-import type { WorkOSFeatureFlag } from '../entities.js';
+import type { WorkOSFeatureFlag, WorkOSFlagTarget } from '../entities.js';
 import { apiKeyActor, formatFeatureFlag, formatFeatureFlagEvent, formatListResponse } from '../helpers.js';
-import { environmentIdFor, flagRuleState, flagRuleUpdatedContext } from '../flag-context.js';
+import { environmentIdFor, flagRuleIdFor, flagRuleState, flagRuleUpdatedContext } from '../flag-context.js';
 import { EVENTS, STORE_KEYS } from '../constants.js';
 import type { EventBus } from '../event-bus.js';
 
@@ -19,6 +26,23 @@ function resourceKind(resourceId: string): 'user' | 'organization' | null {
 
 function invalidResourceId(): WorkOSApiError {
   return new WorkOSApiError(400, 'Invalid resource id', 'invalid_resource_id_format');
+}
+
+/**
+ * Which generation of the SDK poll payload to serve, resolved the way production's
+ * `resolvePayloadVersion` does: absent is the legacy v1 map, `1` is v1, and any other positive
+ * integer is v2 — a future generation an SDK asks for is served the newest the server knows.
+ * Anything else is production's `FlagPayloadVersionGuard` rejecting the request before the cache
+ * can answer it, a plain Nest `BadRequestException` with no `code`.
+ */
+function resolvePayloadVersion(value: string | undefined): 1 | 2 {
+  if (value === undefined) return 1;
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new PlainApiError(400, 'payload_version must be a positive integer', 'bad_request', {
+      error: 'Bad Request',
+    });
+  }
+  return value === '1' ? 1 : 2;
 }
 
 function isTargeted(ws: WorkOSStore, slug: string, resourceIds: string[]): boolean {
@@ -142,6 +166,7 @@ export function featureFlagRoutes(ctx: RouteContext): void {
       resource_id: resourceId,
       resource_type: kind,
       enabled: true,
+      rule_id: flagRuleIdFor(ws, flag.slug, kind),
     });
     return { flag, changed: true, previous };
   };
@@ -182,15 +207,11 @@ export function featureFlagRoutes(ctx: RouteContext): void {
   });
 
   /**
-   * The Node SDK runtime client's polling endpoint (`createRuntimeClient()`, `isEnabled()`,
-   * `getAllFlags()`). It is not in the OpenAPI spec but is what the SDK actually fetches, so
-   * without it the runtime client never leaves its bootstrap state.
-   *
-   * The body is a bare `{ [slug]: entry }` map, not a list envelope, and carries every flag —
-   * the client evaluates `enabled` and the targets itself, and diffs successive polls to emit
-   * `change` events, so filtering here would hide transitions from it.
+   * v1 of the SDK poll payload, what `@workos-inc/node` up to 11 reads: a bare `{ [slug]: entry }`
+   * map of enable-only targets, not a list envelope, evaluated order-free as
+   * `enabled && (any matching enabled target || default_value)`.
    */
-  app.get('/sdk/feature-flags', (c) => {
+  const pollPayloadV1 = (): Record<string, unknown> => {
     // Null-prototype: a flag slugged `__proto__` would otherwise be swallowed by the assignment
     // rather than appearing in the map the SDK swaps into its store.
     const body: Record<string, unknown> = Object.create(null);
@@ -207,7 +228,66 @@ export function featureFlagRoutes(ctx: RouteContext): void {
         targets: { users: byKind('user'), organizations: byKind('organization') },
       };
     }
-    return c.json(body);
+    return body;
+  };
+
+  /**
+   * v2, what `@workos-inc/node` 12 polls: `{ version: 2, flags }`, each flag carrying ordered
+   * rules evaluated first-match-wins —
+   * `enabled ? (first rule whose conditions all match)?.value ?? default_value : off_value`.
+   *
+   * Production groups a flag's targets into rules and emits one `one_of` condition per rule. The
+   * emulator's targets are enable-only and exact-id, so a flag carries at most one rule per
+   * target type, serving `true`, and a type with no targets has no rule, as production omits
+   * empty ones. Rules come out in creation order — the position production gives a new rule —
+   * though with every rule serving `true` no order could change an answer. `off_value` is
+   * `false`, as production's is today, and a target whose `enabled` is false is left out, the
+   * way production's v1 flattener leaves such targets out.
+   */
+  const pollPayloadV2 = (): Record<string, unknown> => {
+    const flags: Record<string, unknown> = Object.create(null);
+    for (const flag of ws.featureFlags.all()) {
+      const byRule = new Map<string, WorkOSFlagTarget[]>();
+      for (const target of ws.flagTargets.findBy('flag_slug', flag.slug)) {
+        if (!target.enabled) continue;
+        byRule.set(target.rule_id, [...(byRule.get(target.rule_id) ?? []), target]);
+      }
+      const rules = [...byRule]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, targets]) => ({
+          id,
+          kind: 'conditions',
+          value: true,
+          conditions: [
+            {
+              target_type: targets[0].resource_type,
+              operator: 'one_of',
+              values: targets.map((t) => t.resource_id).sort(),
+            },
+          ],
+        }));
+      flags[flag.slug] = {
+        slug: flag.slug,
+        enabled: flag.enabled,
+        default_value: flag.default_value,
+        off_value: false,
+        rules,
+      };
+    }
+    return { version: 2, flags };
+  };
+
+  /**
+   * The Node SDK runtime client's polling endpoint (`createRuntimeClient()`, `isEnabled()`,
+   * `getAllFlags()`). It is not in the OpenAPI spec but is what the SDK actually fetches, so
+   * without it the runtime client never leaves its bootstrap state.
+   *
+   * Either payload generation carries every flag — the client evaluates locally and diffs
+   * successive polls to emit `change` events, so filtering here would hide transitions from it.
+   */
+  app.get('/sdk/feature-flags', (c) => {
+    const version = resolvePayloadVersion(c.req.query('payload_version'));
+    return c.json(version === 1 ? pollPayloadV1() : pollPayloadV2());
   });
 
   // Both evaluation endpoints return a FlagList of whole Flag objects and list only the flags

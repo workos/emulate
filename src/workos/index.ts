@@ -57,7 +57,7 @@ import {
 import { membershipRoleFields } from './membership-roles.js';
 import { validateSeedConfig, formatValidationErrors } from './config-validator.js';
 import { validateJwtTemplateContent } from './jwt-template.js';
-import { environmentIdFor, flagEventContext } from './flag-context.js';
+import { environmentIdFor, flagEventContext, flagRuleIdFor } from './flag-context.js';
 import { DEFAULT_AGENT_SESSION_SETTINGS, revokeAgentSessionsForUserSession } from './agent-sessions.js';
 import {
   generateVerificationToken,
@@ -1140,6 +1140,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
           resource_id: resourceId,
           resource_type: resourceType,
           enabled: true,
+          rule_id: flagRuleIdFor(ws, flag.slug, resourceType),
         });
       };
 
