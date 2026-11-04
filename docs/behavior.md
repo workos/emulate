@@ -368,6 +368,15 @@ that same seed file.
 Emitted as a side effect of every other operation. All are queryable at `GET /events`, including
 those with no registered webhook endpoint; the `events` filter is required, as in production.
 
+Events are a forward-only log, returned oldest first and paged with `after` alone, as production's
+`EventsController.list` serves them. `list_metadata` carries only `after`, as the spec's
+`EventList` does.
+
+| Parameter | Effect                                                                                                                                       |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `order`   | Accepted and ignored. Production hides it from the API reference but still whitelists it, since the generated SDKs send it on every request. |
+| `before`  | Accepted and ignored; there is no backward paging.                                                                                           |
+
 ## AuthKit Configuration
 
 Redirect URIs are accepted but not enforced against authorize requests. MCP resource indicators

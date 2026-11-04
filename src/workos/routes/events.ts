@@ -37,12 +37,20 @@ export function eventRoutes(ctx: RouteContext): void {
 
     const eventTypes = parseEventTypes(url);
 
+    // Events are a forward-only log. Production's `ListEventOptionsDto` drops `order` and
+    // `before` from the pagination options and `EventsController.list` queries ascending
+    // unconditionally, so the list is always oldest first and paged with `after` alone. Both
+    // parameters stay accepted — the generated SDKs send `order=desc` on every request — and
+    // have no effect, and `list_metadata` carries only `after`, as the spec's `EventList` does.
     const result = ws.events.list({
-      ...params,
+      limit: params.limit,
+      after: params.after,
+      order: 'asc',
       filter: (event) => eventTypes.includes(event.event) && eventInScope(event, organizationId, rangeStart, rangeEnd),
     });
 
-    return c.json(formatListResponse(result, formatEvent));
+    const { object, data, list_metadata } = formatListResponse(result, formatEvent);
+    return c.json({ object, data, list_metadata: { after: list_metadata.after } });
   });
 }
 
