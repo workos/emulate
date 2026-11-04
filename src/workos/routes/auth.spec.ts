@@ -5,6 +5,7 @@ import { workosPlugin, seedFromConfig } from '../index.js';
 import { getWorkOSStore } from '../store.js';
 import { STORE_KEYS } from '../constants.js';
 import { hashPassword } from '../helpers.js';
+import { flagRuleIdFor } from '../flag-context.js';
 import type { Store } from '../../core/index.js';
 
 const apiKeys: ApiKeyMap = { sk_test_auth: { environment: 'test' } };
@@ -122,12 +123,14 @@ describe('Auth routes', () => {
   }
 
   function targetFlag(slug: string, resourceId: string, resourceType: 'user' | 'organization' = 'user') {
-    return getWorkOSStore(store).flagTargets.insert({
+    const ws = getWorkOSStore(store);
+    return ws.flagTargets.insert({
       object: 'flag_target',
       flag_slug: slug,
       resource_id: resourceId,
       resource_type: resourceType,
       enabled: true,
+      rule_id: flagRuleIdFor(ws, slug, resourceType),
     });
   }
 

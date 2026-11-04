@@ -854,8 +854,10 @@ await workos.featureFlags.listOrganizationFeatureFlags({ organizationId: org.id 
 - **The SDK runtime client** — `workos.featureFlags.createRuntimeClient()` does not use either
   list endpoint. It polls `GET /sdk/feature-flags`, which is **not in the WorkOS OpenAPI spec**;
   the emulator implements it anyway, because without it the runtime client never leaves its
-  bootstrap state. The response is a bare slug-keyed map of every flag and its targets, and the
-  client evaluates locally, so `isEnabled` answers without a round trip:
+  bootstrap state. The response carries every flag in whichever payload generation the client
+  asks for — `@workos-inc/node` 12 polls the v2 rules payload, earlier versions the v1 map
+  ([behavior.md](behavior.md#feature-flags)) — and the client evaluates locally, so `isEnabled`
+  answers without a round trip:
 
 ```ts
 const flags = workos.featureFlags.createRuntimeClient({ pollingIntervalMs: 5_000 });

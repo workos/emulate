@@ -325,6 +325,21 @@ into the `feature_flags` access-token claim, the per-user and per-organization l
 define. Production has no create-flag endpoint, so flags come from the `featureFlags` seed key
 ([seeding.md](seeding.md#feature-flags)).
 
+The polling endpoint serves both generations of the poll payload, selected by `payload_version`
+the way production's `resolvePayloadVersion` does:
+
+| `payload_version`          | Response                                                                                                       |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| absent or `1`              | v1: a bare `{ [slug]: { slug, enabled, default_value, targets } }` map, what `@workos-inc/node` up to 11 reads |
+| `2`, or any larger integer | v2: `{ version: 2, flags }`, each flag with `off_value` and ordered `rules`, what `@workos-inc/node` 12 polls  |
+| anything else              | `400 { message: "payload_version must be a positive integer", error: "Bad Request" }`                          |
+
+The emulator's targets are enable-only, so a v2 flag carries at most one rule per target type:
+`value: true` with a single `one_of` condition over that type's targets, in the order the rules
+were created. A type with no targets has no rule, and `off_value` is always `false`, as in
+production today. Rule ids are stable across polls, which the runtime client's `change` detection
+depends on.
+
 ## API Keys
 
 A key created through `POST /organizations/{id}/api_keys`, or seeded under `apiKeys`, authenticates

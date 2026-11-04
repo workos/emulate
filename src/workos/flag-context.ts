@@ -1,4 +1,5 @@
-import type { WorkOSFeatureFlag } from './entities.js';
+import { generateId } from '../core/index.js';
+import type { WorkOSFeatureFlag, WorkOSFlagTarget } from './entities.js';
 import type { WorkOSStore } from './store.js';
 
 /** Same `environment_<name>` convention Vault objects are scoped by. */
@@ -15,6 +16,24 @@ export type FlagActor = { id: string; name: string };
  * a direct `getWorkOSStore()` insert fires them too — so there is no caller to name.
  */
 const PLACEHOLDER_ACTOR: FlagActor = { id: 'api_key_emulator', name: 'Emulator API key' };
+
+/**
+ * The rule a new target of this type joins. Production groups a flag's targets into rules and
+ * keys the v2 SDK poll payload by rule, so every target of one type shares an id that holds
+ * steady from one poll to the next — the runtime client diffs rules by id, and a fresh id per
+ * poll would report a change on every tick. The emulator has no rule entity: the first target of
+ * a type mints the id, and later ones reuse it. Once a type's last target is removed its rule is
+ * gone; production keeps the empty rule but omits it from the payload all the same, so the two
+ * agree on the wire.
+ */
+export function flagRuleIdFor(
+  ws: WorkOSStore,
+  flagSlug: string,
+  resourceType: WorkOSFlagTarget['resource_type'],
+): string {
+  const sibling = ws.flagTargets.findBy('flag_slug', flagSlug).find((t) => t.resource_type === resourceType);
+  return sibling?.rule_id ?? generateId('flag_rule');
+}
 
 /**
  * `access_type` summarizes a flag's reach in one word, the way the dashboard shows it:

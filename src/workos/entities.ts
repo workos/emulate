@@ -715,6 +715,13 @@ export interface WorkOSFlagTarget extends Entity {
    * the field is real on the wire, so it is stored rather than hardcoded at serialization.
    */
   enabled: boolean;
+  /**
+   * The rule this target belongs to, as production's targets carry one. The v2 SDK poll payload
+   * groups a flag's targets into rules — one `one_of` condition per target type — and the runtime
+   * client diffs rules by id from one poll to the next, so the id has to be the same on every
+   * poll. The first target of a type mints it and later ones share it; see `flagRuleIdFor`.
+   */
+  rule_id: string;
 }
 
 export interface WorkOSConnectApplication extends Entity {

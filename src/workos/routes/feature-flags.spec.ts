@@ -413,6 +413,137 @@ describe('Feature Flags routes', () => {
       expect(onPerPoll).toEqual(['everyone', 'org-targeted', 'user-targeted']);
       expect(onPerPoll).toEqual(list.data.map((f: any) => f.slug).sort());
     });
+    // `@workos-inc/node` 12 polls `?payload_version=2` and refuses anything but
+    // `{ version: 2, flags }` whose entries carry `off_value` and `rules`: against the v1 map it
+    // logs "poll returned a payload this SDK can't read" and every flag evaluates to the caller's
+    // default, targeted or not.
+    it('serves the v2 payload the Node SDK 12 runtime client polls', async () => {
+      seedFlag('beta', { default_value: false });
+      seedFlag('switched-off', { enabled: false });
+      const user = seedUser();
+      const org = seedOrg();
+      await req(`/feature-flags/beta/targets/${user.id}`, { method: 'POST' });
+      await req(`/feature-flags/beta/targets/${org.id}`, { method: 'POST' });
+
+      const res = await req('/sdk/feature-flags?payload_version=2');
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.version).toBe(2);
+      expect(Object.keys(body.flags).sort()).toEqual(['beta', 'switched-off']);
+      expect(body.flags.beta).toEqual({
+        slug: 'beta',
+        enabled: true,
+        default_value: false,
+        off_value: false,
+        rules: [
+          {
+            id: expect.stringMatching(/^flag_rule_/),
+            kind: 'conditions',
+            value: true,
+            conditions: [{ target_type: 'user', operator: 'one_of', values: [user.id] }],
+          },
+          {
+            id: expect.stringMatching(/^flag_rule_/),
+            kind: 'conditions',
+            value: true,
+            conditions: [{ target_type: 'organization', operator: 'one_of', values: [org.id] }],
+          },
+        ],
+      });
+      // A type with no targets has no rule: production omits empty rules rather than emitting a
+      // condition over nothing, which an SDK has to read as matching nobody.
+      expect(body.flags['switched-off']).toEqual({
+        slug: 'switched-off',
+        enabled: false,
+        default_value: true,
+        off_value: false,
+        rules: [],
+      });
+    });
+
+    // The runtime client diffs rules by id between polls, so an id that changed from one poll to
+    // the next would fire `change` on every tick for a flag nobody touched.
+    it("groups a type's targets under one rule whose id holds steady across polls", async () => {
+      seedFlag('beta', { default_value: false });
+      const alice = seedUser('alice@test.com');
+      const bob = seedUser('bob@test.com');
+      await req(`/feature-flags/beta/targets/${alice.id}`, { method: 'POST' });
+      await req(`/feature-flags/beta/targets/${bob.id}`, { method: 'POST' });
+
+      const poll = async () => (await json(await req('/sdk/feature-flags?payload_version=2'))).flags.beta.rules;
+      const first = await poll();
+      expect(first).toHaveLength(1);
+      expect(first[0].conditions[0].values).toEqual([alice.id, bob.id].sort());
+      expect(await poll()).toEqual(first);
+
+      // Removing one target leaves the rule, and its id, in place for the other.
+      await req(`/feature-flags/beta/targets/${alice.id}`, { method: 'DELETE' });
+      expect(await poll()).toEqual([{ ...first[0], conditions: [{ ...first[0].conditions[0], values: [bob.id] }] }]);
+    });
+
+    // Production's `resolvePayloadVersion`: absent is v1, `1` is v1, any other positive integer is
+    // v2 — the newest generation the server knows — and anything else is a 400 from the version
+    // guard, a plain Nest `BadRequestException` rendered without a `code`.
+    it('selects the payload generation the way production resolves payload_version', async () => {
+      seedFlag('beta');
+
+      for (const query of ['', '?payload_version=1']) {
+        const body = await json(await req(`/sdk/feature-flags${query}`));
+        expect(body.version).toBeUndefined();
+        expect(body.beta.targets).toEqual({ users: [], organizations: [] });
+      }
+      for (const query of ['?payload_version=2', '?payload_version=3', '?payload_version=10']) {
+        const body = await json(await req(`/sdk/feature-flags${query}`));
+        expect(body.version).toBe(2);
+        expect(body.flags.beta.rules).toEqual([]);
+      }
+      for (const value of ['', '0', 'two', '1.5', '-1', '01']) {
+        const res = await req(`/sdk/feature-flags?payload_version=${value}`);
+        expect(res.status).toBe(400);
+        expect(await json(res)).toStrictEqual({
+          message: 'payload_version must be a positive integer',
+          error: 'Bad Request',
+        });
+      }
+    });
+
+    it('v2 agrees with the server-side evaluation the list endpoints use', async () => {
+      seedFlag('user-targeted', { default_value: false });
+      seedFlag('org-targeted', { default_value: false });
+      seedFlag('everyone');
+      seedFlag('off', { enabled: false, default_value: true });
+      seedFlag('nobody', { default_value: false });
+      const user = seedUser();
+      const org = seedOrg();
+      seedMembership(org.id, user.id);
+      await req(`/feature-flags/user-targeted/targets/${user.id}`, { method: 'POST' });
+      await req(`/feature-flags/org-targeted/targets/${org.id}`, { method: 'POST' });
+
+      // A transcription of production's `evaluateFlag`, which the SDK 12 evaluator mirrors:
+      // disabled -> off_value, first rule whose conditions all match -> its value, otherwise
+      // default_value. A rule of an unknown kind or with no conditions never matches.
+      const poll = await json(await req('/sdk/feature-flags?payload_version=2'));
+      const context: Record<string, string> = { user: user.id, organization: org.id };
+      const evaluate = (entry: any) => {
+        if (!entry.enabled) return entry.off_value;
+        for (const rule of entry.rules) {
+          if (rule.kind !== 'conditions' || rule.conditions.length === 0) continue;
+          const matches = rule.conditions.every(
+            (condition: any) =>
+              condition.operator === 'one_of' && condition.values.includes(context[condition.target_type]),
+          );
+          if (matches) return rule.value;
+        }
+        return entry.default_value;
+      };
+      const onPerPoll = Object.keys(poll.flags)
+        .filter((slug) => evaluate(poll.flags[slug]))
+        .sort();
+
+      const list = await json(await req(`/user_management/users/${user.id}/feature-flags`));
+      expect(onPerPoll).toEqual(['everyone', 'org-targeted', 'user-targeted']);
+      expect(onPerPoll).toEqual(list.data.map((f: any) => f.slug).sort());
+    });
   });
 
   describe('evaluation', () => {
