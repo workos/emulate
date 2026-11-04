@@ -86,6 +86,29 @@ describe('Seeding feature flags', () => {
     expect(list.data.map((f) => f.slug).sort()).toEqual(['acme-only', 'alice-only', 'documented', 'everyone']);
   });
 
+  // The seed loader mints rule ids the way the target route does, so a seeded target reaches a
+  // v2 poller under a rule the Node SDK 12 runtime client can read.
+  it('serves seeded targets as v2 rules to the Node SDK 12 runtime client', async () => {
+    emulator = await createEmulator({ port: 0, seed });
+    const alice = await signIn('alice@acme.com');
+    const acme = (await get('/organizations')).data.find((o) => o.name === 'Acme Corp')!;
+
+    const poll = (await get('/sdk/feature-flags?payload_version=2')) as unknown as {
+      version: number;
+      flags: Record<string, { rules: unknown[] }>;
+    };
+    expect(poll.version).toBe(2);
+    const rule = (target_type: string, id: string) => ({
+      id: expect.stringMatching(/^flag_rule_/),
+      kind: 'conditions',
+      value: true,
+      conditions: [{ target_type, operator: 'one_of', values: [id] }],
+    });
+    expect(poll.flags['alice-only'].rules).toEqual([rule('user', alice.user.id)]);
+    expect(poll.flags['acme-only'].rules).toEqual([rule('organization', acme.id as string)]);
+    expect(poll.flags.everyone.rules).toEqual([]);
+  });
+
   it('carries every seeded field onto the flag object', async () => {
     emulator = await createEmulator({ port: 0, seed });
 
