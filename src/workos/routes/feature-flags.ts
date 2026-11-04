@@ -250,7 +250,9 @@ export function featureFlagRoutes(ctx: RouteContext): void {
       const byRule = new Map<string, WorkOSFlagTarget[]>();
       for (const target of ws.flagTargets.findBy('flag_slug', flag.slug)) {
         if (!target.enabled) continue;
-        byRule.set(target.rule_id, [...(byRule.get(target.rule_id) ?? []), target]);
+        const members = byRule.get(target.rule_id);
+        if (members) members.push(target);
+        else byRule.set(target.rule_id, [target]);
       }
       const rules = [...byRule]
         .sort(([a], [b]) => a.localeCompare(b))
