@@ -1,8 +1,9 @@
 import type { MiddlewareHandler } from 'hono';
 
 /**
- * One request and its response, as the emulator handled them. Bodies are parsed when they are
- * JSON and `undefined` otherwise, so an inspector never has to deal with a stream.
+ * One request and its response, as the emulator handled them. A body is parsed when it is JSON,
+ * handed over as the raw string when it claims to be JSON but does not parse, and `undefined`
+ * when it is empty or not JSON at all, so an inspector never has to deal with a stream.
  */
 export interface Exchange {
   method: string;
@@ -54,6 +55,6 @@ async function jsonBody(message: {
   try {
     return JSON.parse(text);
   } catch {
-    return undefined;
+    return text;
   }
 }

@@ -2,7 +2,9 @@
  * Validates one exchange against the OpenAPI spec and reports what does not fit. Three things
  * are checked, each only where the spec has something to say:
  *
- *   response  — a JSON body for a documented status is validated against that status's schema
+ *   response  — a JSON body for a documented status is validated against that status's schema;
+ *               a documented JSON response that arrives empty, unparseable or not JSON at all
+ *               is reported too
  *   status    — a JSON response with a status the operation does not document
  *   query     — on a request the emulator accepted, a query parameter the operation does not list
  *   request   — on a request the emulator accepted, a JSON body validated against the request schema
@@ -63,18 +65,14 @@ ajv.addSchema(spec as unknown as object, SPEC_ID);
  */
 function tagDiscriminators(document: Spec): void {
   type Node = Record<string, unknown>;
-  const pointerGet = (ref: string): Node | undefined => {
-    let node: unknown = document;
-    for (const part of ref.replace(/^#\//, '').split('/')) {
-      if (!node || typeof node !== 'object') return undefined;
-      node = (node as Node)[part.replace(/~1/g, '/').replace(/~0/g, '~')];
-    }
+  const schemaAt = (ref: string): Node | undefined => {
+    const node = pointerGet(document, ref.replace(/^#/, ''));
     return node && typeof node === 'object' ? (node as Node) : undefined;
   };
   const resolve = (node: unknown): Node | undefined =>
     node && typeof node === 'object'
       ? typeof (node as Node).$ref === 'string'
-        ? pointerGet((node as Node).$ref as string)
+        ? schemaAt((node as Node).$ref as string)
         : (node as Node)
       : undefined;
 
@@ -130,16 +128,23 @@ function validatorFor(pointer: string): ValidateFunction {
 }
 
 /**
- * ajv reports every branch of a failed `oneOf`/`anyOf`; only the composite failure is kept, since
- * the branch errors describe schemas the value was never meant to match. Branch errors are the
- * ones at or below the composite's own instance path.
+ * ajv reports every branch of a failed `oneOf`/`anyOf` alongside the composite failure. Only the
+ * composite is kept: the branch errors describe schemas the value was never meant to match. A
+ * branch error is one whose schema path lies inside a branch — an inline branch under the
+ * composite's own path, or the schema a `$ref` branch names — at or below the composite's
+ * instance path. An error from a sibling keyword at the same instance path, such as a `required`
+ * next to the `oneOf`, is independent and stays.
  */
-function describe(errors: ErrorObject[], instance: unknown): string[] {
-  const composites = errors.filter((e) => e.keyword === 'oneOf' || e.keyword === 'anyOf').map((e) => e.instancePath);
-  const underComposite = (e: ErrorObject) =>
-    composites.some((path) => e.instancePath === path || e.instancePath.startsWith(`${path}/`));
+export function describeErrors(errors: ErrorObject[], instance: unknown, document: unknown): string[] {
+  const composites = errors.filter((e) => e.keyword === 'oneOf' || e.keyword === 'anyOf');
+  const isBranchError = (e: ErrorObject) =>
+    composites.some((composite) => {
+      const under =
+        e.instancePath === composite.instancePath || e.instancePath.startsWith(`${composite.instancePath}/`);
+      return under && branchPrefixes(composite.schemaPath, document).some((prefix) => e.schemaPath.startsWith(prefix));
+    });
   return errors
-    .filter((e) => e.keyword === 'oneOf' || e.keyword === 'anyOf' || !underComposite(e))
+    .filter((e) => e.keyword === 'oneOf' || e.keyword === 'anyOf' || !isBranchError(e))
     .map((e) => {
       const what =
         e.keyword === 'additionalProperties'
@@ -155,6 +160,36 @@ function describe(errors: ErrorObject[], instance: unknown): string[] {
                   : `${e.keyword}: ${e.message ?? ''}`;
       return `${collapse(e.instancePath, instance)} ${what}`;
     });
+}
+
+/**
+ * Where a composite's branches live, as schema-path prefixes: `<composite>/<i>/` for an inline
+ * branch, and the referenced schema's own path for a `$ref` branch, which is where ajv reports
+ * that branch's errors. A composite whose schema cannot be found yields no prefixes, so nothing
+ * is dropped on its account.
+ */
+function branchPrefixes(compositeSchemaPath: string, document: unknown): string[] {
+  const hash = compositeSchemaPath.indexOf('#');
+  if (hash === -1) return [];
+  const base = compositeSchemaPath.slice(0, hash);
+  const composite = pointerGet(document, compositeSchemaPath.slice(hash + 1));
+  const branches = Array.isArray(composite) ? composite : [];
+  return branches.map((branch, i) => {
+    const ref = branch && typeof branch === 'object' ? (branch as Record<string, unknown>).$ref : undefined;
+    if (typeof ref !== 'string') return `${compositeSchemaPath}/${i}/`;
+    return ref.startsWith('#') ? `${base}${ref}` : ref;
+  });
+}
+
+function pointerGet(document: unknown, pointer: string): unknown {
+  let node: unknown = document;
+  for (const part of pointer.replace(/^\//, '').split('/')) {
+    if (part === '') continue;
+    if (!node || typeof node !== 'object') return undefined;
+    const key = decodeURIComponent(part).replace(/~1/g, '/').replace(/~0/g, '~');
+    node = (node as Record<string, unknown>)[key];
+  }
+  return node;
 }
 
 /**
@@ -180,7 +215,7 @@ function collapse(instancePath: string, instance: unknown): string {
 
 function validate(pointer: string, value: unknown): string[] {
   const validator = validatorFor(pointer);
-  return validator(value) ? [] : describe(validator.errors ?? [], value);
+  return validator(value) ? [] : describeErrors(validator.errors ?? [], value, spec);
 }
 
 export function inspectExchange(exchange: Exchange): Finding[] {
@@ -190,11 +225,15 @@ export function inspectExchange(exchange: Exchange): Finding[] {
   const report = (kind: Finding['kind'], detail: string) =>
     findings.push({ operation: operation.id, status: exchange.status, kind, detail });
 
-  if (exchange.responseBody !== undefined && !CROSS_CUTTING_STATUSES.has(exchange.status)) {
+  if (!CROSS_CUTTING_STATUSES.has(exchange.status)) {
     const pointer = operation.responses.get(String(exchange.status));
-    // A 5xx is never documented and, from the emulator, is an error hook a test installed.
-    if (pointer === undefined && exchange.status < 500) report('status', 'undocumented');
-    else if (pointer) for (const line of validate(pointer, exchange.responseBody)) report('response', line);
+    if (pointer === undefined) {
+      // A 5xx is never documented and, from the emulator, is an error hook a test installed.
+      if (exchange.responseBody !== undefined && exchange.status < 500) report('status', 'undocumented');
+    } else if (pointer) {
+      if (exchange.responseBody === undefined) report('response', '/ no JSON body');
+      else for (const line of validate(pointer, exchange.responseBody)) report('response', line);
+    }
   }
 
   if (exchange.status >= 200 && exchange.status < 300) {

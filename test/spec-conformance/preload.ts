@@ -11,7 +11,7 @@
  * Loaded through bunfig.toml's `[test] preload`, so the hooks here run around every test in
  * every file.
  */
-import { afterEach, beforeEach } from 'bun:test';
+import { afterAll, afterEach } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { setExchangeInspector } from '../../src/core/index.js';
@@ -56,24 +56,26 @@ if (mode !== 'off') {
     }
   });
 
-  beforeEach(() => {
-    novel = [];
-  });
+  // Findings are checked, and only then cleared, after every test and again after a file: a
+  // request made in `beforeAll` is reported by the first test that follows it, and one made in
+  // `afterAll` by the file's own closing hook, so no exchange goes unchecked for want of a test.
+  afterEach(check);
+  afterAll(check);
+}
 
-  afterEach(() => {
-    if (mode === 'baseline') {
-      // Rewritten whenever the set grows: bun test does not run process exit handlers.
-      if (seen.size !== written) writeBaseline();
-      return;
-    }
-    if (novel.length === 0) return;
-    const lines = [...new Set(novel)].sort();
-    novel = [];
-    throw new Error(
-      `Outside the OpenAPI spec:\n  ${lines.join('\n  ')}\n` +
-        'Fix the emulator, or if production really behaves this way add the line to test/spec-conformance/baseline.txt.',
-    );
-  });
+function check(): void {
+  if (mode === 'baseline') {
+    // Rewritten whenever the set grows: bun test does not run process exit handlers.
+    if (seen.size !== written) writeBaseline();
+    return;
+  }
+  if (novel.length === 0) return;
+  const lines = [...new Set(novel)].sort();
+  novel = [];
+  throw new Error(
+    `Outside the OpenAPI spec:\n  ${lines.join('\n  ')}\n` +
+      'Fix the emulator, or if production really behaves this way add the line to test/spec-conformance/baseline.txt.',
+  );
 }
 
 let written = -1;

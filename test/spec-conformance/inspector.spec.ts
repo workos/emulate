@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { Exchange } from '../../src/core/index.js';
-import { findingKey, inspectExchange } from './inspector.js';
+import { describeErrors, findingKey, inspectExchange } from './inspector.js';
 
 const emptyList = { object: 'list', data: [], list_metadata: { before: null, after: null } };
 
@@ -25,6 +25,15 @@ describe('spec conformance inspector', () => {
   it('reports a field the spec requires but the response lacks', () => {
     const body = { ...emptyList, data: [{ object: 'organization', id: 'org_01HXYZ123456789ABCDEFGHIJ' }] };
     expect(keys(exchange({ responseBody: body }))).toContain('GET /organizations 200 response /data/[] required: name');
+  });
+
+  it('reports a documented JSON response that arrives empty or unparseable', () => {
+    // The core hook hands over `undefined` for an empty or non-JSON body and the raw text for
+    // one that claims to be JSON but does not parse.
+    expect(keys(exchange({ responseBody: undefined }))).toEqual(['GET /organizations 200 response / no JSON body']);
+    expect(keys(exchange({ responseBody: '{"object": "list",' }))).toEqual([
+      'GET /organizations 200 response / type: object',
+    ]);
   });
 
   it('reports a status the operation does not document, but never a 5xx', () => {
@@ -70,6 +79,29 @@ describe('spec conformance inspector', () => {
     expect(keys(exchange({ url, responseBody: body }))).toContain(
       'GET /events 200 response /data/[event=user.created]/data required: email',
     );
+  });
+
+  it('keeps an independent error beside a failed oneOf and drops only the branch errors', () => {
+    const document = {
+      components: { schemas: { Named: { type: 'object', required: ['name'] } } },
+      composite: {
+        oneOf: [{ $ref: '#/components/schemas/Named' }, { type: 'object', required: ['slug'] }],
+      },
+    };
+    const error = (instancePath: string, keyword: string, schemaPath: string, params: object) =>
+      ({ instancePath, keyword, schemaPath, params, message: '' }) as never;
+    const lines = describeErrors(
+      [
+        error('', 'required', 'openapi#/components/schemas/Named/required', { missingProperty: 'name' }),
+        error('', 'required', 'openapi#/composite/oneOf/1/required', { missingProperty: 'slug' }),
+        error('', 'oneOf', 'openapi#/composite/oneOf', {}),
+        error('', 'required', 'openapi#/composite/required', { missingProperty: 'object' }),
+        error('/k', 'type', 'openapi#/composite/properties/k/type', { type: 'number' }),
+      ],
+      { k: 'x' },
+      document,
+    );
+    expect(lines).toEqual(['/ oneOf: ', '/ required: object', '/k type: number']);
   });
 
   it('ignores a route the spec does not define', () => {
