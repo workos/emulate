@@ -30,11 +30,12 @@ async function main() {
   const emulator = await createEmulator({ port: 0 });
   const reference = SELF_CHECK ? await createEmulator({ port: 0 }) : null;
   try {
+    // `||` on the URL: the workflow exports the variable even when it is not configured, as ''.
     const left = {
       name: SELF_CHECK ? 'reference emulator' : 'production',
       url: SELF_CHECK
         ? reference.url
-        : (process.env.WORKOS_PARITY_BASE_URL ?? 'https://api.workos.com').replace(/\/+$/, ''),
+        : (process.env.WORKOS_PARITY_BASE_URL || 'https://api.workos.com').replace(/\/+$/, ''),
       key: SELF_CHECK ? reference.apiKey : process.env.WORKOS_PARITY_API_KEY,
     };
     if (!left.key) {
@@ -120,25 +121,56 @@ async function collect(target) {
     samples['flags.poll.v2'] = (await call('GET', '/sdk/feature-flags?payload_version=2')).status;
     samples['flags.poll.invalid_version'] = await call('GET', '/sdk/feature-flags?payload_version=zero');
   } finally {
-    for (const id of created.users) samples[`user.delete`] = await call('DELETE', `/user_management/users/${id}`);
-    if (created.organization)
-      samples['organization.delete'] = await call('DELETE', `/organizations/${created.organization}`);
+    // Every deletion is attempted on its own, and each is a sample, so one failure neither stops
+    // the cleanup nor hides behind a later success.
+    const remove = async (name, path) => {
+      try {
+        samples[name] = await call('DELETE', path);
+      } catch (error) {
+        samples[name] = { status: 'request failed', body: error instanceof Error ? error.message : String(error) };
+      }
+      if (samples[name].status !== 204) {
+        console.error(`${target.name}: ${name} ${path} was not removed: ${JSON.stringify(samples[name])}`);
+      }
+    };
+    for (const [i, id] of created.users.entries()) await remove(`user.delete.${i}`, `/user_management/users/${id}`);
+    if (created.organization) await remove('organization.delete', `/organizations/${created.organization}`);
   }
   return normalize(samples);
 }
 
-/** The run's own `user.created` events, in the order the API lists them, once all are visible. */
+/**
+ * The run's own `user.created` events, in the order the API lists them, once all are visible.
+ * Pages forward from the run's start, since a busy sandbox can push this run's events off the
+ * first page. Only the run's events are kept, and no cursor: the pages the two sides needed
+ * say nothing about parity.
+ */
 async function eventsFor(call, name, userIds) {
   const deadline = Date.now() + EVENTS_TIMEOUT_MS;
-  let response;
   for (;;) {
-    response = await call('GET', `/events?events=${name}&range_start=${encodeURIComponent(startedAt)}&limit=100`);
-    const ours = (response.body?.data ?? []).filter((event) => userIds.includes(event.data?.id));
+    const { status, data } = await eventsSince(call, name);
+    const ours = data.filter((event) => userIds.includes(event.data?.id));
     if (ours.length >= userIds.length || Date.now() > deadline) {
-      return { status: response.status, body: { ...response.body, data: ours } };
+      return { status, body: { object: 'list', data: ours } };
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
+}
+
+const MAX_EVENT_PAGES = 20;
+
+async function eventsSince(call, name) {
+  const data = [];
+  let after = null;
+  for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+    const cursor = after ? `&after=${encodeURIComponent(after)}` : `&range_start=${encodeURIComponent(startedAt)}`;
+    const response = await call('GET', `/events?events=${name}&limit=100${cursor}`);
+    if (response.status !== 200) return { status: response.status, data };
+    data.push(...(response.body?.data ?? []));
+    after = response.body?.list_metadata?.after ?? null;
+    if (!after) return { status: response.status, data };
+  }
+  return { status: 200, data };
 }
 
 const ID = /^[a-z_]+_[0-9A-HJKMNP-TV-Z]{26}$/;
