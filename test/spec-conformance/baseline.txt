@@ -123,13 +123,7 @@ POST /audit_logs/exports 201 request / required: range_start
 POST /authorization/groups/{group_id}/role_assignments 201 request /resource_id type: string
 POST /authorization/organization_memberships/{organization_membership_id}/check 200 request / oneOf: must match exactly one schema in oneOf
 POST /authorization/organization_memberships/{organization_membership_id}/check 200 request / required: permission_slug
-POST /authorization/organization_memberships/{organization_membership_id}/check 200 request / required: resource_external_id
-POST /authorization/organization_memberships/{organization_membership_id}/check 200 request / required: resource_id
-POST /authorization/organization_memberships/{organization_membership_id}/check 200 request / required: resource_type_slug
 POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 request / oneOf: must match exactly one schema in oneOf
-POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 request / required: resource_external_id
-POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 request / required: resource_id
-POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 request / required: resource_type_slug
 POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 request / required: role_slug
 POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 response /resource/external_id type: string
 POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 response /resource/id type: string
@@ -141,9 +135,6 @@ POST /data-integrations/{slug}/authorize 200 request / oneOf: must match exactly
 POST /data-integrations/{slug}/token 200 request / required: user_id
 POST /data-integrations/{slug}/token 200 request /organization_id type: string
 POST /data-integrations/{slug}/token 200 response / oneOf: must match exactly one schema in oneOf
-POST /data-integrations/{slug}/token 200 response / required: active
-POST /data-integrations/{slug}/token 200 response / required: error
-POST /data-integrations/{slug}/token 200 response /access_token type: object
 POST /data-integrations/{slug}/token 409 response /code const: must be equal to constant
 POST /organization_domains 404 status undocumented
 POST /organization_domains 422 status undocumented

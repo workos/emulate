@@ -164,9 +164,10 @@ export function describeErrors(errors: ErrorObject[], instance: unknown, documen
 
 /**
  * Where a composite's branches live, as schema-path prefixes: `<composite>/<i>/` for an inline
- * branch, and the referenced schema's own path for a `$ref` branch, which is where ajv reports
- * that branch's errors. A composite whose schema cannot be found yields no prefixes, so nothing
- * is dropped on its account.
+ * branch, plus the path of every schema a branch reaches through `$ref`, directly or through
+ * its own `allOf`/`properties`, since ajv reports an error under the schema that owns the
+ * keyword. A composite whose schema cannot be found yields no prefixes, so nothing is dropped
+ * on its account.
  */
 function branchPrefixes(compositeSchemaPath: string, document: unknown): string[] {
   const hash = compositeSchemaPath.indexOf('#');
@@ -174,22 +175,57 @@ function branchPrefixes(compositeSchemaPath: string, document: unknown): string[
   const base = compositeSchemaPath.slice(0, hash);
   const composite = pointerGet(document, compositeSchemaPath.slice(hash + 1));
   const branches = Array.isArray(composite) ? composite : [];
-  return branches.map((branch, i) => {
-    const ref = branch && typeof branch === 'object' ? (branch as Record<string, unknown>).$ref : undefined;
-    if (typeof ref !== 'string') return `${compositeSchemaPath}/${i}/`;
-    return ref.startsWith('#') ? `${base}${ref}` : ref;
+  const prefixes: string[] = [];
+  const seen = new Set<string>();
+  const follow = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) follow(item);
+      return;
+    }
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === '$ref' && typeof value === 'string') {
+        const full = value.startsWith('#') ? `${base}${value}` : value;
+        if (seen.has(full)) continue;
+        seen.add(full);
+        prefixes.push(full);
+        const target = full.indexOf('#');
+        if (target !== -1) follow(pointerGet(document, full.slice(target + 1)));
+      } else {
+        follow(value);
+      }
+    }
+  };
+  branches.forEach((branch, i) => {
+    prefixes.push(`${compositeSchemaPath}/${i}/`);
+    follow(branch);
   });
+  return prefixes;
 }
 
+/**
+ * The schema at a JSON pointer, stepping through any `$ref` met on the way: ajv inlines small
+ * referenced schemas, and then reports an error's path through the referencing schema (the
+ * operation's `schema`) rather than the component it names.
+ */
 function pointerGet(document: unknown, pointer: string): unknown {
   let node: unknown = document;
   for (const part of pointer.replace(/^\//, '').split('/')) {
     if (part === '') continue;
+    node = deref(document, node);
     if (!node || typeof node !== 'object') return undefined;
     const key = decodeURIComponent(part).replace(/~1/g, '/').replace(/~0/g, '~');
     node = (node as Record<string, unknown>)[key];
   }
-  return node;
+  return deref(document, node);
+}
+
+function deref(document: unknown, node: unknown, depth = 0): unknown {
+  if (depth > 16 || !node || typeof node !== 'object') return node;
+  const ref = (node as Record<string, unknown>).$ref;
+  if (typeof ref !== 'string') return node;
+  const hash = ref.indexOf('#');
+  return deref(document, pointerGet(document, hash === -1 ? ref : ref.slice(hash + 1)), depth + 1);
 }
 
 /**
