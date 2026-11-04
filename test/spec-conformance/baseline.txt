@@ -94,9 +94,6 @@ GET /user_management/sessions/logout 400 status undocumented
 GET /user_management/users/{user_id}/authorized_applications 200 response /data/[] required: application
 GET /user_management/users/{user_id}/authorized_applications 200 response /data/[] required: granted_scopes
 GET /user_management/users/{user_id}/authorized_applications 200 response /data/[]/object const: must be equal to constant
-GET /user_management/users/{user_id}/connected_accounts/{slug} 200 response / required: account_display_name
-GET /user_management/users/{user_id}/connected_accounts/{slug} 200 response / required: account_identifier
-GET /user_management/users/{user_id}/connected_accounts/{slug} 200 response / required: connection_role
 GET /user_management/users/{user_id}/connected_accounts/{slug} 409 response /code const: must be equal to constant
 GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: connected_account
 GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: connected_accounts
@@ -132,15 +129,16 @@ POST /authorization/organization_memberships/{organization_membership_id}/role_a
 POST /connect/applications 201 request / discriminator: application_type=undefined not documented
 POST /connections 201 response / required: status
 POST /connections 400 response / discriminator: code="connection_already_exists_for_organization" not documented
+POST /data-integrations/{slug}/authorize 200 request / oneOf: must match exactly one schema in oneOf
 POST /data-integrations/{slug}/token 200 request / required: user_id
 POST /data-integrations/{slug}/token 200 request /organization_id type: string
 POST /data-integrations/{slug}/token 200 response / oneOf: must match exactly one schema in oneOf
 POST /data-integrations/{slug}/token 409 response /code const: must be equal to constant
-POST /data-integrations/{slug}/token 422 response /code const: must be equal to constant
 POST /organization_domains 404 status undocumented
 POST /organization_domains 422 status undocumented
 POST /organization_domains/{id}/verify 404 status undocumented
 POST /organizations/{organizationId}/groups 409 status undocumented
+POST /organizations/{organization_id}/connected_accounts/{slug} 422 response / oneOf: must match exactly one schema in oneOf
 POST /organizations/{organization_id}/it_contacts 201 request /email format: must match format "email"
 POST /portal/generate_link 201 request /intent enum
 POST /radar/lists/{type}/{action} 200 request / required: entry
@@ -163,17 +161,12 @@ POST /user_management/redirect_uris 201 response / required: default
 POST /user_management/users 422 response /code const: must be equal to constant
 POST /user_management/users/{id}/email_verification/confirm 400 response / discriminator: code="email_verification_too_many_attempts" not documented
 POST /user_management/users/{id}/email_verification/send 201 status undocumented
-POST /user_management/users/{user_id}/connected_accounts/{slug} 201 response / required: account_display_name
-POST /user_management/users/{user_id}/connected_accounts/{slug} 201 response / required: account_identifier
-POST /user_management/users/{user_id}/connected_accounts/{slug} 201 response / required: connection_role
 POST /user_management/users/{user_id}/connected_accounts/{slug} 422 response / oneOf: must match exactly one schema in oneOf
 POST /user_management/users/{userlandUserId}/auth_factors 404 status undocumented
 POST /widgets/token 201 request /scopes type: array
 POST /widgets/token 201 request /scopes/[] enum
 PUT /connect/applications/{id} 200 request /redirect_uris/[] type: object
 PUT /user_management/jwt_template 422 response /code const: must be equal to constant
-PUT /user_management/users/{user_id}/connected_accounts/{slug} 200 response / required: account_display_name
-PUT /user_management/users/{user_id}/connected_accounts/{slug} 200 response / required: account_identifier
-PUT /user_management/users/{user_id}/connected_accounts/{slug} 200 response / required: connection_role
 PUT /user_management/users/{user_id}/connected_accounts/{slug} 409 response /code const: must be equal to constant
+PUT /user_management/users/{user_id}/connected_accounts/{slug} 422 response / discriminator: code="unprocessable_entity" not documented
 PUT /vault/v1/kv/{id} 404 status undocumented
