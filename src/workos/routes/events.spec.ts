@@ -98,6 +98,42 @@ describe('Events routes', () => {
     }
   });
 
+  // Production's `ListEventOptionsDto` drops `order` and `before` from the pagination options,
+  // and `EventsController.list` queries ascending unconditionally: events are a forward-only log,
+  // oldest first. The generated SDKs still send `order=desc` on every call (workos-python's
+  // `list_events` default), so honoring it served them the log backwards.
+  it('returns events oldest first, whatever order is requested', async () => {
+    const ws = getWorkOSStore(store);
+    const ids = ['user_1', 'user_2', 'user_3'].map(
+      (id) => ws.events.insert({ ...eventRow, event: 'user.created', data: { id } }).id,
+    );
+
+    for (const order of ['', '&order=desc', '&order=asc', '&order=normal']) {
+      const list = await json(await req(`/events?events=user.created${order}`));
+      expect(list.data.map((e: any) => e.id)).toEqual(ids);
+    }
+  });
+
+  it('pages forward with after alone and reports no before cursor', async () => {
+    const ws = getWorkOSStore(store);
+    const [first, second, third] = ['user_1', 'user_2', 'user_3'].map(
+      (id) => ws.events.insert({ ...eventRow, event: 'user.created', data: { id } }).id,
+    );
+
+    const page = await json(await req('/events?events=user.created&limit=2'));
+    expect(page.data.map((e: any) => e.id)).toEqual([first, second]);
+    // The spec's `EventList.list_metadata` has `after` alone; production never writes `before`.
+    expect(page.list_metadata).toStrictEqual({ after: second });
+
+    const next = await json(await req(`/events?events=user.created&limit=2&after=${second}`));
+    expect(next.data.map((e: any) => e.id)).toEqual([third]);
+    expect(next.list_metadata).toStrictEqual({ after: null });
+
+    // `before` is accepted — production's DTO still whitelists it — and does nothing.
+    const ignored = await json(await req(`/events?events=user.created&before=${second}`));
+    expect(ignored.data.map((e: any) => e.id)).toEqual([first, second, third]);
+  });
+
   it('filters events by type', async () => {
     const ws = getWorkOSStore(store);
     ws.events.insert({ ...eventRow, event: 'user.created' });
