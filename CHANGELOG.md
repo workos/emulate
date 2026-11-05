@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.1](https://github.com/workos/emulate/compare/v0.19.0...v0.19.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **events:** return events oldest first, as production does ([#183](https://github.com/workos/emulate/issues/183)) ([0adb4e2](https://github.com/workos/emulate/commit/0adb4e277ca1e33cccced4573298ffd7b01de765))
+* **feature-flags:** serve the v2 SDK poll payload ([#184](https://github.com/workos/emulate/issues/184)) ([9d7a3fd](https://github.com/workos/emulate/commit/9d7a3fd8ad82fda2356bea866863e94f7e624886))
+
 ## [0.19.0](https://github.com/workos/emulate/compare/v0.18.0...v0.19.0) (2026-11-02)
 
 
