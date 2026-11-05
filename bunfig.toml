@@ -1,4 +1,5 @@
 [test]
+preload = ["./test/spec-conformance/preload.ts"]
 coverageReporter = ["text", "lcov"]
 coverageDir = "coverage"
 coverageSkipTestFiles = true
