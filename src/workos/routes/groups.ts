@@ -3,6 +3,7 @@ import {
   notFound,
   WorkOSApiError,
   validationError,
+  validationFailed,
   parseJsonBody,
   parseListParams,
   cursorPaginate,
@@ -220,6 +221,10 @@ export function groupRoutes(ctx: RouteContext): void {
       throw notFound('Group', c.req.param('groupId'));
 
     const url = new URL(c.req.url);
+    const errors = [...new Set(url.searchParams.keys())]
+      .filter((field) => !['limit', 'order', 'before', 'after'].includes(field))
+      .map((field) => ({ field, code: `property ${field} should not exist` }));
+    if (errors.length > 0) throw validationFailed(errors);
     const params = parseListParams(url);
 
     // Resolve join rows to memberships, skipping any whose membership was deleted (user
