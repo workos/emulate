@@ -6,7 +6,7 @@ import { getWorkOSStore } from '../store.js';
  * but says nothing about the claims inside, so this is an emulator convention: it keeps a Client
  * API token distinguishable from the session and widget tokens the same key signs.
  */
-const CLIENT_API_TOKEN_AUDIENCE = 'client';
+export const CLIENT_API_TOKEN_AUDIENCE = 'client';
 
 /** The spec calls the token "short-lived"; five minutes is the shortest plausible reading. */
 const CLIENT_API_TOKEN_TTL_SECONDS = 300;
@@ -15,8 +15,8 @@ export function clientApiRoutes(ctx: RouteContext): void {
   const { app, jwt, store } = ctx;
   const ws = getWorkOSStore(store);
 
-  // The emulator does not serve the Client GraphQL API, so the token is mintable and verifiable
-  // against JWKS but has nothing to authenticate against.
+  // The token authenticates `POST /client/graphql` (see client-graphql.ts) alongside the widget
+  // token and an AuthKit access token, as production's Client API guard accepts all three.
   app.post('/client/token', async (c) => {
     const body = await parseJsonBody(c);
     const organizationId = body.organization_id;

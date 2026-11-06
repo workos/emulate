@@ -36,6 +36,7 @@ import { vaultRoutes } from './routes/vault.js';
 import { radarRoutes } from './routes/radar.js';
 import { connectRoutes } from './routes/connect.js';
 import { clientApiRoutes } from './routes/client-api.js';
+import { clientGraphqlRoutes } from './routes/client-graphql.js';
 import { oauthRoutes } from './routes/oauth.js';
 import { authkitOauthRoutes } from './routes/authkit-oauth.js';
 import { standaloneConnectRoutes } from './routes/standalone-connect.js';
@@ -1251,6 +1252,7 @@ export const workosPlugin: ServicePlugin = {
     radarRoutes(ctx);
     connectRoutes(ctx);
     clientApiRoutes(ctx);
+    clientGraphqlRoutes(ctx);
     oauthRoutes(ctx);
     authkitOauthRoutes(ctx);
     standaloneConnectRoutes(ctx);
