@@ -479,10 +479,20 @@ class-validator message per failed field. A session carries a user, an organizat
 The emulator does not narrow `permissions` to what the user's role grants, as production does for
 a user session; the token carries the requested scopes as is.
 
-The components never call the public REST API; they call a private `/_widgets/*` surface. The
-emulator serves the routes the org-scope `<ApiKeys>` widget uses, as a translation layer over the
-same store the public API-key routes use — so a key created in the widget authenticates requests,
-and a key created through `POST /organizations/{id}/api_keys` (or seeded) shows up in the widget:
+### Which surface a widget calls
+
+The components never call the public REST API. Up to `@workos-inc/widgets` 1.18 they called a
+private `/_widgets/*` REST surface; from 1.19.0 (September 2026) every component calls one
+GraphQL endpoint, `POST /client/graphql`, with operations generated from the schema WorkOS
+publishes at `https://workos.com/docs/assets/widgets-api-schema.graphql`. The emulator serves
+both, and the package version decides which one a widget reaches.
+
+### `/_widgets/*` — widgets up to 1.18
+
+The emulator serves the routes the org-scope `<ApiKeys>` widget called, as a translation layer
+over the same store the public API-key routes use — so a key created in the widget authenticates
+requests, and a key created through `POST /organizations/{id}/api_keys` (or seeded) shows up in
+the widget:
 
 | Method   | Path                                      |
 | -------- | ----------------------------------------- |
@@ -504,13 +514,91 @@ Point the widgets provider at the emulator and hand it a token minted with the
 `/_widgets/*` requests authenticate with the widget token, not an API key, and the organization is
 the token's `org_id`: keys are only ever listed, created, revoked, or expired within it, and another
 organization's key is a `404`. A missing, expired, or otherwise invalid token — or one minted
-without the widget's scope — is a `403`, the status the widget client treats as a token problem: it
+without the widget's scope — is a `403`, the status this client treats as a token problem: it
 refetches the token once, then renders its expired-session or incorrect-permissions state.
 `GET /_widgets/ApiKeys/permissions` serves the environment's permissions (seeded, or created via
 `POST /authorization/permissions`), which is what fills the create dialog's checklist.
 
-Not implemented yet: the `scope="user"` variant (`/_widgets/UserApiKeys/*`) and the other widgets'
-`/_widgets/*` routes.
+Not implemented: the `scope="user"` variant (`/_widgets/UserApiKeys/*`) and the other widgets'
+`/_widgets/*` routes. Current packages no longer call any of them.
+
+### `POST /client/graphql` — widgets from 1.19
+
+The provider is pointed at the emulator the same way; the component derives the endpoint from
+the same props. `<UserSecurity>` renders on the two operations implemented so far, and
+`<UserProfile>` reads its profile through the first:
+
+```tsx
+<WorkOsWidgets apiHostname="localhost" port={4100} https={false}>
+  <UserSecurity authToken={token} />
+</WorkOsWidgets>
+```
+
+Every request is validated against the published schema, vendored in
+`src/workos/generated/widgets-api-schema.ts` and regenerated with `bun run gen:widgets-schema`.
+An operation that is wrong fails as production fails it, and one the schema defines but the
+emulator does not answer fails as unimplemented rather than as a silent null:
+
+| Operation                      | Answered from                                                                                       |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `query Me`                     | the token's user, its verified TOTP factors, its password sign-ins, and its linked OAuth identities |
+| `query AuthenticationSettings` | the environment's authentication settings, below                                                    |
+| every other query and mutation | a `200` whose error carries the emulator-only code `NOT_IMPLEMENTED`                                |
+
+The bearer token is one of the three production's guard accepts, and each is re-checked against
+the store on every request, so a session revoked or a membership deactivated after the token was
+minted stops authenticating:
+
+| Token                                                        | Checked on every request                                                                                 |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| a widget token from `POST /widgets/token`                    | a user with an `org_id` holds an active membership; an organization-only session's organization exists   |
+| a Client API token from `POST /client/token`                 | as a widget token                                                                                        |
+| an AuthKit access token from `/user_management/authenticate` | its `sid` names an active, unexpired session of the token's user; an `org_id` needs an active membership |
+
+`me` is the token's user:
+
+| Field                                                                                            | Source                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email`, `emailVerified`, `firstName`, `lastName`, `profilePictureUrl`, `createdAt`, `updatedAt` | the user record                                                                                                                                                                                                                                                                                     |
+| `mfaEnabled`, `mfaLastUsedAt`                                                                    | the user's first verified TOTP factor and when it last verified; never forced to `false`, since the environment's MFA setting is Optional                                                                                                                                                           |
+| `passwordSet`, `passwordLastUsedAt`                                                              | whether the user has a password, and its latest password sign-in. Production reports the latest activity on such a session, which the emulator does not track past the sign-in                                                                                                                      |
+| `connectedAccounts`                                                                              | the user's linked OAuth identities, in production's provider order. A login through an OAuth connection fills `id`, `email`, `firstName` and `lastName` from its profile; a seeded identity has only its `id` and `provider`. `profilePictureUrl` and `lastLoginAt` are `null`: nothing tracks them |
+
+`authenticationSettings` describes the environment the emulator models — what it enforces, not
+the dashboard defaults of a fresh production environment, which differ where noted:
+
+| Field                                                                  | Value   | Why                                                                                                                      |
+| ---------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `passwordAuthEnabled`                                                  | `true`  | the `password` grant is implemented                                                                                      |
+| `passkeyAuthEnabled`                                                   | `false` | passkeys are not implemented                                                                                             |
+| `mfaEnabled`                                                           | `true`  | a password sign-in challenges a verified factor, which only an environment with MFA on does. Production's default is off |
+| `mfaRequired`                                                          | `false` | a user without a factor signs in                                                                                         |
+| `passwordPolicy.minimumLength`                                         | `10`    | the [password policy](#passwords-are-held-to-productions-policy) the emulator enforces                                   |
+| `passwordPolicy.minimumStrength`                                       | `3`     | the zxcvbn score the same policy requires                                                                                |
+| `passwordPolicy.rejectsBreachedPasswords`                              | `false` | the breached-password lookup needs the network and never runs. Production's default is on                                |
+| `passwordPolicy.requiresUppercase`, `…Lowercase`, `…Number`, `…Symbol` | `false` | no character class is required, as in a fresh production environment                                                     |
+
+Failures take the shape production's Apollo Server gives them, verified live:
+
+| Case                                                                                                                                                   | Status | Body                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | --------------------------------------------------------------------------- |
+| no token, a bad or expired one, or one the store no longer backs                                                                                       | `200`  | one error per root field, `extensions.code` `UNAUTHENTICATED`, `data: null` |
+| `me` or `authenticationSettings` for an organization-only widget session                                                                               | `200`  | `NOT_FOUND`, the code production's filter gives a user it cannot find       |
+| an operation the emulator has not implemented                                                                                                          | `200`  | `NOT_IMPLEMENTED`                                                           |
+| a syntax error                                                                                                                                         | `400`  | `GRAPHQL_PARSE_FAILED`                                                      |
+| a document the schema rejects                                                                                                                          | `400`  | `GRAPHQL_VALIDATION_FAILED`                                                 |
+| several operations and no `operationName`, an `operationName` the document lacks, or no `query`                                                        | `400`  | `INTERNAL_SERVER_ERROR`, the code production leaves on these                |
+| `__schema` or `__type` at the root                                                                                                                     | `403`  | `FORBIDDEN`, `data: null`                                                   |
+| a content type a browser sends without preflight and no `X-CSRF-Token`, a body that is not a JSON object, a non-string `query`, non-object `variables` | `400`  | Apollo's plain-text refusals, verbatim                                      |
+| any method but `GET` and `POST`                                                                                                                        | `405`  | plain text                                                                  |
+
+The `UNAUTHENTICATED` error inside a `200` is the form the widget client reads a token problem in:
+it refetches the token once, retries, and then renders its expired-session or
+incorrect-permissions state. Every other error renders as the widget's generic failure.
+
+Not implemented yet: the other operations the package sends (`<UserSecurity>`'s actions —
+passwords, TOTP enrollment, passkeys, sessions — and every organization-scope widget), the
+elevated-access flow, and the long-lived Widgets API credential tokens.
 
 ## Radar
 

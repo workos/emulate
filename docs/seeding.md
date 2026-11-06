@@ -642,8 +642,9 @@ curl -X POST http://localhost:4100/client/token \
 
 Unknown ids return `404`. The token is signed with the emulator key, so it verifies against
 `/sso/jwks`, and carries `sub`, `org_id`, and `aud: client` with a five-minute expiry. The spec
-documents only the `{ token }` response, so those claims are an emulator convention — and the
-emulator does not serve the Client GraphQL API itself, so nothing consumes the token.
+documents only the `{ token }` response, so those claims are an emulator convention. The token
+authenticates `POST /client/graphql` the way a widget token does; see
+[Widgets](behavior.md#post-clientgraphql--widgets-from-119).
 
 ## API Keys
 

@@ -23,6 +23,12 @@ import { getWorkOSStore } from '../store.js';
 export const WIDGET_SCOPE_API_KEYS_MANAGE = 'widgets:api-keys:manage';
 
 /**
+ * The id prefix of a widget session, production's `WIDGET_SESSION_ID_PREFIX`. It is what tells a
+ * widget token's `sid` apart from an AuthKit session's on the Client GraphQL API.
+ */
+export const WIDGET_SESSION_ID_PREFIX = 'widget_session';
+
+/**
  * The scopes only an AuthKit user can hold — `AuthkitWidgetScopes` in production
  * (packages/api-entities-zod/src/entities/widget-session.ts). Requesting one without a
  * `user_id` is refused, since the session would have no user to grant it to.
@@ -224,7 +230,7 @@ export function widgetRoutes(ctx: RouteContext): void {
 
     // A widget session carries a user, an organization, or both: `sub` is the user when there is
     // one and the session id otherwise, as production mints it.
-    const sessionId = generateId('widget_session');
+    const sessionId = generateId(WIDGET_SESSION_ID_PREFIX);
     let subject: string;
 
     if (organizationId) {

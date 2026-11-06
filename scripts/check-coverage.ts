@@ -132,12 +132,13 @@ function routeKey(method: string, path: string): string {
 }
 
 /**
- * Path prefixes of private API surfaces the emulator implements deliberately even though the
- * public spec never describes them. `/_widgets/*` is what the `@workos-inc/widgets` components
- * call; its contract comes from the shipped package, not from `@workos/openapi-spec`. Routes
- * under these prefixes are reported as intentional, not as unknown emulator-only extras.
+ * Path prefixes of API surfaces the emulator implements deliberately even though the public
+ * spec never describes them. `/_widgets/*` is the REST surface older `@workos-inc/widgets`
+ * components call and `/client/graphql` the GraphQL one current components call; their contracts
+ * come from the shipped package and the published GraphQL schema, not from `@workos/openapi-spec`.
+ * Routes under these prefixes are reported as intentional, not as unknown emulator-only extras.
  */
-const PRIVATE_API_PREFIXES = ['/_widgets/'];
+const PRIVATE_API_PREFIXES = ['/_widgets/', '/client/graphql'];
 
 // ---------------------------------------------------------------------------
 // Main
