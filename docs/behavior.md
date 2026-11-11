@@ -190,7 +190,7 @@ Messages name the email for Magic Auth and email verification (`One-time code fo
 
 ## Organization Memberships
 
-`POST` and `PUT /user_management/organization_memberships` answer a `role_slug` (or any of `role_slugs`) that names no role with `422 invalid_role`. A slug resolves to a role of that organization or of the environment; `member` and `admin` always resolve, since production creates both with every environment, so they need no seeding. `GET /user_management/organization_memberships` wants an `organization_id` or a `user_id` (`400 missing_user_id_or_organization_id`).
+`POST` and `PUT /user_management/organization_memberships` answer a `role_slug` (or any of `role_slugs`) that names no role with `422 invalid_role`. A slug resolves to a role of that organization or of the environment; `member` and `admin` always resolve, since production creates both with every environment, so they need no seeding. `GET /user_management/organization_memberships` wants an `organization_id` or a `user_id` (`400 missing_user_id_or_organization_id`). `DELETE /user_management/organization_memberships/:id` refuses a membership that reports `directory_managed` with `422 organization_membership_directory_managed`: Directory Sync removes it when the user leaves the directory.
 
 One assumption runs through the membership and invitation routes: multiple roles are enabled for the environment, so `role_slugs` is accepted wherever production accepts it with that setting on, and `multiple_roles_not_enabled` is never answered.
 

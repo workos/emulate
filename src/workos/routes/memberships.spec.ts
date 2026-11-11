@@ -323,6 +323,50 @@ describe('Membership routes', () => {
     });
   });
 
+  describe('delete', () => {
+    // The API reference: a directory-managed membership cannot be deleted through this endpoint;
+    // Directory Sync removes it once the user leaves the directory.
+    let store: ReturnType<typeof createTestApp>['store'];
+
+    beforeEach(() => {
+      ({ app, store } = createTestApp());
+    });
+
+    async function membership(directoryManaged: boolean) {
+      const org = await createOrg('Delete Org');
+      const user = await createUser(`${directoryManaged ? 'managed' : 'manual'}@delete.test`);
+      const m = await json(
+        await req('/user_management/organization_memberships', {
+          method: 'POST',
+          body: JSON.stringify({ organization_id: org.id, user_id: user.id }),
+        }),
+      );
+      if (directoryManaged) {
+        getWorkOSStore(store).organizationMemberships.update(m.id, { directory_managed: true });
+      }
+      return m.id as string;
+    }
+
+    const deletedEvents = async () =>
+      (await json(await req('/events?events[]=organization_membership.deleted'))).data.length as number;
+
+    it('refuses to delete a directory-managed membership', async () => {
+      const id = await membership(true);
+      const res = await req(`/user_management/organization_memberships/${id}`, { method: 'DELETE' });
+      expect(res.status).toBe(422);
+      expect((await json(res)).code).toBe('organization_membership_directory_managed');
+      expect((await req(`/user_management/organization_memberships/${id}`)).status).toBe(200);
+      expect(await deletedEvents()).toBe(0);
+    });
+
+    it('deletes a membership that no directory manages', async () => {
+      const id = await membership(false);
+      const res = await req(`/user_management/organization_memberships/${id}`, { method: 'DELETE' });
+      expect(res.status).toBe(204);
+      expect((await req(`/user_management/organization_memberships/${id}`)).status).toBe(404);
+    });
+  });
+
   it('serializes directory_managed, roles, and the embedded user (WorkOS SDK contract)', async () => {
     const org = await createOrg('Contract Org');
     const user = await createUser('contract@test.com');
