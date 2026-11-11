@@ -373,6 +373,8 @@ describe('Group routes', () => {
 
   it.each([
     ['memberIds=om_one', [{ field: 'memberIds', code: 'property memberIds should not exist' }]],
+    ['memberIds[]=om_one&memberIds[]=om_two', [{ field: 'memberIds', code: 'property memberIds should not exist' }]],
+    ['memberIds[0]=om_one', [{ field: 'memberIds', code: 'property memberIds should not exist' }]],
     [
       'memberIds=om_one&memberIds=om_two&unsupported=value',
       [
