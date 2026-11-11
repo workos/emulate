@@ -28,6 +28,7 @@ describe('Client API token', () => {
     };
     organizationId = (await create('/organizations', { name: 'Acme' })).id;
     userId = (await create('/user_management/users', { email: 'alice@acme.com' })).id;
+    await create('/user_management/organization_memberships', { organization_id: organizationId, user_id: userId });
   });
 
   const post = (body: unknown) => app.request('/client/token', { method: 'POST', headers, body: JSON.stringify(body) });
@@ -62,5 +63,31 @@ describe('Client API token', () => {
   it('404s an unknown organization or user', async () => {
     expect((await post({ organization_id: 'org_nope', user_id: userId })).status).toBe(404);
     expect((await post({ organization_id: organizationId, user_id: 'user_nope' })).status).toBe(404);
+  });
+
+  it('404s a user without an active membership in the organization, as production does', async () => {
+    const create = async (path: string, body: unknown) =>
+      json(await app.request(path, { method: 'POST', headers, body: JSON.stringify(body) }));
+    const other = await create('/organizations', { name: 'Other' });
+
+    // Never a member of the other organization.
+    const stranger = await post({ organization_id: other.id, user_id: userId });
+    expect(stranger.status).toBe(404);
+    expect(await json(stranger)).toMatchObject({
+      code: 'entity_not_found',
+      message: `UserOrganizationMembership not found: '${other.id}'.`,
+    });
+
+    // A member whose membership was deactivated.
+    const membership = await create('/user_management/organization_memberships', {
+      organization_id: other.id,
+      user_id: userId,
+    });
+    expect((await post({ organization_id: other.id, user_id: userId })).status).toBe(201);
+    await app.request(`/user_management/organization_memberships/${membership.id}/deactivate`, {
+      method: 'PUT',
+      headers,
+    });
+    expect((await post({ organization_id: other.id, user_id: userId })).status).toBe(404);
   });
 });

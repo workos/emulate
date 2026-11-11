@@ -7,7 +7,10 @@ import {
   execute,
   parse,
   validate,
+  visit,
+  BREAK,
   type DocumentNode,
+  type FragmentDefinitionNode,
   type GraphQLFieldResolver,
   type GraphQLFormattedError,
   type GraphQLSchema,
@@ -37,7 +40,7 @@ import { WIDGET_SESSION_ID_PREFIX } from './widgets.js';
  *
  * The emulator validates every request against that published schema (see
  * `generated/widgets-api-schema.ts`) and answers the operations it implements from the same store
- * the REST routes use. Production runs Apollo Server 4 under Nest, and this route reproduces the
+ * the REST routes use. Production runs Apollo Server 3 under Nest, and this route reproduces the
  * envelopes of that stack as verified live: parse and validation failures are a 400 with the
  * Apollo error code, a token problem is an HTTP 200 whose error carries `UNAUTHENTICATED` — which
  * is what the widget client reads as "refetch the token once, then show the expired or
@@ -161,6 +164,13 @@ const hasActiveMembership = (ws: WorkOSStore, userId: string, organizationId: st
  *
  * A missing header, a bad signature, an expired token, or one of another kind (an API key, an M2M
  * or agent token) all resolve to nothing, which the root fields answer as Unauthenticated.
+ *
+ * So does the access token `/oauth2/token` mints a Connect application for a signed-in user.
+ * Production puts the application consent's id in that token's `sid`, which names no userland
+ * session, so its guard finds none and denies the token. The emulator mints it with the user's
+ * session in `sid`, so it is told apart by the other two things that mark it: it carries the
+ * application's `client_id`, and its `iss` is the bare issuer, where an AuthKit access token
+ * minted for a client carries `<issuer>/user_management/<client_id>`.
  */
 function resolveSession(
   ws: WorkOSStore,
@@ -186,6 +196,13 @@ function resolveSession(
   const organizationId = payload.org_id;
 
   if (typeof payload.sid === 'string' && !payload.sid.startsWith(`${WIDGET_SESSION_ID_PREFIX}_`)) {
+    if (
+      payload.iss === jwt.issuer &&
+      typeof payload.client_id === 'string' &&
+      ws.connectApplications.findOneBy('client_id', payload.client_id)
+    ) {
+      return undefined;
+    }
     const session = ws.sessions.get(payload.sid);
     if (!session || session.status !== 'active' || new Date(session.expires_at).getTime() <= Date.now()) {
       return undefined;
@@ -305,13 +322,16 @@ const ROOT_RESOLVERS: Record<string, Record<string, RootResolver>> = {
  * Resolve root fields from the table above and everything below them off the parent object, as
  * graphql-js does by default. A root field the table lacks is a schema-valid operation the
  * emulator has not implemented, which is reported as such rather than as a null for a non-null
- * field.
+ * field — to a caller production would have let reach it. Production's guard sits on every
+ * resolver, so without a usable token such a field answers Unauthenticated like any other, which
+ * is what tells the widget client to refetch its token.
  */
 const fieldResolver: GraphQLFieldResolver<unknown, GraphqlContext> = (source, args, context, info) => {
   const roots = ROOT_RESOLVERS[info.parentType.name];
   if (!roots) return defaultFieldResolver(source, args, context, info);
   const resolver = roots[info.fieldName];
   if (!resolver) {
+    if (!context.session) throw unauthenticated();
     throw new GraphQLError(`The emulator does not implement ${info.parentType.name}.${info.fieldName} yet.`, {
       extensions: { code: NOT_IMPLEMENTED_CODE },
     });
@@ -395,12 +415,38 @@ async function readRequest(c: Context<WorkOSAppEnv>): Promise<GraphqlRequest | R
 const isRefusal = (value: unknown): value is Refusal =>
   isRecord(value) && typeof value.status === 'number' && ('body' in value || 'json' in value);
 
-/** Whether the operation that would run selects `__schema` or `__type` at its root. */
-function introspects(operation: OperationDefinitionNode): boolean {
-  return operation.selectionSet.selections.some(
-    (selection) =>
-      selection.kind === Kind.FIELD && (selection.name.value === '__schema' || selection.name.value === '__type'),
-  );
+/**
+ * Whether the operation that would run selects `__schema` or `__type` anywhere: directly, inside
+ * an inline fragment, or through the named fragments it spreads, however deep. Only the operation
+ * and the fragments it reaches count, as in production's check — another operation in the
+ * document never executes.
+ */
+function introspects(document: DocumentNode, operation: OperationDefinitionNode): boolean {
+  const fragments = new Map<string, FragmentDefinitionNode>();
+  for (const definition of document.definitions) {
+    if (definition.kind === Kind.FRAGMENT_DEFINITION) fragments.set(definition.name.value, definition);
+  }
+
+  const pending: (OperationDefinitionNode | FragmentDefinitionNode)[] = [operation];
+  const spread = new Set<string>();
+  let found = false;
+  for (let definition = pending.pop(); definition && !found; definition = pending.pop()) {
+    visit(definition, {
+      Field: ({ name }) => {
+        if (name.value !== '__schema' && name.value !== '__type') return undefined;
+        found = true;
+        return BREAK;
+      },
+      FragmentSpread: ({ name }) => {
+        if (spread.has(name.value)) return undefined;
+        spread.add(name.value);
+        const fragment = fragments.get(name.value);
+        if (fragment) pending.push(fragment);
+        return undefined;
+      },
+    });
+  }
+  return found;
 }
 
 /**
@@ -496,7 +542,7 @@ export function clientGraphqlRoutes(ctx: RouteContext): void {
     }
     // Production keeps the schema introspectable at the Apollo level and refuses it per caller;
     // every public caller gets this, with the schema published as a download instead.
-    if (introspects(operation)) {
+    if (introspects(document, operation)) {
       return c.json(
         {
           errors: [{ message: 'Forbidden action. Cannot introspect schema.', extensions: { code: 'FORBIDDEN' } }],
@@ -514,6 +560,22 @@ export function clientGraphqlRoutes(ctx: RouteContext): void {
       contextValue: { ws, session: resolveSession(ws, jwt, c.req.header('authorization')) } satisfies GraphqlContext,
       fieldResolver,
     });
+
+    // A result with errors and no `data` at all never executed: the variables did not coerce to
+    // the types the operation declares. Production answers that as a bad request, each error
+    // under Apollo's user-input code and, like the other pre-execution failures, without
+    // `locations`.
+    if (result.errors && result.data === undefined) {
+      return c.json(
+        {
+          errors: result.errors.map((error) => ({
+            message: error.message,
+            extensions: { code: 'BAD_USER_INPUT' },
+          })),
+        },
+        400,
+      );
+    }
 
     // graphql-js puts `errors` before `data` when there are any; so does production.
     return c.json(

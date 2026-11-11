@@ -395,9 +395,10 @@ reported as `false`. `uses_pkce` and `is_first_party` are stored and reported; `
 public client, whose codes `/oauth2/token` redeems by PKCE verifier alone and which may present no
 client secret. `POST /oauth2/register` (RFC 7591, outside the spec) creates
 `was_dynamically_registered` applications, which `registration_types` filters. `POST /client/token`
-mints a signed, short-lived token, but the spec documents only the `{ token }` envelope — the claims
-inside are an emulator convention, and no Client GraphQL API is served for it to authenticate
-against.
+mints a signed, short-lived token for a user who holds an active membership in the organization;
+without one it is a `404` naming the membership, as production's issuer answers it. The spec
+documents only the `{ token }` envelope — the claims inside are an emulator convention. The token
+authenticates [`POST /client/graphql`](#post-clientgraphql--widgets-from-119).
 
 ## JWT Templates
 
@@ -539,11 +540,11 @@ Every request is validated against the published schema, vendored in
 An operation that is wrong fails as production fails it, and one the schema defines but the
 emulator does not answer fails as unimplemented rather than as a silent null:
 
-| Operation                      | Answered from                                                                                       |
-| ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `query Me`                     | the token's user, its verified TOTP factors, its password sign-ins, and its linked OAuth identities |
-| `query AuthenticationSettings` | the environment's authentication settings, below                                                    |
-| every other query and mutation | a `200` whose error carries the emulator-only code `NOT_IMPLEMENTED`                                |
+| Operation                      | Answered from                                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `query Me`                     | the token's user, its verified TOTP factors, its password sign-ins, and its linked OAuth identities    |
+| `query AuthenticationSettings` | the environment's authentication settings, below                                                       |
+| every other query and mutation | a `200` whose error carries the emulator-only code `NOT_IMPLEMENTED`, for a caller whose token is good |
 
 The bearer token is one of the three production's guard accepts, and each is re-checked against
 the store on every request, so a session revoked or a membership deactivated after the token was
@@ -552,8 +553,12 @@ minted stops authenticating:
 | Token                                                        | Checked on every request                                                                                 |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
 | a widget token from `POST /widgets/token`                    | a user with an `org_id` holds an active membership; an organization-only session's organization exists   |
-| a Client API token from `POST /client/token`                 | as a widget token                                                                                        |
+| a Client API token from `POST /client/token`                 | as a widget token; the route refuses to mint one without the membership                                  |
 | an AuthKit access token from `/user_management/authenticate` | its `sid` names an active, unexpired session of the token's user; an `org_id` needs an active membership |
+
+The access token `/oauth2/token` mints a Connect application is not one of them, though it names
+the same user and session: production's carries the consent's id in `sid`, which no session
+answers to, so it is refused there and here.
 
 `me` is the token's user:
 
@@ -580,17 +585,18 @@ the dashboard defaults of a fresh production environment, which differ where not
 
 Failures take the shape production's Apollo Server gives them, verified live:
 
-| Case                                                                                                                                                   | Status | Body                                                                        |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | --------------------------------------------------------------------------- |
-| no token, a bad or expired one, or one the store no longer backs                                                                                       | `200`  | one error per root field, `extensions.code` `UNAUTHENTICATED`, `data: null` |
-| `me` or `authenticationSettings` for an organization-only widget session                                                                               | `200`  | `NOT_FOUND`, the code production's filter gives a user it cannot find       |
-| an operation the emulator has not implemented                                                                                                          | `200`  | `NOT_IMPLEMENTED`                                                           |
-| a syntax error                                                                                                                                         | `400`  | `GRAPHQL_PARSE_FAILED`                                                      |
-| a document the schema rejects                                                                                                                          | `400`  | `GRAPHQL_VALIDATION_FAILED`                                                 |
-| several operations and no `operationName`, an `operationName` the document lacks, or no `query`                                                        | `400`  | `INTERNAL_SERVER_ERROR`, the code production leaves on these                |
-| `__schema` or `__type` at the root                                                                                                                     | `403`  | `FORBIDDEN`, `data: null`                                                   |
-| a content type a browser sends without preflight and no `X-CSRF-Token`, a body that is not a JSON object, a non-string `query`, non-object `variables` | `400`  | Apollo's plain-text refusals, verbatim                                      |
-| any method but `GET` and `POST`                                                                                                                        | `405`  | plain text                                                                  |
+| Case                                                                                                                                                   | Status | Body                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| no token, a bad or expired one, or one the store no longer backs, on any operation, implemented or not                                                 | `200`  | an error on the root field, `extensions.code` `UNAUTHENTICATED`, `data: null`; of several non-null root fields only the first is reported |
+| `me` or `authenticationSettings` for an organization-only widget session                                                                               | `200`  | `NOT_FOUND`, the code production's filter gives a user it cannot find                                                                     |
+| an operation the emulator has not implemented, with a good token                                                                                       | `200`  | `NOT_IMPLEMENTED`                                                                                                                         |
+| a syntax error                                                                                                                                         | `400`  | `GRAPHQL_PARSE_FAILED`                                                                                                                    |
+| a document the schema rejects                                                                                                                          | `400`  | `GRAPHQL_VALIDATION_FAILED`                                                                                                               |
+| variables that do not fit the operation: a required one missing, or one of the wrong type                                                              | `400`  | `BAD_USER_INPUT`, no `locations`                                                                                                          |
+| several operations and no `operationName`, an `operationName` the document lacks, or no `query`                                                        | `400`  | `INTERNAL_SERVER_ERROR`, the code production leaves on these                                                                              |
+| `__schema` or `__type` anywhere in the operation that runs, directly or through inline or named fragments                                              | `403`  | `FORBIDDEN`, `data: null`                                                                                                                 |
+| a content type a browser sends without preflight and no `X-CSRF-Token`, a body that is not a JSON object, a non-string `query`, non-object `variables` | `400`  | Apollo's plain-text refusals, verbatim                                                                                                    |
+| any method but `GET` and `POST`                                                                                                                        | `405`  | plain text                                                                                                                                |
 
 The `UNAUTHENTICATED` error inside a `200` is the form the widget client reads a token problem in:
 it refetches the token once, retries, and then renders its expired-session or

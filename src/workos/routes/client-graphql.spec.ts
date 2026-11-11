@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
+import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin } from '../index.js';
 import { getWorkOSStore, type WorkOSStore } from '../store.js';
@@ -369,6 +370,59 @@ describe('Client GraphQL API', () => {
       expect(res.status).toBe(200);
       expect(await json(res)).toEqual(UNAUTHENTICATED_ME);
     });
+
+    it('refuses the access token a Connect application holds for the same user', async () => {
+      // The whole grant, as an MCP client runs it: register, authorize through the hosted
+      // sign-in, redeem the code. Production puts the consent's id in this token's `sid`, so its
+      // guard finds no session behind it; the emulator's carries the user's live session, and
+      // must be refused all the same.
+      const callback = 'http://localhost:33418/callback';
+      const registration = await app.request('/oauth2/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_name: 'Third party',
+          redirect_uris: [callback],
+          token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code', 'refresh_token'],
+        }),
+      });
+      const { client_id } = await json(registration);
+      const verifier = randomBytes(32).toString('base64url');
+      const authorize = await app.request(
+        `/oauth2/authorize?${new URLSearchParams({
+          response_type: 'code',
+          redirect_uri: callback,
+          client_id,
+          code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+          code_challenge_method: 'S256',
+          login_hint: 'alice@acme.com',
+        })}`,
+      );
+      const hostedUrl = new URL(authorize.headers.get('location')!);
+      const hosted = await app.request(`${hostedUrl.pathname}${hostedUrl.search}`);
+      const code = new URL(hosted.headers.get('location')!).searchParams.get('code')!;
+      const exchanged = await app.request('/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id,
+          code,
+          redirect_uri: callback,
+          code_verifier: verifier,
+        }).toString(),
+      });
+      expect(exchanged.status).toBe(200);
+      const { access_token } = await json(exchanged);
+
+      // The token is a live one for this user: same `sub`, and a `sid` naming an active session.
+      const claims = JSON.parse(Buffer.from(access_token.split('.')[1], 'base64url').toString());
+      expect(claims).toMatchObject({ sub: userId, client_id });
+      expect(ws.sessions.get(claims.sid)?.status).toBe('active');
+
+      expect(await me(access_token)).toEqual(UNAUTHENTICATED_ME);
+    });
   });
 
   describe('request handling, as Apollo Server', () => {
@@ -395,6 +449,72 @@ describe('Client GraphQL API', () => {
         errors: [{ message: 'Forbidden action. Cannot introspect schema.', extensions: { code: 'FORBIDDEN' } }],
         data: null,
       });
+    });
+
+    it('refuses introspection reached through fragments, however it is nested', async () => {
+      const token = await widgetToken({ user_id: userId });
+      const refused = {
+        errors: [{ message: 'Forbidden action. Cannot introspect schema.', extensions: { code: 'FORBIDDEN' } }],
+        data: null,
+      };
+      for (const query of [
+        'query { ...F } fragment F on Query { __schema { queryType { name } } }',
+        '{ ... on Query { __type(name: "User") { name } } }',
+        '{ ... { __schema { queryType { name } } } }',
+        // Two named fragments deep, behind a field the caller may read.
+        '{ me { id } ...A } fragment A on Query { ...B } fragment B on Query { ... on Query { __type(name: "User") { name } } }',
+      ]) {
+        // With a token and without one: production refuses every public caller.
+        for (const bearer of [undefined, token]) {
+          const res = await graphql({ query }, bearer);
+          expect(res.status).toBe(403);
+          expect(await json(res)).toEqual(refused);
+        }
+      }
+
+      // Only the operation that runs counts, and only fields: an introspecting operation the
+      // request did not name, a fragment nothing spreads into it, and the word in an argument
+      // are not introspection.
+      const other = await graphql(
+        {
+          query: 'query A { me { id } } query B { ...S } fragment S on Query { __schema { queryType { name } } }',
+          operationName: 'A',
+        },
+        token,
+      );
+      expect(await json(other)).toEqual({ data: { me: { id: userId } } });
+      const argument = await graphql({ query: '{ auditEvent(id: "__schema") { __typename } }' }, token);
+      expect(argument.status).toBe(200);
+      expect((await json(argument)).errors[0].extensions).toEqual({ code: NOT_IMPLEMENTED_CODE });
+    });
+
+    it('refuses variables that do not fit the operation as a bad request', async () => {
+      const token = await widgetToken({ user_id: userId });
+      const query = 'query Q($id: ID!) { auditEvent(id: $id) { __typename } }';
+
+      const missing = await graphql({ query }, token);
+      expect(missing.status).toBe(400);
+      expect(await json(missing)).toEqual({
+        errors: [
+          {
+            message: 'Variable "$id" of required type "ID!" was not provided.',
+            extensions: { code: 'BAD_USER_INPUT' },
+          },
+        ],
+      });
+
+      const wrongType = await graphql({ query, variables: { id: { nested: true } } }, token);
+      expect(wrongType.status).toBe(400);
+      const body = await json(wrongType);
+      expect(Object.keys(body)).toEqual(['errors']);
+      expect(body.errors).toHaveLength(1);
+      expect(Object.keys(body.errors[0])).toEqual(['message', 'extensions']);
+      expect(body.errors[0].extensions).toEqual({ code: 'BAD_USER_INPUT' });
+
+      // Variables that do fit reach the resolver.
+      const fits = await graphql({ query, variables: { id: 'audit_event_1' } }, token);
+      expect(fits.status).toBe(200);
+      expect((await json(fits)).errors[0].extensions).toEqual({ code: NOT_IMPLEMENTED_CODE });
     });
 
     it('refuses what it cannot read as a GraphQL request, in plain text', async () => {
@@ -500,6 +620,43 @@ describe('Client GraphQL API', () => {
         ],
         data: null,
       });
+    });
+
+    it('answers an unimplemented operation Unauthenticated without a usable token, as any other', async () => {
+      // Production guards every resolver, so a token problem reads the same on all of them — the
+      // code that makes the widget client refetch its token rather than render a failure.
+      const expired = await widgetToken({ user_id: userId });
+      const query = await graphql({ query: '{ clientApiStatus }' });
+      expect(query.status).toBe(200);
+      expect(await json(query)).toEqual({
+        errors: [
+          {
+            message: 'Unauthenticated',
+            locations: [{ line: 1, column: 3 }],
+            path: ['clientApiStatus'],
+            extensions: { code: 'UNAUTHENTICATED' },
+          },
+        ],
+        data: null,
+      });
+
+      const mutation = await graphql({ query: 'mutation { revokeAllSessions { __typename } }' }, 'not.a.jwt');
+      expect(mutation.status).toBe(200);
+      expect(await json(mutation)).toEqual({
+        errors: [
+          {
+            message: 'Unauthenticated',
+            locations: [{ line: 1, column: 12 }],
+            path: ['revokeAllSessions'],
+            extensions: { code: 'UNAUTHENTICATED' },
+          },
+        ],
+        data: null,
+      });
+
+      setSystemTime(new Date(Date.now() + 3601 * 1000));
+      const afterExpiry = await json(await graphql({ query: '{ clientApiStatus }' }, expired));
+      expect(afterExpiry.errors[0].extensions).toEqual({ code: 'UNAUTHENTICATED' });
     });
 
     it("answers a browser's preflight", async () => {
