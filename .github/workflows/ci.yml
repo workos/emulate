@@ -45,8 +45,9 @@ jobs:
         run: |
           bun run gen:events
           bun run gen:shapes
+          bun run gen:query-params
           if ! git diff --exit-code -- src/workos/generated; then
-            echo "::error::Generated spec catalogs are stale. Run 'bun run gen:events && bun run gen:shapes' and commit the result."
+            echo "::error::Generated spec catalogs are stale. Run 'bun run gen:events && bun run gen:shapes && bun run gen:query-params' and commit the result."
             exit 1
           fi
 

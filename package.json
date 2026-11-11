@@ -85,6 +85,7 @@
     "gen:routes": "bun scripts/gen-routes.ts",
     "gen:events": "bun scripts/gen-events.ts",
     "gen:shapes": "bun scripts/gen-shapes.ts",
+    "gen:query-params": "bun scripts/gen-query-params.ts",
     "gen:supported": "bun scripts/gen-supported.ts",
     "check:coverage": "bun scripts/check-coverage.ts",
     "prepare": "husky"

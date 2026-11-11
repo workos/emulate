@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { ServicePlugin, Store, RouteContext, ApiKeyMap } from '../core/index.js';
-import { generateId } from '../core/index.js';
+import { generateId, strictQueryMiddleware } from '../core/index.js';
+import { strictQueryRules } from './strict-query-operations.js';
 import { syncOrganizationResource } from './organization-resource.js';
 import { insertOrganizationDomain } from './domain-helpers.js';
 import { getWorkOSStore } from './store.js';
@@ -1219,6 +1220,9 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
 export const workosPlugin: ServicePlugin = {
   name: 'workos',
   register(ctx: RouteContext): void {
+    // Ahead of every route, and behind the authentication the server has already installed.
+    ctx.app.use('*', strictQueryMiddleware(strictQueryRules()));
+
     organizationRoutes(ctx);
     itContactRoutes(ctx);
     organizationDomainRoutes(ctx);

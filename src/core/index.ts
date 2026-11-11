@@ -38,6 +38,13 @@ export {
   parseOAuthBody,
 } from './middleware/error-handler.js';
 export {
+  strictQueryMiddleware,
+  queryPropertyName,
+  unknownQueryProperties,
+  type StrictQueryRule,
+  type StrictQueryPipe,
+} from './middleware/strict-query.js';
+export {
   authMiddleware,
   isApiKeyEntryExpired,
   widgetAuthMiddleware,
