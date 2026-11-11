@@ -3308,8 +3308,7 @@ describe('Auth routes', () => {
       expect(wrong.status).toBe(400);
       expect((await json(wrong)).error).toBe('invalid_grant');
 
-      // Nor is the code /sso/token's to spend: production's standalone token endpoint takes no
-      // verifier, so a bound code is AuthKit's alone.
+      // The standalone endpoint also requires a verifier for a bound code.
       const standalone = await app.request('/sso/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

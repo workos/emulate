@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Context } from 'hono';
 import {
   type ApiKeyMap,
@@ -189,6 +190,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     const { redirectUri, state, email: loginHint, clientId, codeChallenge, codeChallengeMethod } = params;
 
     assertAllowedRedirectUri(redirectUri, store);
+    assertPkceChallenge(codeChallenge, codeChallengeMethod);
 
     const { connection, inactiveDescription } = resolveConnection(params);
 
@@ -273,6 +275,20 @@ export function ssoRoutes(ctx: RouteContext): void {
     }
   }
 
+  function assertPkceChallenge(challenge: string | null, method: string | null): void {
+    if (!challenge && !method) return;
+    if (method !== 'S256') {
+      throw new WorkOSApiError(400, 'Code challenge method must be `S256`', 'invalid_code_challenge_method');
+    }
+    if (!challenge) {
+      throw new WorkOSApiError(
+        400,
+        'Code challenge is required for PKCE when a code challenge method is provided',
+        'code_challenge_missing',
+      );
+    }
+  }
+
   app.get('/sso/authorize', (c) => {
     const url = new URL(c.req.url);
     const clientId = url.searchParams.get('client_id');
@@ -283,8 +299,6 @@ export function ssoRoutes(ctx: RouteContext): void {
     const domainHint = url.searchParams.get('domain_hint');
     const provider = url.searchParams.get('provider');
     const loginHint = url.searchParams.get('login_hint');
-    // Set only when /user_management/authorize hands a connection- or organization-bound request
-    // here: production's standalone SSO endpoint takes no PKCE, and the SSO SDKs send none.
     const codeChallenge = url.searchParams.get('code_challenge');
     const codeChallengeMethod = url.searchParams.get('code_challenge_method');
 
@@ -298,6 +312,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     // and defers every check to the POST. A host the emulator will not redirect to should fail
     // here, not after someone has filled the form in.
     assertAllowedRedirectUri(redirectUri, store);
+    assertPkceChallenge(codeChallenge, codeChallengeMethod);
 
     const interactive = store.getData<boolean>(STORE_KEYS.interactiveAuth);
     if (interactive) {
@@ -446,14 +461,24 @@ export function ssoRoutes(ctx: RouteContext): void {
       throw error;
     }
 
-    // A challenge on the record means /user_management/authorize started this authorization, and
-    // the code is AuthKit's to redeem: production's standalone token endpoint takes no
-    // `code_verifier`, so a code bound to one cannot be exchanged here at all. Refused without
-    // being spent, as /user_management/authenticate refuses a Connect code, so the callback the
-    // code was minted for can still redeem it.
-    if (auth.code_challenge) {
+    const verifier = body.code_verifier;
+    let pkceError: string | undefined;
+    if (verifier !== undefined && (typeof verifier !== 'string' || verifier === '')) {
+      pkceError = 'code_verifier must be a non-empty string.';
+    } else if (auth.code_challenge && !verifier) {
+      pkceError = 'A code_verifier is required because the authorization request included a code_challenge.';
+    } else if (!auth.code_challenge && verifier) {
+      pkceError = 'A code_verifier was provided but the authorization request included no code_challenge.';
+    } else if (
+      auth.code_challenge &&
+      typeof verifier === 'string' &&
+      createHash('sha256').update(verifier).digest('base64url') !== auth.code_challenge
+    ) {
+      pkceError = 'The code_verifier does not match the code_challenge from the authorization request.';
+    }
+    if (pkceError) {
       const boundProfile = ws.ssoProfiles.get(auth.profile_id);
-      const error = new OauthApiError(400, 'invalid_grant', `The code '${code}' has expired or is invalid.`);
+      const error = new OauthApiError(400, 'invalid_grant', pkceError);
       emitAuthenticationEvent({
         eventBus: store.getData<EventBus>(STORE_KEYS.eventBus),
         method: 'SSO',
