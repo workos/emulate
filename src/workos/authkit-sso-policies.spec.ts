@@ -197,6 +197,40 @@ describe('Hosted AuthKit SSO policies', () => {
     expect((await follow({ login_hint: 'ann@acme.test' })).hop).toBeNull();
   });
 
+  it('a selection the person is not a member of ends the search', async () => {
+    const orgs = await boot();
+    // Gus alone would go to Globex. Production branches on the selection before it looks the
+    // email up, so selecting Plain does not fall back to his Globex membership.
+    const params = new URLSearchParams({
+      client_id: 'client_x',
+      provider: 'authkit',
+      redirect_uri: callback,
+      login_hint: 'gus@shared.test',
+      organization_id: orgs.Plain,
+    });
+    const res = await fetch(`${emulator!.url}/user_management/authorize?${params}`, { redirect: 'manual' });
+    expect(res.headers.get('location') ?? '').not.toContain('/sso/authorize');
+  });
+
+  it('matches a domain policy written with padding or capitals', async () => {
+    emulator = await createEmulator({
+      port: 0,
+      seed: {
+        organizations: [
+          {
+            name: 'Padded',
+            domains: [{ domain: ' Padded.test ', state: 'verified' }],
+            require_sso: true,
+            domain_policy: [' PADDED.test '],
+          },
+        ],
+        connections: [{ name: 'Padded SAML', organization: 'Padded', connection_type: 'GenericSAML' }],
+      },
+    });
+    const { hop } = await follow({ login_hint: 'new@padded.test' });
+    expect(hop?.pathname).toBe('/sso/authorize');
+  });
+
   it('rejects a domain policy the seed cannot back', () => {
     const { valid, errors } = validateSeedConfig({
       organizations: [

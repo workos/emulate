@@ -811,9 +811,11 @@ export function organizationSsoConnections(ws: WorkOSStore, organizationId: stri
  *
  * 1. An organization whose domain policy covers the email's domain decides, whatever organization
  *    the request selected and whether or not the person is a member.
- * 2. Otherwise a selected organization decides for its members.
- * 3. Otherwise, the one organization that verified the domain and holds the person as an active
- *    member decides.
+ * 2. Otherwise a selected organization decides for its members, and for nobody else: production
+ *    branches on the selection before it looks the email up, so a selection the person is not a
+ *    member of ends the search rather than falling through to rule 3.
+ * 3. With no organization selected, the one organization that verified the domain and holds the
+ *    person as an active member decides.
  *
  * "Decides" means its `require_sso` setting applies: an organization that allows other methods
  * keeps the hosted flow, and so does one with no SSO connection to send anyone to.

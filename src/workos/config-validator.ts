@@ -12,6 +12,7 @@ import {
 import { AGENT_SESSION_SETTING_LIMITS } from './agent-sessions.js';
 import { normalizeEmail, type NormalizedEmail } from './helpers.js';
 import { isValidResourceUri, resourceUrisEqual } from './authkit-oauth.js';
+import { normalizeDomain } from './domain-helpers.js';
 
 /**
  * A seed is the one creation path that does not go through a route, so it is held to what the
@@ -230,10 +231,10 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             const verified = new Set(
               (Array.isArray(org.domains) ? org.domains : [])
                 .filter((d) => d?.state === 'verified' && typeof d.domain === 'string')
-                .map((d) => d.domain.toLowerCase()),
+                .map((d) => normalizeDomain(d.domain)),
             );
             org.domain_policy.forEach((domain, pIndex) => {
-              if (!verified.has(domain.toLowerCase())) {
+              if (!verified.has(normalizeDomain(domain))) {
                 errors.push({
                   path: `organizations[${index}].domain_policy[${pIndex}]`,
                   message: 'domain_policy entries must be verified domains of the organization',
@@ -474,7 +475,7 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
         if (!Array.isArray(org.domain_policy)) return;
         org.domain_policy.forEach((domain, pIndex) => {
           if (typeof domain !== 'string') return;
-          const key = domain.toLowerCase();
+          const key = normalizeDomain(domain);
           if (seenPolicyDomains.has(key)) {
             errors.push({
               path: `organizations[${index}].domain_policy[${pIndex}]`,

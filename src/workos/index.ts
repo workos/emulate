@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { ServicePlugin, Store, RouteContext, ApiKeyMap } from '../core/index.js';
 import { generateId } from '../core/index.js';
 import { syncOrganizationResource } from './organization-resource.js';
-import { insertOrganizationDomain } from './domain-helpers.js';
+import { insertOrganizationDomain, normalizeDomain } from './domain-helpers.js';
 import { getWorkOSStore } from './store.js';
 import { organizationRoutes } from './routes/organizations.js';
 import { itContactRoutes } from './routes/it-contacts.js';
@@ -689,7 +689,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         allow_profiles_outside_organization: orgConfig.allow_profiles_outside_organization ?? false,
         entitlements: orgConfig.entitlements ?? [],
         ...(orgConfig.require_sso !== undefined && { require_sso: orgConfig.require_sso }),
-        ...(orgConfig.domain_policy && { domain_policy: orgConfig.domain_policy.map((d) => d.toLowerCase()) }),
+        ...(orgConfig.domain_policy && { domain_policy: orgConfig.domain_policy.map(normalizeDomain) }),
       });
 
       syncOrganizationResource(ws, org);

@@ -133,12 +133,12 @@ Production's `provider`, `connection_id` and `organization_id` are exclusive, an
 
 Production's hosted sign-in sends a person straight to an organization's IdP when a policy requires SSO. The emulator applies the same step once the email is known: the `login_hint`, the address the `--interactive` email page submits, or the first user's when a headless request names nobody. The first rule that matches decides:
 
-| Order | Condition                                                                                                 | Organization whose setting applies |
-| ----- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| 1     | An organization's domain policy covers the email's domain, member or not, whatever `organization_id` says | That organization                  |
-| 2     | `organization_id` names an organization the user is an active member of                                   | That organization                  |
-| 3     | The user is an active member of exactly one organization that verified the email's domain                 | That organization                  |
-| 4     | None of the above                                                                                         | None: hosted sign-in               |
+| Order | Condition                                                                                                           | Organization whose setting applies |
+| ----- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| 1     | An organization's domain policy covers the email's domain, member or not, whatever `organization_id` says           | That organization                  |
+| 2     | `organization_id` names an organization the user is an active member of                                             | That organization                  |
+| 3     | No `organization_id`, and the user is an active member of exactly one organization that verified the email's domain | That organization                  |
+| 4     | None of the above                                                                                                   | None: hosted sign-in               |
 
 When the deciding organization has `require_sso: true` and holds an SSO connection, the answer is `302` to `/sso/authorize?organization=…` with `client_id`, `redirect_uri`, `state`, `login_hint`, `code_challenge` and `code_challenge_method`, and the exchange reports `authentication_method: SSO` scoped to that organization, as in the section above. Otherwise the hosted sign-in continues.
 
