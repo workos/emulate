@@ -222,7 +222,7 @@ The authorization and token endpoints check what production checks:
 
 ### PKCE
 
-Standalone SSO accepts S256 PKCE, including through the interactive login page. Enforcement is always on (matching production's enabled `sso-token-enforce-pkce` flag); failures leave the code unspent. `client_secret` remains required, with or without PKCE. Codes without a challenge still work without a verifier.
+Standalone SSO accepts S256 PKCE, including through the interactive login page. Enforcement is always on, as production enforces it; failures leave the code unspent. `client_secret` remains required, with or without PKCE. Codes without a challenge still work without a verifier.
 
 | Code                            | Condition                                                                                                                                | Status |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------ |
