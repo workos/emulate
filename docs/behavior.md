@@ -127,7 +127,7 @@ Production's `provider`, `connection_id` and `organization_id` are exclusive, an
 | `provider` (`authkit` or a social provider) with `organization_id` | Hosted sign-in with the organization pre-selected, as production                                                                                                       |
 | `connect_request`                                                  | Unchanged: the validated `/oauth2/authorize` request supplies its own parameters                                                                                       |
 
-`client_id`, `redirect_uri`, `state`, `login_hint`, `code_challenge` and `code_challenge_method` travel with the request, and `client_id` is required on this path as `/sso/authorize` requires it. The code is bound to that `client_id` the way a hosted code is, so the token names the client that started the authorization whatever `client_id` the redeeming request sends. A PKCE challenge binds the SSO code the way it binds a hosted one: the exchange needs the matching `code_verifier` (`invalid_request` without one, `invalid_grant` on a mismatch, and the code is unspent either way), and `POST /sso/token` refuses the code outright as `invalid_grant`, also without spending it, since production's standalone token endpoint takes no verifier and a bound code is AuthKit's alone to redeem.
+`client_id`, `redirect_uri`, `state`, `login_hint`, `code_challenge` and `code_challenge_method` travel with the request, and `client_id` is required on this path as `/sso/authorize` requires it. The code is bound to that `client_id` the way a hosted code is, so the token names the client that started the authorization whatever `client_id` the redeeming request sends. A PKCE challenge binds the SSO code the way it binds a hosted one: the exchange needs the matching `code_verifier` (`invalid_request` without one, `invalid_grant` on a mismatch, and the code is unspent either way). The standalone `POST /sso/token` endpoint also accepts a matching verifier, but still requires `client_secret` (see [SSO](#sso)).
 
 ### Refresh tokens rotate, with a 30-second replay grace period
 
@@ -219,6 +219,19 @@ The authorization and token endpoints check what production checks:
 - An `inactive` connection is not a 404 but a redirect back to `redirect_uri` with `error=connection_unlinked`, production's description of the selector (`The connection 'conn_…' is inactive.`, or the organization, domain or provider variant), the `state`, and an `error_uri` pointing at the error-code reference — so a callback handler sees the failure the way it would in production.
 - `POST /sso/token` requires `client_id` and `client_secret`. The secret is an API key of the environment — in production it is looked up among the environment's keys, here among the emulator's (`sk_test_default`, or the keys you configured) — and a wrong one is `400 {"error": "invalid_client", "error_description": "Invalid client secret."}`, with no `authentication.sso_failed` event, since nothing was authenticated. The `client_id` is only required to be present, and becomes the access token's `aud`.
 - An authorization code lives five minutes, as production's do.
+
+### PKCE
+
+Standalone SSO accepts S256 PKCE, including through the interactive login page. Enforcement is always on (matching production's enabled `sso-token-enforce-pkce` flag); failures leave the code unspent. `client_secret` remains required, with or without PKCE. Codes without a challenge still work without a verifier.
+
+| Code                            | Condition                                                                                                                                | Status |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `invalid_code_challenge_method` | Authorize has a challenge or method, but method is not `S256` (including absent or `plain`)                                              | 400    |
+| `code_challenge_missing`        | Authorize has method `S256` without a challenge                                                                                          | 400    |
+| `invalid_grant`                 | Token verifier is not a non-empty string, mismatches the S256 challenge, is missing for a bound code, or is supplied for an unbound code | 400    |
+| `invalid_request`               | Token request omits `client_secret`, even with a valid verifier                                                                          | 400    |
+
+Authorize errors use production's codes and descriptions in the emulator's JSON `code`/`message` envelope, without redirecting to the caller. Production instead redirects to its own error page, which the emulator does not host. Token errors use production's OAuth `error`/`error_description` envelope.
 
 ## Directory Sync
 

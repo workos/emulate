@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { createServer, type ApiKeyMap } from '../../core/index.js';
 import { workosPlugin, seedFromConfig } from '../index.js';
 import { getWorkOSStore } from '../store.js';
@@ -47,6 +48,133 @@ describe('SSO routes', () => {
     );
     return { org, conn };
   }
+
+  describe('PKCE', () => {
+    const verifier = 'a-verifier-with-enough-entropy-for-an-S256-challenge';
+    const challenge = createHash('sha256').update(verifier).digest('base64url');
+
+    async function authorize(pkce = true, interactive = false) {
+      const { conn } = await createOrgWithConnection();
+      const params = new URLSearchParams({
+        client_id: 'client_x',
+        connection: conn.id,
+        redirect_uri: 'http://localhost:3000/callback',
+      });
+      if (pkce) {
+        params.set('code_challenge', challenge);
+        params.set('code_challenge_method', 'S256');
+      }
+      store.setData(STORE_KEYS.interactiveAuth, interactive);
+      let res = await app.request(`/sso/authorize?${params}`);
+      if (interactive) {
+        expect(res.status).toBe(200);
+        const html = await res.text();
+        const form = new URLSearchParams();
+        for (const match of html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)) {
+          form.set(match[1]!, match[2]!);
+        }
+        expect(form.get('code_challenge')).toBe(challenge);
+        expect(form.get('code_challenge_method')).toBe('S256');
+        form.set('email', 'alice@example.com');
+        res = await app.request('/sso/authorize', { method: 'POST', body: form });
+      }
+      expect(res.status).toBe(302);
+      return new URL(res.headers.get('location')!).searchParams.get('code')!;
+    }
+
+    const token = (code: string, fields: Record<string, unknown> = {}) =>
+      req('/sso/token', {
+        method: 'POST',
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code,
+          client_id: 'client_x',
+          client_secret: 'sk_test_sso',
+          ...fields,
+        }),
+      });
+
+    for (const interactive of [false, true]) {
+      it(`redeems S256 through ${interactive ? 'interactive' : 'automatic'} authorization`, async () => {
+        const code = await authorize(true, interactive);
+        expect((await token(code, { code_verifier: verifier })).status).toBe(200);
+        expect((await token(code, { code_verifier: verifier })).status).toBe(400);
+      });
+    }
+
+    for (const [value, description] of [
+      [undefined, 'A code_verifier is required because the authorization request included a code_challenge.'],
+      ['wrong', 'The code_verifier does not match the code_challenge from the authorization request.'],
+      ['', 'code_verifier must be a non-empty string.'],
+      [null, 'code_verifier must be a non-empty string.'],
+      [42, 'code_verifier must be a non-empty string.'],
+    ] as const) {
+      it(`rejects verifier ${JSON.stringify(value)} without spending the code`, async () => {
+        const code = await authorize();
+        const res = await token(code, { code_verifier: value });
+        expect(res.status).toBe(400);
+        expect(await json(res)).toMatchObject({ error: 'invalid_grant', error_description: description });
+        expect((await token(code, { code_verifier: verifier })).status).toBe(200);
+      });
+    }
+
+    it('rejects a verifier without a challenge and keeps no-PKCE exchange working', async () => {
+      const code = await authorize(false);
+      const res = await token(code, { code_verifier: verifier });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toMatchObject({
+        error: 'invalid_grant',
+        error_description: 'A code_verifier was provided but the authorization request included no code_challenge.',
+      });
+      expect((await token(code)).status).toBe(200);
+    });
+
+    it('still requires client_secret with a verifier', async () => {
+      const code = await authorize();
+      const res = await token(code, { code_verifier: verifier, client_secret: undefined });
+      expect(res.status).toBe(400);
+      expect(await json(res)).toMatchObject({
+        error: 'invalid_request',
+        error_description: 'client_secret is required.',
+      });
+    });
+
+    for (const [query, error, message] of [
+      [
+        'code_challenge=x&code_challenge_method=plain',
+        'invalid_code_challenge_method',
+        'Code challenge method must be `S256`',
+      ],
+      [
+        'code_challenge=x&code_challenge_method=other',
+        'invalid_code_challenge_method',
+        'Code challenge method must be `S256`',
+      ],
+      ['code_challenge=x', 'invalid_code_challenge_method', 'Code challenge method must be `S256`'],
+      [
+        'code_challenge_method=S256',
+        'code_challenge_missing',
+        'Code challenge is required for PKCE when a code challenge method is provided',
+      ],
+    ]) {
+      it(`refuses invalid authorization ${query} on GET and POST`, async () => {
+        const { conn } = await createOrgWithConnection();
+        const params = new URLSearchParams(
+          `client_id=client_x&connection=${conn.id}&redirect_uri=http://localhost:3000/callback&${query}`,
+        );
+        for (const interactive of [false, true]) {
+          store.setData(STORE_KEYS.interactiveAuth, interactive);
+          const get = await app.request(`/sso/authorize?${params}`);
+          const post = await app.request('/sso/authorize', { method: 'POST', body: params });
+          for (const res of [get, post]) {
+            expect(res.status).toBe(400);
+            expect(res.headers.get('location')).toBeNull();
+            expect(await json(res)).toMatchObject({ code: error, message });
+          }
+        }
+      });
+    }
+  });
 
   it('sso authorize flow with connection', async () => {
     const { conn } = await createOrgWithConnection();
