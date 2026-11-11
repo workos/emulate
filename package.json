@@ -47,6 +47,7 @@
     "@zxcvbn-ts/language-common": "^2.0.1",
     "@zxcvbn-ts/language-en": "^2.1.0",
     "chalk": "^5.6.2",
+    "graphql": "^16.11.0",
     "hono": "^4",
     "semver": "^7.7.4",
     "yaml": "^2.8.2"
@@ -86,6 +87,7 @@
     "gen:events": "bun scripts/gen-events.ts",
     "gen:shapes": "bun scripts/gen-shapes.ts",
     "gen:supported": "bun scripts/gen-supported.ts",
+    "gen:widgets-schema": "bun scripts/gen-widgets-schema.ts",
     "check:coverage": "bun scripts/check-coverage.ts",
     "prepare": "husky"
   },

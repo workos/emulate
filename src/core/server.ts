@@ -89,6 +89,10 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
     // credential. Only these two: the RFC 8414 path-inserted form is not served (see the routes).
     '/.well-known/oauth-authorization-server',
     '/.well-known/openid-configuration',
+    // The Widgets API. A browser widget holds no API key; the route authenticates each operation
+    // with the bearer JWT it was given and answers a bad one inside the GraphQL envelope, which is
+    // the only form the widget client reads a token problem in.
+    '/client/graphql',
   ]);
 
   // /oauth2/* is the M2M authorization server: the token endpoint authenticates by
