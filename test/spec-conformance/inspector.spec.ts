@@ -44,6 +44,17 @@ describe('spec conformance inspector', () => {
     expect(keys(exchange({ status: 503, responseBody: { message: 'hooked' } }))).toEqual([]);
   });
 
+  it('reports an undocumented status that arrives with no body', () => {
+    // The spec documents 200 and 202 for this delete; an empty 204 has no body to give it away.
+    const url = new URL('http://localhost/organizations/org_01HXYZ123456789ABCDEFGHIJ');
+    expect(keys(exchange({ method: 'DELETE', url, status: 204 }))).toEqual([
+      'DELETE /organizations/{id} 204 status undocumented',
+    ]);
+    // The skips hold without a body too: a 5xx, and the statuses middleware produces everywhere.
+    expect(keys(exchange({ method: 'DELETE', url, status: 503 }))).toEqual([]);
+    expect(keys(exchange({ method: 'DELETE', url, status: 401 }))).toEqual([]);
+  });
+
   it('reports a query parameter the spec does not list, whichever array form carries it', () => {
     const url = new URL('http://localhost/organizations?limit=5&flavor=vanilla&toppings[]=a&toppings[0]=b');
     expect(keys(exchange({ url, responseBody: emptyList }))).toEqual([

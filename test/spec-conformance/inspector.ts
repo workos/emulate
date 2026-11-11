@@ -5,7 +5,7 @@
  *   response  — a JSON body for a documented status is validated against that status's schema;
  *               a documented JSON response that arrives empty, unparseable or not JSON at all
  *               is reported too
- *   status    — a JSON response with a status the operation does not document
+ *   status    — a status the operation does not document, whether or not a body came with it
  *   query     — on a request the emulator accepted, a query parameter the operation does not list
  *   request   — on a request the emulator accepted, a JSON body validated against the request schema
  *
@@ -264,8 +264,10 @@ export function inspectExchange(exchange: Exchange): Finding[] {
   if (!CROSS_CUTTING_STATUSES.has(exchange.status)) {
     const pointer = operation.responses.get(String(exchange.status));
     if (pointer === undefined) {
-      // A 5xx is never documented and, from the emulator, is an error hook a test installed.
-      if (exchange.responseBody !== undefined && exchange.status < 500) report('status', 'undocumented');
+      // Reported with or without a body: an empty 204 where the spec documents 200 is as much a
+      // gap as a JSON one. A 5xx is never documented and, from the emulator, is an error hook a
+      // test installed.
+      if (exchange.status < 500) report('status', 'undocumented');
     } else if (pointer) {
       if (exchange.responseBody === undefined) report('response', '/ no JSON body');
       else for (const line of validate(pointer, exchange.responseBody)) report('response', line);

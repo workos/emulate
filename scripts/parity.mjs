@@ -129,7 +129,10 @@ async function collect(target) {
       } catch (error) {
         samples[name] = { status: 'request failed', body: error instanceof Error ? error.message : String(error) };
       }
-      if (samples[name].status !== 204) {
+      // Any 2xx is a removal: production answers 200 for a user and 202 for an organization, and
+      // the status itself is compared as part of the sample.
+      const { status } = samples[name];
+      if (typeof status !== 'number' || status < 200 || status >= 300) {
         console.error(`${target.name}: ${name} ${path} was not removed: ${JSON.stringify(samples[name])}`);
       }
     };

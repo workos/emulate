@@ -2,6 +2,10 @@
 # Format: <METHOD> <path template> <status> <response|status|query|request> <detail>
 # Regenerate from a clean run with `SPEC_CONFORMANCE=baseline bun test`; see preload.ts.
 DELETE /authorization/resources/{resource_id} 400 response /code const: must be equal to constant
+DELETE /directories/{id} 204 status undocumented
+DELETE /organizations/{id} 204 status undocumented
+DELETE /user_management/organization_memberships/{id} 204 status undocumented
+DELETE /user_management/users/{id} 204 status undocumented
 DELETE /user_management/users/{user_id}/connected_accounts/{slug} 409 response /code const: must be equal to constant
 GET /agents/blueprints 200 response /data/[] required: invocable_as
 GET /agents/blueprints/{agent_blueprint_id} 200 response / required: invocable_as
