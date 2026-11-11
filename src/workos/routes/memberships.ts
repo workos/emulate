@@ -143,6 +143,14 @@ export function membershipRoutes(ctx: RouteContext): void {
   app.delete('/user_management/organization_memberships/:id', (c) => {
     const m = ws.organizationMemberships.get(c.req.param('id'));
     if (!m) throw notFound('UserOrganizationMembership', c.req.param('id'));
+    // The API reference: Directory Sync owns a directory-managed membership and removes it itself.
+    if (m.directory_managed) {
+      throw new WorkOSApiError(
+        422,
+        'A directory-managed organization membership cannot be deleted. Remove the user from the directory instead.',
+        'organization_membership_directory_managed',
+      );
+    }
     deleteAgentInstancesForMembership(ws, m.id);
     // Role assignments hang off the membership and go with it, as in production.
     ws.roleAssignments.deleteBy('organization_membership_id', m.id);
