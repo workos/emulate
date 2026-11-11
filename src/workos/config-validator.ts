@@ -211,6 +211,38 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
             value: org.entitlements,
           });
         }
+        if (org.require_sso !== undefined && typeof org.require_sso !== 'boolean') {
+          errors.push({
+            path: `organizations[${index}].require_sso`,
+            message: 'require_sso must be a boolean if provided',
+            value: org.require_sso,
+          });
+        }
+        if (org.domain_policy !== undefined) {
+          if (!Array.isArray(org.domain_policy) || org.domain_policy.some((d) => typeof d !== 'string')) {
+            errors.push({
+              path: `organizations[${index}].domain_policy`,
+              message: 'domain_policy must be an array of strings if provided',
+              value: org.domain_policy,
+            });
+          } else {
+            // Production's domain policy draws from the organization's verified domains.
+            const verified = new Set(
+              (Array.isArray(org.domains) ? org.domains : [])
+                .filter((d) => d?.state === 'verified' && typeof d.domain === 'string')
+                .map((d) => d.domain.toLowerCase()),
+            );
+            org.domain_policy.forEach((domain, pIndex) => {
+              if (!verified.has(domain.toLowerCase())) {
+                errors.push({
+                  path: `organizations[${index}].domain_policy[${pIndex}]`,
+                  message: 'domain_policy entries must be verified domains of the organization',
+                  value: domain,
+                });
+              }
+            });
+          }
+        }
         if (org.domains) {
           if (!Array.isArray(org.domains)) {
             errors.push({
@@ -433,6 +465,25 @@ export function validateSeedConfig(config: WorkOSSeedConfig): ConfigValidationRe
           });
         }
         seenOrgNames.add(org.name);
+      });
+
+      // Production allows a domain in one organization's domain policy per environment; with two,
+      // which organization governs a sign-in would depend on seed order.
+      const seenPolicyDomains = new Set<string>();
+      config.organizations.forEach((org, index) => {
+        if (!Array.isArray(org.domain_policy)) return;
+        org.domain_policy.forEach((domain, pIndex) => {
+          if (typeof domain !== 'string') return;
+          const key = domain.toLowerCase();
+          if (seenPolicyDomains.has(key)) {
+            errors.push({
+              path: `organizations[${index}].domain_policy[${pIndex}]`,
+              message: 'a domain can be in the domain_policy of only one organization',
+              value: domain,
+            });
+          }
+          seenPolicyDomains.add(key);
+        });
       });
 
       // A pinned organization id is the primary key in the store; two orgs sharing one

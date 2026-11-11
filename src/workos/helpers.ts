@@ -806,6 +806,53 @@ export function organizationSsoConnections(ws: WorkOSStore, organizationId: stri
 }
 
 /**
+ * The organization hosted AuthKit sends this sign-in to for SSO, or null when it stays on the
+ * hosted flow. Production's order, once the email is known:
+ *
+ * 1. An organization whose domain policy covers the email's domain decides, whatever organization
+ *    the request selected and whether or not the person is a member.
+ * 2. Otherwise a selected organization decides for its members.
+ * 3. Otherwise, the one organization that verified the domain and holds the person as an active
+ *    member decides.
+ *
+ * "Decides" means its `require_sso` setting applies: an organization that allows other methods
+ * keeps the hosted flow, and so does one with no SSO connection to send anyone to.
+ */
+export function ssoRequiredOrganization(
+  ws: WorkOSStore,
+  email: string,
+  selectedOrganizationId: string | null,
+): string | null {
+  const domain = email
+    .slice(email.lastIndexOf('@') + 1)
+    .trim()
+    .toLowerCase();
+  const verifiedBy = new Set(
+    ws.organizationDomains
+      .all()
+      .filter((d) => d.state === 'verified' && d.domain.toLowerCase() === domain)
+      .map((d) => d.organization_id),
+  );
+  const enforced = (organizationId: string): string | null => {
+    const org = ws.organizations.get(organizationId);
+    return org?.require_sso === true && organizationSsoConnections(ws, org.id).length > 0 ? org.id : null;
+  };
+
+  // The policy holds only while the domain is still verified: one deleted over the API takes its
+  // policy with it.
+  const governing = [...verifiedBy].find((id) => ws.organizations.get(id)?.domain_policy?.includes(domain));
+  if (governing) return enforced(governing);
+
+  const user = findUserByEmail(ws, email);
+  const memberOf = user ? activeOrganizationsFor(ws, user.id).map((o) => o.id) : [];
+  if (selectedOrganizationId) {
+    return memberOf.includes(selectedOrganizationId) ? enforced(selectedOrganizationId) : null;
+  }
+  const verifiedMemberships = memberOf.filter((id) => verifiedBy.has(id));
+  return verifiedMemberships.length === 1 ? enforced(verifiedMemberships[0]) : null;
+}
+
+/**
  * The types `GET /connections` leaves out. Production's listing passes `excludeOauth`,
  * `excludeMagicLink` and `excludeTestIdp` (`api/src/connections/connections.controller.ts`);
  * the OAuth set is `api-services/src/connections/oauth-connection-types.ts`, narrowed here to

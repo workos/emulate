@@ -131,6 +131,18 @@ export interface WorkOSSeedOrganization {
   allow_profiles_outside_organization?: boolean;
   /** Entitlement slugs minted into the `entitlements` claim of org-scoped access tokens. */
   entitlements?: string[];
+  /**
+   * The organization's authentication policy allows SSO only: hosted AuthKit sends the people the
+   * policy governs to the organization's SSO connection. Defaults to false, which keeps the
+   * hosted sign-in.
+   */
+  require_sso?: boolean;
+  /**
+   * The organization's domain policy: which of its verified `domains` it covers. Its settings
+   * then apply to every address on those domains, member or not. A domain can be in one
+   * organization's policy only.
+   */
+  domain_policy?: string[];
   memberships?: Array<{
     /**
      * Pinned membership id (e.g. `om_01ABC…`). Generated if omitted. Pin it when a backend
@@ -676,6 +688,8 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         stripe_customer_id: null,
         allow_profiles_outside_organization: orgConfig.allow_profiles_outside_organization ?? false,
         entitlements: orgConfig.entitlements ?? [],
+        ...(orgConfig.require_sso !== undefined && { require_sso: orgConfig.require_sso }),
+        ...(orgConfig.domain_policy && { domain_policy: orgConfig.domain_policy.map((d) => d.toLowerCase()) }),
       });
 
       syncOrganizationResource(ws, org);

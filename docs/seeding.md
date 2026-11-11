@@ -212,6 +212,36 @@ the domains as they stood at that moment — then writes the domains, which repo
 emits no `organization.updated`, and one that also renames the organization carries the
 pre-change domains in that event while the response carries the new ones.
 
+## Organization SSO policies
+
+Production configures an organization's authentication policy and domain policy in the Dashboard;
+neither is on the API, so the seed is where the emulator takes them from.
+
+```yaml
+organizations:
+  - name: Acme Corp
+    domains:
+      - domain: acme.com
+        state: verified
+    require_sso: true
+    domain_policy:
+      - acme.com
+connections:
+  - name: Acme SAML
+    organization: Acme Corp
+    connection_type: GenericSAML
+```
+
+| Field           | Default | Meaning                                                                                                                                    |
+| --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `require_sso`   | `false` | The organization allows SSO only. Hosted sign-in sends the people its policy governs to `/sso/authorize` for the organization's connection |
+| `domain_policy` | none    | The verified domains the organization's settings apply to for every address, member or not, whatever organization the sign-in selected     |
+
+A `domain_policy` entry that is not one of the organization's `verified` domains fails the boot, and
+so does a domain listed by two organizations: production allows one per environment. Neither field
+appears on the organization the API returns. The routing order is under
+[Authentication](behavior.md#hosted-sign-in-applies-organization-and-domain-sso-policies).
+
 ## Organization IT contacts
 
 `/organizations/{id}/it_contacts` is implemented in full — list, create, delete, invite and
