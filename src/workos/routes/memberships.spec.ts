@@ -362,7 +362,7 @@ describe('Membership routes', () => {
     it('deletes a membership that no directory manages', async () => {
       const id = await membership(false);
       const res = await req(`/user_management/organization_memberships/${id}`, { method: 'DELETE' });
-      expect(res.status).toBe(204);
+      expect(res.status).toBe(200);
       expect((await req(`/user_management/organization_memberships/${id}`)).status).toBe(404);
     });
   });

@@ -972,7 +972,7 @@ describe('Auth routes', () => {
 
     // Through the route, so the test breaks if a future cascade starts collecting auth codes.
     const del = await req(`/user_management/users/${user.id}`, { method: 'DELETE' });
-    expect(del.status).toBe(204);
+    expect(del.status).toBe(200);
 
     const res = await app.request('/user_management/authenticate', {
       method: 'POST',

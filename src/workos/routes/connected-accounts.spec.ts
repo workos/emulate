@@ -492,7 +492,7 @@ describe('Connected account routes', () => {
         body: JSON.stringify({ access_token: 'gho_x' }),
       });
 
-      expect((await req(`/user_management/users/${user.id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(`/user_management/users/${user.id}`, { method: 'DELETE' })).status).toBe(200);
       expect(getWorkOSStore(store).connectedAccounts.findBy('user_id', user.id)).toHaveLength(0);
       expect(eventsNamed('pipes.connected_account.disconnected')).toHaveLength(1);
     });
@@ -594,7 +594,7 @@ describe('Connected account routes', () => {
 
     it('stops naming the establishing member once they are deleted', async () => {
       await send('POST', { user_id: userId, access_token: 'ya29.org' });
-      expect((await req(`/user_management/users/${userId}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(`/user_management/users/${userId}`, { method: 'DELETE' })).status).toBe(200);
       expect(await json(await req(path))).toMatchObject({ user_id: null, established_by_user_id: null });
     });
 
@@ -612,7 +612,7 @@ describe('Connected account routes', () => {
       );
       expect(getWorkOSStore(store).connectedAccounts.all()).toHaveLength(2);
 
-      expect((await req(`/organizations/${organizationId}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(`/organizations/${organizationId}`, { method: 'DELETE' })).status).toBe(202);
       expect(getWorkOSStore(store).connectedAccounts.all()).toHaveLength(0);
       expect(eventsNamed('pipes.connected_account.disconnected')).toHaveLength(2);
     });

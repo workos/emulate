@@ -424,7 +424,7 @@ describe('User routes', () => {
     );
 
     const delRes = await req(`/user_management/users/${user.id}`, { method: 'DELETE' });
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(200);
 
     const getRes = await req(`/user_management/users/${user.id}`);
     expect(getRes.status).toBe(404);
@@ -753,7 +753,7 @@ describe('Password Reset', () => {
 
     // Delete the user
     const delRes = await req(`/user_management/users/${user.id}`, { method: 'DELETE' });
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(200);
 
     // Verify the user is gone
     const getRes = await req(`/user_management/users/${user.id}`);

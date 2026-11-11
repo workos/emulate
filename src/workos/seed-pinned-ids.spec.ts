@@ -192,7 +192,7 @@ describe('Seeding pinned organization, user and membership ids', () => {
       method: 'DELETE',
       headers: auth(emulator.apiKey),
     });
-    expect(deleteRes.status).toBe(204);
+    expect(deleteRes.status).toBe(200);
   });
 
   it('delivers the pinned ids in webhooks', async () => {

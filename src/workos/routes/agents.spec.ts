@@ -994,7 +994,7 @@ describe('Agent Auth routes', () => {
       });
       const survivor = await mintOk(blueprint.id, { type: 'autonomous', organization_id: other.id });
 
-      expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(202);
 
       for (const minted of [autonomous, delegated]) {
         expect((await req(`/agents/instances/${minted.agent_instance_id}`)).status).toBe(404);
@@ -1024,7 +1024,7 @@ describe('Agent Auth routes', () => {
       const autonomous = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
 
       const res = await req(`/user_management/organization_memberships/${membership.id}`, { method: 'DELETE' });
-      expect(res.status).toBe(204);
+      expect(res.status).toBe(200);
 
       expect((await req(`/agents/instances/${delegated.agent_instance_id}`)).status).toBe(404);
       await expectError(await validate(blueprint.id, delegated.access_token), 400, 'invalid_agent_access_token');
@@ -1043,7 +1043,7 @@ describe('Agent Auth routes', () => {
       const child = await mintOk(blueprint.id, { type: 'agent_delegated', agent_access_token: delegated.access_token });
       const autonomous = await mintOk(blueprint.id, { type: 'autonomous', organization_id: org.id });
 
-      expect((await req(`/user_management/users/${alice.id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(`/user_management/users/${alice.id}`, { method: 'DELETE' })).status).toBe(200);
 
       expect((await req(`/agents/instances/${delegated.agent_instance_id}`)).status).toBe(404);
       for (const minted of [delegated, child]) {
