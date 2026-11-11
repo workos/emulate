@@ -371,6 +371,59 @@ describe('Group routes', () => {
     expect(list.data).toHaveLength(1);
   });
 
+  it.each([
+    ['memberIds=om_one', [{ field: 'memberIds', code: 'property memberIds should not exist' }]],
+    ['memberIds[]=om_one&memberIds[]=om_two', [{ field: 'memberIds', code: 'property memberIds should not exist' }]],
+    ['memberIds[0]=om_one', [{ field: 'memberIds', code: 'property memberIds should not exist' }]],
+    [
+      'memberIds=om_one&memberIds=om_two&unsupported=value',
+      [
+        { field: 'memberIds', code: 'property memberIds should not exist' },
+        { field: 'unsupported', code: 'property unsupported should not exist' },
+      ],
+    ],
+  ])('422s unsupported group membership list query parameters: %s', async (query, errors) => {
+    const org = await createOrg('Query Org');
+    const group = await createGroup(org.id, 'Engineering');
+    const res = await req(`/organizations/${org.id}/groups/${group.id}/organization-memberships?${query}`);
+    expect(res.status).toBe(422);
+    expect(await json(res)).toEqual({ message: 'Validation failed', errors });
+  });
+
+  it('paginates group memberships with the supported query parameters', async () => {
+    const org = await createOrg('Paginated Org');
+    const group = await createGroup(org.id, 'Engineering');
+    const path = `/organizations/${org.id}/groups/${group.id}/organization-memberships`;
+    const memberIds: string[] = [];
+    for (const email of ['page-one@test.com', 'page-two@test.com']) {
+      const user = await createUser(email);
+      const member = await createMembership(org.id, user.id);
+      memberIds.push(member.id);
+      const added = await req(path, {
+        method: 'POST',
+        body: JSON.stringify({ organization_membership_id: member.id }),
+      });
+      expect(added.status).toBe(200);
+    }
+
+    const all = await req(`${path}?order=asc&limit=2`);
+    expect(all.status).toBe(200);
+    const members = (await json(all)).data;
+    expect(members.map((member: any) => member.id)).toEqual(expect.arrayContaining(memberIds));
+
+    const first = await req(`${path}?order=asc&limit=1`);
+    expect(first.status).toBe(200);
+    expect((await json(first)).data).toEqual([members[0]]);
+
+    const next = await req(`${path}?order=asc&limit=1&after=${members[0].id}`);
+    expect(next.status).toBe(200);
+    expect((await json(next)).data).toEqual([members[1]]);
+
+    const previous = await req(`${path}?order=asc&limit=1&before=${members[1].id}`);
+    expect(previous.status).toBe(200);
+    expect((await json(previous)).data).toEqual([members[0]]);
+  });
+
   it('404s adding an unknown membership', async () => {
     const org = await createOrg('Unknown Om Org');
     const g = await createGroup(org.id, 'X');

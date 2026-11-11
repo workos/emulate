@@ -198,6 +198,11 @@ One assumption runs through the membership and invitation routes: multiple roles
 
 A second group with the same name in an organization is a `409` whose body is `{"message": "A group with name: … already exists in the organization.", "error": "Conflict"}` with no `code`, as production's conflict renders; `name` is at most 256 characters and `description` a non-empty string of at most 150 (`null` clears it); a group holds at most 500 members (`400 group_membership_limit_exceeded`).
 
+`GET /organizations/{organizationId}/groups/{groupId}/organization-memberships` accepts only
+`limit`, `order`, `before`, and `after` as query parameters. Unknown parameters return `422`
+with `message: "Validation failed"` and an error per unknown property, whose `code` is
+`property <name> should not exist`.
+
 ## Invitations
 
 `POST /user_management/invitations`: an open invitation to the same organization is `400 email_already_invited_to_organization`; without an organization, an open invitation for the address is `400 email_already_invited` and an existing account is `400 user_already_exists` (production lets through an account that only an organization invitation created, since its owner has not signed up; the emulator records no such distinction and refuses any existing account); an unknown `role_slug` is `400 invalid_role`; `expires_in_days` must be 1 to 30 (`expires_in_days_too_short`, `expires_in_days_too_long`) and defaults to 7 days; an unknown `organization_id` or `inviter_user_id` is a `404`.
