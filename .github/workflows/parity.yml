@@ -1,0 +1,58 @@
+name: Production parity
+
+# Runs the same requests against a real WorkOS environment and the emulator and diffs the
+# responses (scripts/parity.mjs). This is the check for behavior the OpenAPI spec does not
+# express — ordering, error bodies, nullability — so it runs nightly rather than per PR, and only
+# when a sandbox key is configured. Without one the harness still proves itself, emulator against
+# emulator.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/parity.mjs
+      - .github/workflows/parity.yml
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    env:
+      WORKOS_PARITY_API_KEY: ${{ secrets.WORKOS_PARITY_API_KEY }}
+      WORKOS_PARITY_BASE_URL: ${{ vars.WORKOS_PARITY_BASE_URL }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Socket Firewall
+        uses: workos/setup-socket-firewall@ca93dd8aa351f54f4729fe3377a9be23c631c25d
+        with:
+          token: ${{ secrets.PUBLIC_SOCKET_FIREWALL_TOKEN }}
+          allow-external-fork-fallback: true
+          configure-bun: true
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Differential run against the parity environment
+        if: env.WORKOS_PARITY_API_KEY != ''
+        run: node scripts/parity.mjs
+
+      - name: Harness self-check (no parity key configured)
+        if: env.WORKOS_PARITY_API_KEY == ''
+        run: node scripts/parity.mjs --self-check
