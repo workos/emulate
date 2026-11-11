@@ -32,6 +32,7 @@ import {
   emailsMatch,
   activeOrganizationsFor,
   organizationSsoConnections,
+  ssoRequiredOrganization,
   startLoginSession,
   issueEmailVerificationCode,
   latestOneTimeCode,
@@ -317,6 +318,26 @@ export function authRoutes(ctx: RouteContext): void {
     } = params;
 
     assertAllowedRedirectUri(redirectUri, store);
+
+    // The policy step production applies once the email is known: an organization that requires
+    // SSO takes the sign-in to its IdP, here /sso/authorize, with what the callback and the
+    // exchange need. It runs before the user is looked up, because a domain policy governs
+    // addresses with no account yet, and before any password page, which an SSO-only
+    // organization never shows. Without a login_hint the email is the first user's, the one the
+    // headless flow signs in. A `connect_request` stays here: its code is redeemed at
+    // /oauth2/token, which an SSO code is not.
+    const policyEmail = loginHint ?? ws.users.all()[0]?.email;
+    const ssoOrganizationId =
+      policyEmail && !params.connectRequest ? ssoRequiredOrganization(ws, policyEmail, organizationId) : null;
+    if (ssoOrganizationId) {
+      const sso = new URLSearchParams({ organization: ssoOrganizationId, redirect_uri: redirectUri });
+      sso.set('login_hint', policyEmail as string);
+      if (clientId) sso.set('client_id', clientId);
+      if (state) sso.set('state', state);
+      if (codeChallenge) sso.set('code_challenge', codeChallenge);
+      if (codeChallengeMethod) sso.set('code_challenge_method', codeChallengeMethod);
+      return c.redirect(`/sso/authorize?${sso.toString()}`);
+    }
 
     let user;
     if (loginHint) {

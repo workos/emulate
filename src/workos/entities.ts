@@ -33,6 +33,15 @@ export interface WorkOSOrganization extends Entity {
    * organization shape has no such field, so it is never serialized onto the API object.
    */
   entitlements: string[];
+  /**
+   * The organization's authentication policy allows SSO only, so hosted AuthKit sends whoever the
+   * policy governs to its connection. Seed-only state, like the domain policy below: production
+   * sets both in the Dashboard and the spec's organization shape has neither, so they are never
+   * serialized. Absent means other methods are allowed.
+   */
+  require_sso?: boolean;
+  /** The verified domains, lowercased, the organization's domain policy covers. */
+  domain_policy?: string[];
 }
 
 export interface WorkOSOrganizationDomain extends Entity {
