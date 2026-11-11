@@ -36,7 +36,8 @@ function loadFormatConfig(): FormatConfig {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const flags = args.filter((a) => a.startsWith('--'));
-  const positional = args.filter((a) => !a.startsWith('--'));
+  // The value after `--out` is the output file, not a spec path.
+  const positional = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--out');
 
   // Default to the published spec package; a positional path overrides it.
   const specPath = positional[0] ?? createRequire(import.meta.url).resolve('@workos/openapi-spec/spec');
