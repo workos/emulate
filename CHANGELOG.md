@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.20.0](https://github.com/workos/emulate/compare/v0.19.1...v0.20.0) (2026-11-11)
+
+
+### Features
+
+* **auth:** apply organization and domain SSO policies on hosted sign-in ([#195](https://github.com/workos/emulate/issues/195)) ([2285724](https://github.com/workos/emulate/commit/2285724944acb144066f1d5947c55acce2e5444f))
+* **sso:** Support S256 PKCE on the standalone SSO endpoints ([#192](https://github.com/workos/emulate/issues/192)) ([c1f91c7](https://github.com/workos/emulate/commit/c1f91c7b180608e67710442a46a776ff76fad832))
+
+
+### Bug Fixes
+
+* **deletes:** answer deletes with production's statuses ([#194](https://github.com/workos/emulate/issues/194)) ([d46330a](https://github.com/workos/emulate/commit/d46330a670c88173afc89f7bbff04743d2cd893a))
+* **groups:** reject unknown membership list query parameters ([#190](https://github.com/workos/emulate/issues/190)) ([9bf8c97](https://github.com/workos/emulate/commit/9bf8c97beb35099ca8223efe328d9eaa160b5aba))
+* **memberships:** refuse to delete a directory-managed membership, as production does ([#191](https://github.com/workos/emulate/issues/191)) ([a703c2b](https://github.com/workos/emulate/commit/a703c2b290b9604a21122383844e61c7275596c1))
+* **query:** reject unknown query parameters wherever production does ([#196](https://github.com/workos/emulate/issues/196)) ([ed549e9](https://github.com/workos/emulate/commit/ed549e96755d4fd06f3ed4a7bae200595df28316))
+
 ## [0.19.1](https://github.com/workos/emulate/compare/v0.19.0...v0.19.1) (2026-11-05)
 
 
