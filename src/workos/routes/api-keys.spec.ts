@@ -301,7 +301,7 @@ describe('API Keys routes', () => {
     const survivor = await createUserKey('user_stays');
     expect(await authStatus(doomed.value)).toBe(200);
 
-    expect((await req('/user_management/users/user_gone', { method: 'DELETE' })).status).toBe(204);
+    expect((await req('/user_management/users/user_gone', { method: 'DELETE' })).status).toBe(200);
 
     // The record is gone and, more importantly, the secret no longer authenticates —
     // dropping only the record would leave the allow-list entry accepting requests.
@@ -320,7 +320,7 @@ describe('API Keys routes', () => {
     );
     const memberKey = await createUserKey('user_member');
 
-    expect((await req('/organizations/org_123', { method: 'DELETE' })).status).toBe(204);
+    expect((await req('/organizations/org_123', { method: 'DELETE' })).status).toBe(202);
 
     // Both the org's own key and the member key issued inside it lose their backing org.
     expect(ws.apiKeyRecords.all()).toHaveLength(0);

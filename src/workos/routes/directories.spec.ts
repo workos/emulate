@@ -101,7 +101,8 @@ describe('Directory Sync routes', () => {
   it('deletes a directory and cascades', async () => {
     const { dir, user, group } = seedDirectory();
     const delRes = await req(`/directories/${dir.id}`, { method: 'DELETE' });
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(202);
+    expect(await delRes.text()).toBe('Accepted');
 
     expect(await (await req(`/directories/${dir.id}`)).status).toBe(404);
     expect(await (await req(`/directory_users/${user.id}`)).status).toBe(404);
@@ -152,7 +153,7 @@ describe('Directory Sync routes', () => {
     directoryUser(first.id, 'admin');
     directoryUser(directory('Second').id, 'member');
 
-    expect((await req(`/directories/${first.id}`, { method: 'DELETE' })).status).toBe(204);
+    expect((await req(`/directories/${first.id}`, { method: 'DELETE' })).status).toBe(202);
 
     const after = await json(await req(`/user_management/organization_memberships/${membership.id}`));
     expect(after.role).toEqual({ slug: 'member' });

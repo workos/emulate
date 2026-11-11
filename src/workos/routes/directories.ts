@@ -93,7 +93,8 @@ export function directoryRoutes(ctx: RouteContext): void {
     ws.directories.delete(dir.id);
     ws.directoryUsers.deleteBy('directory_id', dir.id);
     ws.directoryGroups.deleteBy('directory_id', dir.id);
-    return c.body(null, 204);
+    // Production queues the deletion and answers with Express's `sendStatus(202)`.
+    return c.text('Accepted', 202);
   });
 
   // List directory users

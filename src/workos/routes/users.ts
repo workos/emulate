@@ -246,7 +246,8 @@ export function userRoutes(ctx: RouteContext): void {
     revokeApiKeysForOwner(store, ws, (o) => o.type === 'user' && o.id === user.id);
 
     ws.users.delete(user.id);
-    return c.body(null, 204);
+    // Production answers an empty 200 here, not a 204.
+    return c.body(null, 200);
   });
 
   app.get('/user_management/users/:id/identities', (c) => {

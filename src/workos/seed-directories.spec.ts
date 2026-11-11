@@ -451,7 +451,7 @@ describe('Seeding directories', () => {
       method: 'DELETE',
       headers: auth(emulator.apiKey),
     });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(202);
     expect((await get(`${emulator.url}/directories`, emulator.apiKey)).data).toHaveLength(0);
 
     const evts = await get(`${emulator.url}/events?events[]=dsync.deleted`, emulator.apiKey);

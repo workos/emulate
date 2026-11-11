@@ -437,7 +437,7 @@ describe('Authorization org role routes', () => {
     // Deleting the membership itself (not its group link) leaves the link pointing at nothing,
     // which must not count as the group still holding the role.
     expect((await req(`/user_management/organization_memberships/${membership.id}`, { method: 'DELETE' })).status).toBe(
-      204,
+      200,
     );
     expect((await req(`/authorization/organizations/${org.id}/roles/org-ghosted`, { method: 'DELETE' })).status).toBe(
       204,

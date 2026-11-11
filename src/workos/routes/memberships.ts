@@ -155,7 +155,8 @@ export function membershipRoutes(ctx: RouteContext): void {
     // Role assignments hang off the membership and go with it, as in production.
     ws.roleAssignments.deleteBy('organization_membership_id', m.id);
     ws.organizationMemberships.delete(m.id);
-    return c.body(null, 204);
+    // Production answers an empty 200 here, not a 204.
+    return c.body(null, 200);
   });
 
   app.put('/user_management/organization_memberships/:id/deactivate', (c) => {
