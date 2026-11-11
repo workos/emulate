@@ -137,7 +137,8 @@ describe('Organization routes', () => {
     }
 
     const delRes = await req(`/organizations/${org.id}`, { method: 'DELETE' });
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(202);
+    expect(await delRes.text()).toBe('Accepted');
 
     const getRes = await req(`/organizations/${org.id}`);
     expect(getRes.status).toBe(404);

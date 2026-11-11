@@ -244,6 +244,7 @@ export function organizationRoutes(ctx: RouteContext): void {
       ws.authorizationResources.delete(resource.id);
     }
     ws.organizations.delete(org.id);
-    return c.body(null, 204);
+    // Production queues the deletion and answers with Express's `sendStatus(202)`.
+    return c.text('Accepted', 202);
   });
 }

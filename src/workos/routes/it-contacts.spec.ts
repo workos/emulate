@@ -291,7 +291,7 @@ describe('IT contacts', () => {
 
   it('drops contacts with the organization', async () => {
     const contact = await json(await create('it@acme.com'));
-    expect((await req(`/organizations/${organizationId}`, { method: 'DELETE' })).status).toBe(204);
+    expect((await req(`/organizations/${organizationId}`, { method: 'DELETE' })).status).toBe(202);
     expect(getWorkOSStore(store).itContacts.get(contact.id)).toBeUndefined();
   });
 });

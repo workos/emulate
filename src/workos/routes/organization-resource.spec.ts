@@ -327,7 +327,7 @@ describe('Implicit organization resources', () => {
       const discovered = await req(discoveryPath);
       expect(discovered.status).toBe(200);
       expect((await json(discovered)).data.map((resource: any) => resource.id)).toEqual([child.id]);
-      expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(202);
       expect((await req(rootPath(org))).status).toBe(404);
       return root.id;
     }
@@ -389,7 +389,7 @@ describe('Implicit organization resources', () => {
     }
     const removed = await assignInOrganization('removed');
     const retained = await assignInOrganization('retained');
-    expect((await req(`/organizations/${removed.org.id}`, { method: 'DELETE' })).status).toBe(204);
+    expect((await req(`/organizations/${removed.org.id}`, { method: 'DELETE' })).status).toBe(202);
     // Deleted memberships cannot be queried through the API; inspect storage to detect orphan grants.
     const assignments = getWorkOSStore(server.store).roleAssignments;
     expect(assignments.get(removed.grants[0])).toBeUndefined();
@@ -437,7 +437,7 @@ describe('Implicit organization resources', () => {
         }),
       }),
     );
-    expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(204);
+    expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(202);
     expect((await req(rootPath(org))).status).toBe(404);
     expect((await req(`/authorization/resources/${child.id}`)).status).toBe(404);
     expect((await req(rootPath(other))).status).toBe(200);
@@ -505,11 +505,11 @@ describe('Implicit organization resources', () => {
     const deleteMembership = await req(`/user_management/organization_memberships/${byMembership.membership.id}`, {
       method: 'DELETE',
     });
-    expect(deleteMembership.status).toBe(204);
+    expect(deleteMembership.status).toBe(200);
     for (const id of byMembership.ids) expect(assignments.get(id)).toBeUndefined();
     for (const id of byUser.ids) expect(assignments.get(id)).toBeDefined();
 
-    expect((await req('/user_management/users/user_user_delete', { method: 'DELETE' })).status).toBe(204);
+    expect((await req('/user_management/users/user_user_delete', { method: 'DELETE' })).status).toBe(200);
     for (const id of byUser.ids) expect(assignments.get(id)).toBeUndefined();
     // Membership-level cleanup leaves the organization and its root alone.
     expect((await req(rootPath(org))).status).toBe(200);

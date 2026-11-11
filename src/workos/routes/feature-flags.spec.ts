@@ -333,7 +333,7 @@ describe('Feature Flags routes', () => {
       const user = seedUser();
       await req(`/feature-flags/beta/targets/${user.id}`, { method: 'POST' });
 
-      expect((await req(`/user_management/users/${user.id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(`/user_management/users/${user.id}`, { method: 'DELETE' })).status).toBe(200);
       expect(getWorkOSStore(store).flagTargets.all()).toEqual([]);
       const body = await json(await req('/sdk/feature-flags'));
       expect(body.beta.targets.users).toEqual([]);
@@ -344,7 +344,7 @@ describe('Feature Flags routes', () => {
       const org = seedOrg();
       await req(`/feature-flags/beta/targets/${org.id}`, { method: 'POST' });
 
-      expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await req(`/organizations/${org.id}`, { method: 'DELETE' })).status).toBe(202);
       expect(getWorkOSStore(store).flagTargets.all()).toEqual([]);
     });
   });

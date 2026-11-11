@@ -10,6 +10,8 @@ emulator knowingly differs. Which routes exist is in SUPPORTED.md; how data gets
 
 `external_id` is unique across organizations: `400 external_id_already_used` on create and update.
 
+`DELETE /organizations/{id}` answers `202` with the text body `Accepted`, as production does when it queues the deletion; the emulator has removed the organization by the time it answers.
+
 ### Domains
 
 Domains are stored lowercased and validated as production does: a `domain_data` entry needs a
@@ -36,6 +38,8 @@ hooks.
 ## User Management
 
 The email-change confirm and send endpoints and the waitlist endpoints are not implemented.
+
+`DELETE /user_management/users/{id}` answers an empty `200`, as production does, not a `204`.
 
 `PUT /user_management/users/{id}` applies `email` — a malformed address is `400 invalid_email`, one another user holds is `400 email_not_available`, and a changed address is unverified until something verifies it; an email-verification code sent to the old address is a `404`, since production checks a code against the factor of the user's current address, which has no challenge yet — and refuses `email_verified: false` on a verified user with `400 email_already_verified`. An `external_id` another user holds is `400 external_id_already_used` on update, and on create a `400 user_creation_error` carrying `external_id_already_used`.
 
@@ -190,7 +194,7 @@ Messages name the email for Magic Auth and email verification (`One-time code fo
 
 ## Organization Memberships
 
-`POST` and `PUT /user_management/organization_memberships` answer a `role_slug` (or any of `role_slugs`) that names no role with `422 invalid_role`. A slug resolves to a role of that organization or of the environment; `member` and `admin` always resolve, since production creates both with every environment, so they need no seeding. `GET /user_management/organization_memberships` wants an `organization_id` or a `user_id` (`400 missing_user_id_or_organization_id`). `DELETE /user_management/organization_memberships/:id` refuses a membership that reports `directory_managed` with `422 organization_membership_directory_managed`: Directory Sync removes it when the user leaves the directory.
+`POST` and `PUT /user_management/organization_memberships` answer a `role_slug` (or any of `role_slugs`) that names no role with `422 invalid_role`. A slug resolves to a role of that organization or of the environment; `member` and `admin` always resolve, since production creates both with every environment, so they need no seeding. `GET /user_management/organization_memberships` wants an `organization_id` or a `user_id` (`400 missing_user_id_or_organization_id`). `DELETE /user_management/organization_memberships/:id` refuses a membership that reports `directory_managed` with `422 organization_membership_directory_managed`: Directory Sync removes it when the user leaves the directory. Any other membership is deleted with an empty `200`, as production answers, not a `204`.
 
 One assumption runs through the membership and invitation routes: multiple roles are enabled for the environment, so `role_slugs` is accepted wherever production accepts it with that setting on, and `multiple_roles_not_enabled` is never answered.
 
@@ -239,7 +243,8 @@ Read-only over HTTP, as production is: a directory is connected in the dashboard
 `POST` route to emulate, and the seed file is the only way to get one
 ([seeding.md](seeding.md#directory-sync)). A seeded directory's group-to-role mappings are resolved
 onto the organization memberships, which then report `directory_managed`, and an organization holds
-one directory, as it holds one SSO connection. `DELETE /directories/:id` emits a delivered
+one directory, as it holds one SSO connection. `DELETE /directories/:id` answers `202`
+with the text body `Accepted`, as production does when it queues the deletion, and emits a delivered
 `dsync.deleted` — except for an `unlinked` directory with no groups, which production deletes
 silently. Removing a user from a group emits `dsync.group.user_removed`.
 
