@@ -355,9 +355,6 @@ const CASES: ReadonlyArray<{ objectType: string; output: Record<string, unknown>
  * gap between the emulator's data model and the current spec — not noise.
  */
 const KNOWN_MISSING_REQUIRED: Record<string, readonly string[]> = {
-  // Spec models a connection `status` distinct from `state`; the emulator's
-  // WorkOSConnection carries only `state`.
-  connection: ['status'],
   // `NewConnectApplicationSecret` is the creation shape, and the plaintext it requires is
   // returned exactly once — the create route appends it to this formatter's output. Every
   // later read serves the secretless inline shape the spec gives the list route, which is

@@ -338,6 +338,37 @@ describe('Connection routes', () => {
     expect((await json(res)).name).toBe('Get Me');
   });
 
+  // The spec requires `status` beside `state`, and generated SDKs read it unconditionally:
+  // workos-php's `Connection::fromArray()` throws a TypeError on a connection without it.
+  it('reports the deprecated status beside the state, in responses and events', async () => {
+    seedFromConfig(store, 'http://localhost:0', {
+      organizations: [{ name: 'Active Org' }, { name: 'Inactive Org' }, { name: 'Validating Org' }],
+      connections: [
+        { name: 'Active SSO', organization: 'Active Org' },
+        { name: 'Inactive SSO', organization: 'Inactive Org', state: 'inactive' },
+        { name: 'Validating SSO', organization: 'Validating Org', state: 'validating' },
+      ],
+    });
+
+    const list = await json(await req('/connections'));
+    expect(Object.fromEntries(list.data.map((c: any) => [c.state, c.status]))).toEqual({
+      active: 'linked',
+      inactive: 'unlinked',
+      validating: 'unlinked',
+    });
+
+    const created = await json(
+      await create({ organization_id: (await createOrg('New Org')).id, saml_options: SAML_OPTIONS }),
+    );
+    expect(created.status).toBe('unlinked');
+    expect((await json(await req(`/connections/${created.id}`))).status).toBe('unlinked');
+
+    const activated = getWorkOSStore(store)
+      .events.all()
+      .find((e) => e.event === 'connection.activated');
+    expect(activated?.data).toMatchObject({ status: 'linked' });
+  });
+
   it('deletes a connection', async () => {
     const org = await createOrg('Del Org');
     const conn = await json(await create({ name: 'Del Conn', organization_id: org.id, saml_options: SAML_OPTIONS }));
