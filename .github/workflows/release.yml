@@ -301,7 +301,7 @@ jobs:
           IMAGE="ghcr.io/workos/emulate"
           echo "tags=${IMAGE}:${VERSION},${IMAGE}:${CHANNEL},${IMAGE}:sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -374,7 +374,7 @@ jobs:
 
       - name: Generate a tap-scoped token
         id: tap-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.SDK_BOT_APP_ID }}
           private-key: ${{ secrets.SDK_BOT_PRIVATE_KEY }}
