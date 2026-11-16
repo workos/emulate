@@ -54,7 +54,7 @@ RUN --mount=type=secret,id=sfw_bunfig,target=/run/secrets/.bunfig.toml \
     bun install --frozen-lockfile --production --ignore-scripts
 
 # Runtime stage: minimal Node image with only what the emulator needs.
-FROM node:22-alpine
+FROM node:22.23.5-alpine
 LABEL org.opencontainers.image.source="https://github.com/workos/emulate"
 LABEL org.opencontainers.image.title="WorkOS Emulate"
 LABEL org.opencontainers.image.description="Local WorkOS API emulator for tests and development"
