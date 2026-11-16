@@ -71,3 +71,25 @@ code:
 
 The prose around the table is hand-written: edit it here, and edit a feature's notes in
 `docs/behavior.md`.
+
+## How parity is checked
+
+The table says which routes exist. Three checks say whether they behave:
+
+- **Every test, against the spec.** The suite validates each request and response the emulator
+  handles against the OpenAPI spec (`test/spec-conformance/`): response bodies against their
+  schemas, accepted request bodies against theirs, query parameters against the documented list,
+  and status codes against the documented set. A finding not already in
+  `test/spec-conformance/baseline.txt` fails the test that produced it. The baseline is the list of
+  known gaps; it only shrinks on purpose.
+- **Nightly, against production.** `scripts/parity.mjs` runs the same requests against a WorkOS
+  environment and the emulator and diffs the normalized responses, for the behavior the spec does
+  not express: ordering, error bodies, which fields come back null. It needs a
+  `WORKOS_PARITY_API_KEY` secret; without one the workflow proves the harness, emulator against
+  emulator.
+- **Nightly, across SDK majors.** `scripts/sdk-smoke-node.mjs` and `scripts/sdk-smoke-python.py`
+  drive the emulator through each supported major of the official SDKs plus the latest release, so
+  a release that changes what the SDK sends or can read fails here before a user reports it.
+
+A spec bump arrives as its own Renovate PR, and CI's codegen check makes that PR carry every
+catalog and conformance change the new spec implies.

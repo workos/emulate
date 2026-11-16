@@ -1,0 +1,113 @@
+name: SDK compatibility
+
+# Drives the emulator through each supported major of the official SDKs, plus whatever is
+# latest, so an SDK release that changes what it sends or what it can read fails here before a
+# user reports it. CI's own smoke test pins the SDK the repo develops against; this is the
+# nightly sweep across the rest.
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/sdk-smoke-node.mjs
+      - scripts/sdk-smoke-python.py
+      - .github/workflows/sdk-matrix.yml
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: '@workos-inc/node ${{ matrix.sdk }}'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['10', '11', '12', 'latest']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Socket Firewall
+        uses: workos/setup-socket-firewall@ca93dd8aa351f54f4729fe3377a9be23c631c25d
+        with:
+          token: ${{ secrets.PUBLIC_SOCKET_FIREWALL_TOKEN }}
+          allow-external-fork-fallback: true
+          configure-bun: true
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Install the SDK under test
+        env:
+          SDK: ${{ matrix.sdk }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sdk"
+          cd "$RUNNER_TEMP/sdk"
+          printf '{ "name": "sdk-under-test", "private": true }\n' > package.json
+          bun add "@workos-inc/node@$SDK"
+
+      - name: SDK smoke test
+        run: node scripts/sdk-smoke-node.mjs "$RUNNER_TEMP/sdk"
+
+  python:
+    name: 'workos-python ${{ matrix.sdk }}'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: '10'
+            requirement: 'workos==10.*'
+          - sdk: latest
+            requirement: workos
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Socket Firewall
+        uses: workos/setup-socket-firewall@ca93dd8aa351f54f4729fe3377a9be23c631c25d
+        with:
+          token: ${{ secrets.PUBLIC_SOCKET_FIREWALL_TOKEN }}
+          allow-external-fork-fallback: true
+          configure-bun: true
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Install the SDK under test
+        env:
+          REQUIREMENT: ${{ matrix.requirement }}
+        run: pip install "$REQUIREMENT"
+
+      - name: SDK smoke test
+        run: python scripts/sdk-smoke-python.py

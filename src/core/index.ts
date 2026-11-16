@@ -17,6 +17,7 @@ export {
 } from './pagination.js';
 export { JWTManager, type JWTPayload, type SigningKeyOptions } from './jwt.js';
 export { createServer, type ServerOptions } from './server.js';
+export { setExchangeInspector, type Exchange, type ExchangeInspector } from './inspector.js';
 export { type ServicePlugin, type RouteContext } from './plugin.js';
 export {
   type ApiErrorItem,

@@ -1,4 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>workos/renovate-config:public"]
+  "extends": ["github>workos/renovate-config:public"],
+  "packageRules": [
+    {
+      "description": "A spec bump is a parity event, not a dependency chore: keep it out of the grouped minor/patch PR, open it as soon as it exists, and leave the merge to a person, since CI's codegen check makes the PR carry every catalog and conformance change the new spec implies.",
+      "matchPackageNames": ["@workos/openapi-spec"],
+      "groupName": "openapi-spec",
+      "groupSlug": "openapi-spec",
+      "schedule": ["at any time"],
+      "automerge": false
+    }
+  ]
 }

@@ -5,6 +5,7 @@ import { JWTManager, type SigningKeyOptions } from './jwt.js';
 import { createApiErrorHandler, requestIdMiddleware } from './middleware/error-handler.js';
 import { authMiddleware, widgetAuthMiddleware, type ApiKeyMap, type WorkOSAppEnv } from './middleware/auth.js';
 import { errorHooksMiddleware } from './error-hooks.js';
+import { exchangeInspectorMiddleware } from './inspector.js';
 import type { ServicePlugin, RouteContext } from './plugin.js';
 
 export interface ServerOptions {
@@ -62,6 +63,8 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
   app.onError(createApiErrorHandler());
   app.use('*', cors());
   app.use('*', requestIdMiddleware());
+  // A no-op unless an inspector is registered; see setExchangeInspector.
+  app.use('*', exchangeInspectorMiddleware());
 
   // JWKS endpoint (public, no auth)
   app.get('/sso/jwks/:client_id', (c) => {

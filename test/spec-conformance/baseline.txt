@@ -1,0 +1,178 @@
+# Known gaps between the emulator and the OpenAPI spec, one finding per line.
+# Format: <METHOD> <path template> <status> <response|status|query|request> <detail>
+# Regenerate from a clean run with `SPEC_CONFORMANCE=baseline bun test`; see preload.ts.
+DELETE /authorization/resources/{resource_id} 400 response /code const: must be equal to constant
+DELETE /directories/{id} 204 status undocumented
+DELETE /organizations/{id} 204 status undocumented
+DELETE /user_management/organization_memberships/{id} 204 status undocumented
+DELETE /user_management/users/{id} 204 status undocumented
+DELETE /user_management/users/{user_id}/connected_accounts/{slug} 409 response /code const: must be equal to constant
+GET /agents/blueprints 200 response /data/[] required: invocable_as
+GET /agents/blueprints/{agent_blueprint_id} 200 response / required: invocable_as
+GET /audit_logs/actions 200 response /data/[] required: schema
+GET /authorization/organization_memberships/{organization_membership_id}/role_assignments 200 response /data/[]/resource/external_id type: string
+GET /authorization/organization_memberships/{organization_membership_id}/role_assignments 200 response /data/[]/resource/id type: string
+GET /authorization/organization_memberships/{organization_membership_id}/role_assignments 200 response /data/[]/resource/resource_type_slug type: string
+GET /connections 200 response /data/[] required: status
+GET /connections/{id} 200 response / required: status
+GET /directories 200 response /data/[type=generic scim v2.0]/domain type: string
+GET /directory_users 200 response /data/[]/groups/[] required: created_at
+GET /directory_users 200 response /data/[]/groups/[] required: directory_id
+GET /directory_users 200 response /data/[]/groups/[] required: idp_id
+GET /directory_users 200 response /data/[]/groups/[] required: organization_id
+GET /directory_users 200 response /data/[]/groups/[] required: updated_at
+GET /directory_users 200 response /data/[]/role type: object
+GET /directory_users/{id} 200 response /groups/[] required: created_at
+GET /directory_users/{id} 200 response /groups/[] required: directory_id
+GET /directory_users/{id} 200 response /groups/[] required: idp_id
+GET /directory_users/{id} 200 response /groups/[] required: organization_id
+GET /directory_users/{id} 200 response /groups/[] required: updated_at
+GET /directory_users/{id} 200 response /role type: object
+GET /events 200 response /data/[event=dsync.activated]/data required: created_at
+GET /events 200 response /data/[event=dsync.activated]/data required: domains
+GET /events 200 response /data/[event=dsync.activated]/data required: external_key
+GET /events 200 response /data/[event=dsync.activated]/data required: id
+GET /events 200 response /data/[event=dsync.activated]/data required: name
+GET /events 200 response /data/[event=dsync.activated]/data required: object
+GET /events 200 response /data/[event=dsync.activated]/data required: state
+GET /events 200 response /data/[event=dsync.activated]/data required: type
+GET /events 200 response /data/[event=dsync.activated]/data required: updated_at
+GET /events 200 response /data/[event=dsync.group.user_added]/data/user/role type: object
+GET /events 200 response /data/[event=dsync.group.user_removed]/data/user/role type: object
+GET /events 200 response /data/[event=dsync.user.created]/data required: created_at
+GET /events 200 response /data/[event=dsync.user.created]/data required: custom_attributes
+GET /events 200 response /data/[event=dsync.user.created]/data required: directory_id
+GET /events 200 response /data/[event=dsync.user.created]/data required: email
+GET /events 200 response /data/[event=dsync.user.created]/data required: id
+GET /events 200 response /data/[event=dsync.user.created]/data required: idp_id
+GET /events 200 response /data/[event=dsync.user.created]/data required: object
+GET /events 200 response /data/[event=dsync.user.created]/data required: raw_attributes
+GET /events 200 response /data/[event=dsync.user.created]/data required: state
+GET /events 200 response /data/[event=dsync.user.created]/data required: updated_at
+GET /events 200 response /data/[event=dsync.user.created]/data/role type: object
+GET /events 200 response /data/[event=organization.created]/data required: created_at
+GET /events 200 response /data/[event=organization.created]/data required: domains
+GET /events 200 response /data/[event=organization.created]/data required: external_id
+GET /events 200 response /data/[event=organization.created]/data required: metadata
+GET /events 200 response /data/[event=organization.created]/data required: name
+GET /events 200 response /data/[event=organization.created]/data required: object
+GET /events 200 response /data/[event=organization.created]/data required: updated_at
+GET /events 200 response /data/[event=user.created]/data required: created_at
+GET /events 200 response /data/[event=user.created]/data required: email
+GET /events 200 response /data/[event=user.created]/data required: email_verified
+GET /events 200 response /data/[event=user.created]/data required: external_id
+GET /events 200 response /data/[event=user.created]/data required: first_name
+GET /events 200 response /data/[event=user.created]/data required: id
+GET /events 200 response /data/[event=user.created]/data required: last_name
+GET /events 200 response /data/[event=user.created]/data required: last_sign_in_at
+GET /events 200 response /data/[event=user.created]/data required: object
+GET /events 200 response /data/[event=user.created]/data required: profile_picture_url
+GET /events 200 response /data/[event=user.created]/data required: updated_at
+GET /events 200 response /data/[event=user.updated]/data required: created_at
+GET /events 200 response /data/[event=user.updated]/data required: email
+GET /events 200 response /data/[event=user.updated]/data required: email_verified
+GET /events 200 response /data/[event=user.updated]/data required: external_id
+GET /events 200 response /data/[event=user.updated]/data required: first_name
+GET /events 200 response /data/[event=user.updated]/data required: id
+GET /events 200 response /data/[event=user.updated]/data required: last_name
+GET /events 200 response /data/[event=user.updated]/data required: last_sign_in_at
+GET /events 200 response /data/[event=user.updated]/data required: object
+GET /events 200 response /data/[event=user.updated]/data required: profile_picture_url
+GET /events 200 response /data/[event=user.updated]/data required: updated_at
+GET /organizations/{id}/audit_log_configuration 200 response / required: retention_period_in_days
+GET /organizations/{id}/audit_log_configuration 200 response / required: state
+GET /organizations/{id}/audit_logs_retention 200 response / required: retention_period_in_days
+GET /organizations/{organizationId}/api_keys 200 response /data/[]/owner/type const: must be equal to constant
+GET /organizations/{organization_id}/authorized_applications 200 response /data/[] required: application
+GET /organizations/{organization_id}/authorized_applications 200 response /data/[] required: granted_scopes
+GET /organizations/{organization_id}/authorized_applications 200 response /data/[]/object const: must be equal to constant
+GET /organizations/{organization_id}/it_contacts 200 query limit undocumented
+GET /sso/authorize 200 response / no JSON body
+GET /sso/authorize 400 status undocumented
+GET /sso/authorize 404 status undocumented
+GET /sso/jwks/{clientId} 200 response /keys/[] required: x5c
+GET /sso/jwks/{clientId} 200 response /keys/[] required: x5t#S256
+GET /sso/logout 400 status undocumented
+GET /user_management/authorize 200 query connect_request undocumented
+GET /user_management/authorize 400 status undocumented
+GET /user_management/sessions/logout 400 status undocumented
+GET /user_management/users/{user_id}/authorized_applications 200 response /data/[] required: application
+GET /user_management/users/{user_id}/authorized_applications 200 response /data/[] required: granted_scopes
+GET /user_management/users/{user_id}/authorized_applications 200 response /data/[]/object const: must be equal to constant
+GET /user_management/users/{user_id}/connected_accounts/{slug} 409 response /code const: must be equal to constant
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: connected_account
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: connected_accounts
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: connection_owner
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: createdAt
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: credentialsType
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: credentials_type
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: description
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: integrationType
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: integration_type
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: name
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: ownership
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: slug
+GET /user_management/users/{user_id}/data_providers 200 response /data/[] required: updatedAt
+GET /user_management/users/{user_id}/data_providers 200 response /data/[]/object const: must be equal to constant
+PATCH /agents/blueprints/{agent_blueprint_id} 200 response / required: invocable_as
+PATCH /authorization/roles/{slug} 200 request /name type: string
+PATCH /organizations/{organizationId}/groups/{groupId} 409 status undocumented
+POST /agents/blueprints 201 response / required: invocable_as
+POST /audit_logs/actions/{actionName}/schemas 201 request / required: targets
+POST /audit_logs/actions/{actionName}/schemas 201 response / required: targets
+POST /audit_logs/actions/{actionName}/schemas 201 response / required: version
+POST /audit_logs/actions/{actionName}/schemas 201 response /object const: must be equal to constant
+POST /audit_logs/exports 201 request / required: range_end
+POST /audit_logs/exports 201 request / required: range_start
+POST /authorization/groups/{group_id}/role_assignments 201 request /resource_id type: string
+POST /authorization/organization_memberships/{organization_membership_id}/check 200 request / oneOf: must match exactly one schema in oneOf
+POST /authorization/organization_memberships/{organization_membership_id}/check 200 request / required: permission_slug
+POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 request / oneOf: must match exactly one schema in oneOf
+POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 request / required: role_slug
+POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 response /resource/external_id type: string
+POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 response /resource/id type: string
+POST /authorization/organization_memberships/{organization_membership_id}/role_assignments 201 response /resource/resource_type_slug type: string
+POST /connect/applications 201 request / discriminator: application_type=undefined not documented
+POST /connections 201 response / required: status
+POST /connections 400 response / discriminator: code="connection_already_exists_for_organization" not documented
+POST /data-integrations/{slug}/authorize 200 request / oneOf: must match exactly one schema in oneOf
+POST /data-integrations/{slug}/token 200 request / required: user_id
+POST /data-integrations/{slug}/token 200 request /organization_id type: string
+POST /data-integrations/{slug}/token 200 response / oneOf: must match exactly one schema in oneOf
+POST /data-integrations/{slug}/token 409 response /code const: must be equal to constant
+POST /organization_domains 404 status undocumented
+POST /organization_domains 422 status undocumented
+POST /organization_domains/{id}/verify 404 status undocumented
+POST /organizations/{organizationId}/groups 409 status undocumented
+POST /organizations/{organization_id}/connected_accounts/{slug} 422 response / oneOf: must match exactly one schema in oneOf
+POST /organizations/{organization_id}/it_contacts 201 request /email format: must match format "email"
+POST /portal/generate_link 201 request /intent enum
+POST /radar/lists/{type}/{action} 200 request / required: entry
+POST /radar/lists/{type}/{action} 200 response / required: message
+POST /sso/token 400 response / discriminator: error="invalid_request" not documented
+POST /user_management/authenticate 200 request / required: client_id
+POST /user_management/authenticate 200 request / required: client_secret
+POST /user_management/authenticate 200 response /organization_id type: string
+POST /user_management/authenticate 400 response / oneOf: must match exactly one schema in oneOf
+POST /user_management/authenticate 422 response /code const: must be equal to constant
+POST /user_management/invitations 201 request /email format: must match format "email"
+POST /user_management/invitations 201 request /organization_id type: string
+POST /user_management/invitations 422 response /code const: must be equal to constant
+POST /user_management/magic_auth 201 request /email format: must match format "email"
+POST /user_management/magic_auth 400 response / oneOf: must match exactly one schema in oneOf
+POST /user_management/organization_memberships 422 response / discriminator: code="unprocessable_entity" not documented
+POST /user_management/password_reset 201 request /email format: must match format "email"
+POST /user_management/password_reset 400 status undocumented
+POST /user_management/redirect_uris 201 response / required: default
+POST /user_management/users 422 response /code const: must be equal to constant
+POST /user_management/users/{id}/email_verification/confirm 400 response / discriminator: code="email_verification_too_many_attempts" not documented
+POST /user_management/users/{id}/email_verification/send 201 status undocumented
+POST /user_management/users/{user_id}/connected_accounts/{slug} 422 response / oneOf: must match exactly one schema in oneOf
+POST /user_management/users/{userlandUserId}/auth_factors 404 status undocumented
+POST /widgets/token 201 request /scopes type: array
+POST /widgets/token 201 request /scopes/[] enum
+PUT /connect/applications/{id} 200 request /redirect_uris/[] type: object
+PUT /user_management/jwt_template 422 response /code const: must be equal to constant
+PUT /user_management/users/{user_id}/connected_accounts/{slug} 409 response /code const: must be equal to constant
+PUT /user_management/users/{user_id}/connected_accounts/{slug} 422 response / discriminator: code="unprocessable_entity" not documented
+PUT /vault/v1/kv/{id} 404 status undocumented
