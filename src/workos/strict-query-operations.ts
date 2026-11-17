@@ -196,6 +196,10 @@ export const QUERY_PARAMETER_OVERRIDES: Partial<
   // `ConnectionListQueryParams.external_id` is validated (`@IsOptional() @IsString()
   // @IsNotEmpty()`) but hidden from the spec with `@ApiHideProperty()`.
   'GET /connections': { add: ['external_id'] },
+  // `ListEventOptionsDto` omits `order` and `before` from the pagination options, then declares
+  // them again under `@ApiHideProperty()`: neither has any effect, but the generated SDKs send
+  // `order` on every request, so the pipe still has to let both through.
+  'GET /events': { add: ['order', 'before'] },
 };
 
 /** The table above as rules for `strictQueryMiddleware`, each with the parameters it accepts. */

@@ -41,7 +41,6 @@ const NO_SPEC_ID_EXAMPLE: Record<string, string> = {
   device_authorization: 'The device grant is addressed by `device_code`/`user_code`; the record is emulator-internal.',
   external_auth_session:
     'Not an object in the spec, but its `external_auth_id` example is `ext_auth_…`, which this matches.',
-  flag_target: 'Targets are inline on the flag (Flag.targets); there is no standalone target resource.',
   group_membership: 'Membership appears only as CreateGroupMembershipDto — no resource, so no id.',
   identity: '/user_management/users/{id}/identities returns objects keyed by `idp_id`, with no `id` at all.',
   pipe_connection: 'Emulator-internal: the Pipes connection record behind a connected account.',
