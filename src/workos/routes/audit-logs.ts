@@ -7,11 +7,17 @@ import {
   parseJsonBody,
   validationError,
   parseListParams,
+  cursorPaginate,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatAuditLogAction, formatAuditLogExport, formatListResponse } from '../helpers.js';
+import { formatAuditLogAction, formatAuditLogExport, formatAuditLogSchema, formatListResponse } from '../helpers.js';
 import { STORE_KEY_PREFIXES } from '../constants.js';
-import type { WorkOSAuditLogEventActor, WorkOSAuditLogEventContext, WorkOSAuditLogEventTarget } from '../entities.js';
+import type {
+  WorkOSAuditLogEventActor,
+  WorkOSAuditLogEventContext,
+  WorkOSAuditLogEventTarget,
+  WorkOSAuditLogSchema,
+} from '../entities.js';
 
 /** Production's `DEFAULT_EVENT_VERSION` (packages/api/src/audit-log-events/constants.ts). */
 const DEFAULT_EVENT_VERSION = 1;
@@ -152,27 +158,56 @@ export function auditLogRoutes(ctx: RouteContext): void {
     return c.json(formatListResponse(result, formatAuditLogAction));
   });
 
-  // Create/update action schema
+  const schemaVersions = (actionName: string): WorkOSAuditLogSchema[] => {
+    const stored = store.getData<WorkOSAuditLogSchema[]>(`${STORE_KEY_PREFIXES.auditSchema}${actionName}`);
+    return Array.isArray(stored) ? stored : [];
+  };
+
+  /**
+   * Create a schema. Production answers `201` with the created `audit_log_schema`, not the
+   * action, and creates the action first when it does not exist. Every create adds the next
+   * version of the action's schema.
+   */
   app.post('/audit_logs/actions/:actionName/schemas', async (c) => {
     const actionName = c.req.param('actionName');
     const body = await parseJsonBody(c);
 
-    // Upsert: find existing action or create new one
-    let action = ws.auditLogActions.findOneBy('name', actionName);
-    if (action) {
-      // Store schema in store data keyed by action name
-      store.setData(`${STORE_KEY_PREFIXES.auditSchema}${actionName}`, body);
-      return c.json(formatAuditLogAction(action));
+    if (!ws.auditLogActions.findOneBy('name', actionName)) {
+      ws.auditLogActions.insert({
+        object: 'audit_log_action',
+        name: actionName,
+        description: null,
+        condition: null,
+      });
     }
 
-    action = ws.auditLogActions.insert({
-      object: 'audit_log_action',
-      name: actionName,
-      description: null,
-      condition: null,
+    const versions = schemaVersions(actionName);
+    const now = new Date().toISOString();
+    const schema: WorkOSAuditLogSchema = {
+      id: generateUlid(),
+      version: versions.length + 1,
+      ...(isObject(body.actor) && { actor: body.actor }),
+      targets: Array.isArray(body.targets) ? body.targets : [],
+      ...(isObject(body.metadata) && { metadata: body.metadata }),
+      created_at: now,
+      updated_at: now,
+    };
+    store.setData(`${STORE_KEY_PREFIXES.auditSchema}${actionName}`, [...versions, schema]);
+    return c.json(formatAuditLogSchema(schema), 201);
+  });
+
+  // List an action's schema versions
+  app.get('/audit_logs/actions/:actionName/schemas', (c) => {
+    const actionName = c.req.param('actionName');
+    if (!ws.auditLogActions.findOneBy('name', actionName)) throw notFound('Audit Log Action', actionName);
+
+    const params = parseListParams(new URL(c.req.url));
+    // cursorPaginate sorts in place, so hand it a copy of the stored versions
+    const result = cursorPaginate([...schemaVersions(actionName)], {
+      ...params,
+      sort: (a, b) => (params.order === 'asc' ? a.version - b.version : b.version - a.version),
     });
-    store.setData(`${STORE_KEY_PREFIXES.auditSchema}${actionName}`, body);
-    return c.json(formatAuditLogAction(action), 201);
+    return c.json(formatListResponse(result, formatAuditLogSchema));
   });
 
   /**
