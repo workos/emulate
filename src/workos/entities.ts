@@ -641,6 +641,18 @@ export interface WorkOSAuditLogAction extends Entity {
   condition: string | null;
 }
 
+/**
+ * One version of an action's schema, as `POST /audit_logs/actions/:actionName/schemas` stores
+ * it. Every create adds the next version. Kept in store data per action, not a collection: the
+ * spec's `AuditLogSchemaJson` has no `id`, so `id` is internal and only serves as a list cursor.
+ */
+export interface WorkOSAuditLogSchema extends Entity {
+  version: number;
+  actor?: Record<string, unknown>;
+  targets: Record<string, unknown>[];
+  metadata?: Record<string, unknown>;
+}
+
 /** The `actor` of an ingested event, as `AuditLogEventActorDto` takes it. */
 export interface WorkOSAuditLogEventActor {
   id: string;

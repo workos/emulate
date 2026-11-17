@@ -345,8 +345,13 @@ and external ID. The earlier `PUT`-by-ID endpoint remains available.
 ## Audit Logs
 
 Events are ingested with production's `{organization_id, event}` body, validated the way its DTO
-validates them, and stored under their idempotency key. No action schemas are registered, so any
-action, target type and metadata are accepted. Export generation is not implemented.
+validates them, and stored under their idempotency key. Export generation is not implemented.
+
+`POST /audit_logs/actions/:actionName/schemas` answers `201` with the created `audit_log_schema`,
+creating the action first when it does not exist; every create adds the next `version`.
+`GET /audit_logs/actions/:actionName/schemas` lists an action's versions, newest first, and is a
+`404` for an unknown action. Ingested events are not checked against these schemas, so any
+action, target type and metadata are accepted.
 
 ## Vault
 

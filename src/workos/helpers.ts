@@ -62,6 +62,7 @@ import type {
   WorkOSDirectoryUser,
   WorkOSDirectoryGroup,
   WorkOSAuditLogAction,
+  WorkOSAuditLogSchema,
   WorkOSAuditLogExport,
   WorkOSFeatureFlag,
   WorkOSConnectApplication,
@@ -1704,6 +1705,18 @@ export function formatDirectoryGroup(g: WorkOSDirectoryGroup): Record<string, un
 
 export function formatAuditLogAction(a: WorkOSAuditLogAction): Record<string, unknown> {
   return formatEntity(a);
+}
+
+/** The spec's `AuditLogSchemaJson`: `actor` and `metadata` only when the schema defines them. */
+export function formatAuditLogSchema(s: WorkOSAuditLogSchema): Record<string, unknown> {
+  return {
+    object: 'audit_log_schema',
+    version: s.version,
+    ...(s.actor !== undefined && { actor: s.actor }),
+    targets: s.targets,
+    ...(s.metadata !== undefined && { metadata: s.metadata }),
+    created_at: s.created_at,
+  };
 }
 
 export function formatAuditLogExport(ex: WorkOSAuditLogExport): Record<string, unknown> {
