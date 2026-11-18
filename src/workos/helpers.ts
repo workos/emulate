@@ -168,6 +168,9 @@ export function formatMembership(m: WorkOSOrganizationMembership, ws: WorkOSStor
   const roles = membershipRoleSlugs(ws, m).map((slug) => ({ slug }));
   return {
     ...formatEntity(m),
+    // Production names the organization on REST memberships (the SDK maps it to
+    // `organizationName`); the event and group-member shapes do not carry it.
+    organization_name: ws.organizations.get(m.organization_id)?.name,
     role: roles[0],
     roles,
     directory_managed: m.directory_managed ?? false,
