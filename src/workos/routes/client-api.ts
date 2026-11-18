@@ -6,7 +6,7 @@ import { getWorkOSStore } from '../store.js';
  * but says nothing about the claims inside, so this is an emulator convention: it keeps a Client
  * API token distinguishable from the session and widget tokens the same key signs.
  */
-const CLIENT_API_TOKEN_AUDIENCE = 'client';
+export const CLIENT_API_TOKEN_AUDIENCE = 'client';
 
 /** The spec calls the token "short-lived"; five minutes is the shortest plausible reading. */
 const CLIENT_API_TOKEN_TTL_SECONDS = 300;
@@ -15,8 +15,8 @@ export function clientApiRoutes(ctx: RouteContext): void {
   const { app, jwt, store } = ctx;
   const ws = getWorkOSStore(store);
 
-  // The emulator does not serve the Client GraphQL API, so the token is mintable and verifiable
-  // against JWKS but has nothing to authenticate against.
+  // The token authenticates `POST /client/graphql` (see client-graphql.ts) alongside the widget
+  // token and an AuthKit access token, as production's Client API guard accepts all three.
   app.post('/client/token', async (c) => {
     const body = await parseJsonBody(c);
     const organizationId = body.organization_id;
@@ -30,11 +30,18 @@ export function clientApiRoutes(ctx: RouteContext): void {
     }
 
     // The token names both principals, so a dangling id would mint a credential scoped to
-    // something that cannot be looked up. `/widgets/token` skips this check; the spec
-    // documents 404 on this route, so it is answered here. Membership is deliberately not
-    // checked: pairing any user with any organization is how a test sets up a scenario.
+    // something that cannot be looked up; the spec documents 404 on this route.
     if (!ws.organizations.get(organizationId)) throw notFound('Organization', organizationId);
     if (!ws.users.get(userId)) throw notFound('User', userId);
+
+    // Production mints this token through its widget-session issuer, which refuses a user who
+    // holds no *active* membership in the organization — a 404 naming the membership, as
+    // `/widgets/token` answers it. `/client/graphql` re-checks the same membership on every
+    // request, so a token minted without one could never authenticate there.
+    const isMember = ws.organizationMemberships
+      .findBy('organization_id', organizationId)
+      .some((m) => m.user_id === userId && m.status === 'active');
+    if (!isMember) throw notFound('UserOrganizationMembership', organizationId);
 
     const token = jwt.sign(
       { sub: userId, org_id: organizationId, aud: CLIENT_API_TOKEN_AUDIENCE },
