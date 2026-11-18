@@ -330,8 +330,9 @@ Native AuthKit groups can receive scoped roles through
 one by ID or remove by role and resource criteria. Omitting the resource targets the
 organization's own resource. Direct role assignments also support criteria removal through
 `DELETE /authorization/organization_memberships/{id}/role_assignments`. Duplicate group
-assignments return `409` with code `duplicate_group_role_assignment`; an unknown role slug is a
-`404`, as is group criteria removal that matches nothing; roles and resources from another
+assignments return `409` with code `duplicate_group_role_assignment`, while a repeated direct
+assignment (same membership, role and resource) answers `201` with the assignment already held, as
+production does; an unknown role slug is a `404`, as is group criteria removal that matches nothing; roles and resources from another
 organization are rejected. Permission checks, effective-permission lists, and accessible-resource discovery resolve
 current group membership and include grants on resource ancestors. Removing a member or group
 revokes its derived access immediately. Membership and resource assignment lists expose inherited
