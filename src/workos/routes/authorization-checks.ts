@@ -6,6 +6,7 @@ import {
   cursorPaginate,
   notFound,
   validationError,
+  validationFailed,
   parseJsonBody,
   parseListParams,
   ID_PREFIXES,
@@ -22,6 +23,7 @@ import {
 import { resolvePrimaryRole } from '../role-helpers.js';
 import { membershipRoleSlugs } from '../membership-roles.js';
 import { findOrCreateOrganizationResource } from '../organization-resource.js';
+import { optionalNonEmpty, required, validateBody } from '../authorization-validation.js';
 
 // An unknown role slug on a group role assignment is production's
 // GroupRoleAssignmentRoleNotFoundException (api authorization/exceptions): the entity_not_found
@@ -147,6 +149,84 @@ function resolveResourceTarget(
   }
 
   return null;
+}
+
+function roleAssignmentUpdateLists(body: Record<string, unknown>): { add: unknown[]; remove: unknown[] } {
+  const { add = [], remove = [] } = body;
+  for (const field of Object.keys(body)) {
+    if (field !== 'add' && field !== 'remove') {
+      throw validationFailed([{ field, code: `property ${field} should not exist` }]);
+    }
+  }
+  if (!Array.isArray(add) || !Array.isArray(remove)) {
+    const field = Array.isArray(add) ? 'remove' : 'add';
+    throw validationFailed([{ field, code: `${field} must be an array` }]);
+  }
+  const count = add.length + remove.length;
+  if (count < 1 || count > 100) {
+    throw validationFailed([{ field: 'add', code: 'add and remove must contain between 1 and 100 entries combined.' }]);
+  }
+  return { add, remove };
+}
+
+function resolveRoleAssignmentUpdateEntry(ws: WorkOSStore, organizationId: string, entry: unknown) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw validationError('A role assignment must be an object');
+  }
+  const body = entry as Record<string, unknown>;
+  validateBody(body, {
+    forbidUnknown: true,
+    fields: {
+      role_slug: required(),
+      resource_id: optionalNonEmpty(),
+      resource_external_id: optionalNonEmpty(),
+      resource_type_slug: optionalNonEmpty(),
+    },
+  });
+
+  const roleSlug = body.role_slug as string;
+  const role = resolvePrimaryRole(ws, organizationId, roleSlug);
+  if (!role) throw notFound('Role', roleSlug);
+  if (body.resource_id && body.resource_external_id && body.resource_type_slug) {
+    throw new WorkOSApiError(
+      422,
+      'Provide either resource_id OR (resource_external_id and resource_type_slug), not both.',
+      'BothResourceIdentifiersProvided',
+    );
+  }
+  const resource = resolveResourceTarget(ws, body, organizationId);
+  if (!resource) {
+    throw new WorkOSApiError(
+      422,
+      'Either resource_id OR (resource_external_id and resource_type_slug) must be provided.',
+      'NoResourceIdentifierProvided',
+    );
+  }
+  return {
+    role_id: role.id,
+    role_slug: role.slug,
+    resource_id: resource.id,
+    resource_external_id: resource.external_id,
+    resource_type_slug: resource.resource_type_slug,
+  };
+}
+
+type RoleAssignmentUpdateEntry = ReturnType<typeof resolveRoleAssignmentUpdateEntry>;
+
+function roleAssignmentKey({ role_id, resource_id }: Pick<WorkOSRoleAssignment, 'role_id' | 'resource_id'>): string {
+  return JSON.stringify([role_id, resource_id]);
+}
+
+function assertNoRoleAssignmentUpdateOverlap(add: RoleAssignmentUpdateEntry[], removed: ReadonlySet<string>): void {
+  for (const entry of add) {
+    if (removed.has(roleAssignmentKey(entry))) {
+      throw new WorkOSApiError(
+        400,
+        `Role '${entry.role_slug}' on resource '${entry.resource_id}' cannot be added and removed in the same update.`,
+        'role_assignment_update_overlap',
+      );
+    }
+  }
 }
 
 // A group grant always names a resource: production's resolveResource maps an
@@ -466,6 +546,35 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     });
 
     return c.json(formatRoleAssignment(assignment), 201);
+  });
+
+  app.patch('/authorization/organization_memberships/:id/role_assignments', async (c) => {
+    const membershipId = c.req.param('id');
+    const membership = ws.organizationMemberships.get(membershipId);
+    if (!membership) throw notFound('UserOrganizationMembership', membershipId);
+
+    const { add, remove } = roleAssignmentUpdateLists(await parseJsonBody(c));
+    const resolve = (entry: unknown) => resolveRoleAssignmentUpdateEntry(ws, membership.organization_id, entry);
+    const additions = add.map(resolve);
+    const toRemove = new Set(remove.map(resolve).map(roleAssignmentKey));
+    assertNoRoleAssignmentUpdateOverlap(additions, toRemove);
+
+    const assignments = ws.roleAssignments.findBy('organization_membership_id', membershipId);
+    const held = new Set(assignments.map(roleAssignmentKey));
+    for (const entry of additions) {
+      const key = roleAssignmentKey(entry);
+      if (held.has(key)) continue;
+      ws.roleAssignments.insert({
+        ...entry,
+        object: 'role_assignment',
+        organization_membership_id: membershipId,
+      });
+      held.add(key);
+    }
+    for (const assignment of assignments) {
+      if (toRemove.has(roleAssignmentKey(assignment))) ws.roleAssignments.delete(assignment.id);
+    }
+    return c.body(null, 204);
   });
 
   // Delete role assignment
