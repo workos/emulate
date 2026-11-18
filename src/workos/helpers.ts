@@ -771,8 +771,15 @@ export function oneTimeCodeError(outcome: Exclude<OneTimeCodeOutcome, 'valid'>, 
   }
 }
 
+/**
+ * `status` is required by the spec and read unconditionally by generated SDKs (workos-php throws
+ * on a connection without it). It is deprecated in favor of `state`, and the docs do not say how
+ * production derives it. It follows the directory precedent (`DIRECTORY_EVENT_STATES`), where
+ * `linked` and `unlinked` are the older names of `active` and `inactive`; a `validating`
+ * connection cannot authenticate users yet, so it reports `unlinked`.
+ */
 export function formatConnection(conn: WorkOSConnection): Record<string, unknown> {
-  return formatEntity(conn);
+  return { ...formatEntity(conn), status: conn.state === 'active' ? 'linked' : 'unlinked' };
 }
 
 /**
