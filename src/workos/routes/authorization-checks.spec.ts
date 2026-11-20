@@ -346,6 +346,177 @@ describe('Authorization check + role assignment routes', () => {
     expect(body.data.length).toBe(0);
   });
 
+  describe('PATCH membership role assignments', () => {
+    const roleSlug = 'admin-role';
+    const editor = { role_slug: 'editor', resource_type_slug: 'doc', resource_external_id: 'patch-doc' };
+    let path: string;
+    let orgId: string;
+    let resourceId: string;
+    let assignmentId: string;
+    let adminRoleId: string;
+    const admin = () => ({ role_slug: roleSlug, resource_id: resourceId });
+    const patch = (body: unknown, target = path) => req(target, { method: 'PATCH', body: JSON.stringify(body) });
+
+    async function assignments() {
+      const body: {
+        data: Array<{ id: string; role_id: string; role: { slug: string }; resource: { id: string } }>;
+      } = await json(await req(path));
+      return body.data;
+    }
+
+    async function assignmentIds() {
+      return (await assignments()).map(({ id }) => id);
+    }
+
+    beforeEach(async () => {
+      const { membership, org, adminRole } = await setup();
+      path = `/authorization/organization_memberships/${membership.id}/role_assignments`;
+      orgId = org.id;
+      adminRoleId = adminRole.id;
+      const resource = await json(
+        await req('/authorization/resources', {
+          method: 'POST',
+          body: JSON.stringify({
+            resource_type_slug: 'doc',
+            external_id: 'patch-doc',
+            organization_id: orgId,
+            name: 'Doc',
+          }),
+        }),
+      );
+      resourceId = resource.id;
+      const original = await json(await req(path, { method: 'POST', body: JSON.stringify(admin()) }));
+      assignmentId = original.id;
+    });
+
+    it('adds and removes grants in one request and returns no body', async () => {
+      const response = await patch({ add: [editor], remove: [admin()] });
+      const grants = (await assignments()).map(({ role, resource }) => [role.slug, resource.id]);
+      expect([response.status, await response.text(), grants]).toEqual([204, '', [['editor', resourceId]]]);
+    });
+
+    it('skips adding a grant that is already held', async () => {
+      const response = await patch({ add: [admin()] });
+      expect([response.status, await assignmentIds()]).toEqual([204, [assignmentId]]);
+    });
+
+    it('skips removing a grant that is not held', async () => {
+      const response = await patch({ remove: [editor] });
+      expect([response.status, await assignmentIds()]).toEqual([204, [assignmentId]]);
+    });
+
+    it('rejects zero entries', async () => {
+      const response = await patch({});
+      expect([response.status, await assignmentIds()]).toEqual([422, [assignmentId]]);
+    });
+
+    it('rejects 101 entries across both lists', async () => {
+      const response = await patch({ add: Array.from({ length: 100 }, () => editor), remove: [admin()] });
+      expect([response.status, await assignmentIds()]).toEqual([422, [assignmentId]]);
+    });
+
+    it.each(['resource id', 'external id'])(
+      'rejects overlap addressed by %s without changing grants',
+      async (selector) => {
+        const overlap = selector === 'resource id' ? { role_slug: 'editor', resource_id: resourceId } : editor;
+        const response = await patch({
+          add: [{ role_slug: 'editor', resource_id: resourceId }],
+          remove: [admin(), overlap],
+        });
+        expect([response.status, (await json(response)).code, await assignmentIds()]).toEqual([
+          400,
+          'role_assignment_update_overlap',
+          [assignmentId],
+        ]);
+      },
+    );
+
+    it('rejects an unknown role without changing grants', async () => {
+      const response = await patch({ add: [editor], remove: [admin(), { ...admin(), role_slug: 'unknown-role' }] });
+      expect([response.status, await json(response), await assignmentIds()]).toEqual([
+        404,
+        { code: 'entity_not_found', message: "Role not found: 'unknown-role'.", entity_id: 'unknown-role' },
+        [assignmentId],
+      ]);
+    });
+
+    it('rejects an unknown membership without changing grants', async () => {
+      const response = await patch(
+        { add: [editor], remove: [admin()] },
+        '/authorization/organization_memberships/om_missing/role_assignments',
+      );
+      expect([response.status, await json(response), await assignmentIds()]).toEqual([
+        404,
+        {
+          code: 'entity_not_found',
+          message: "UserOrganizationMembership not found: 'om_missing'.",
+          entity_id: 'om_missing',
+        },
+        [assignmentId],
+      ]);
+    });
+
+    it('rejects a resource from another organization without changing grants', async () => {
+      const otherOrg = await json(
+        await req('/organizations', { method: 'POST', body: JSON.stringify({ name: 'Other Org' }) }),
+      );
+      const resource = await json(
+        await req('/authorization/resources', {
+          method: 'POST',
+          body: JSON.stringify({
+            resource_type_slug: 'doc',
+            external_id: 'other-patch-doc',
+            organization_id: otherOrg.id,
+            name: 'Other Doc',
+          }),
+        }),
+      );
+      const response = await patch({ add: [editor], remove: [admin(), { ...admin(), resource_id: resource.id }] });
+      expect([response.status, await json(response), await assignmentIds()]).toEqual([
+        404,
+        {
+          code: 'entity_not_found',
+          message: `AuthorizationResource not found: '${resource.id}'.`,
+          entity_id: resource.id,
+        },
+        [assignmentId],
+      ]);
+    });
+
+    it('rejects an entry without a resource selector without changing grants', async () => {
+      const response = await patch({ add: [editor], remove: [admin(), { role_slug: roleSlug }] });
+      expect([response.status, (await json(response)).code, await assignmentIds()]).toEqual([
+        422,
+        'NoResourceIdentifierProvided',
+        [assignmentId],
+      ]);
+    });
+
+    it('removes only the organization role when its slug shadows an environment role', async () => {
+      const orgRole = getWorkOSStore(store).roles.insert({
+        object: 'role',
+        slug: roleSlug,
+        name: 'Org Admin',
+        description: null,
+        type: 'OrganizationRole',
+        organization_id: orgId,
+        is_default_role: false,
+        priority: 0,
+        resource_type_slug: 'organization',
+      });
+      await req(path, { method: 'POST', body: JSON.stringify(admin()) });
+      const roleIds = async () => (await assignments()).map(({ role_id }) => role_id).sort();
+      const before = await roleIds();
+
+      const response = await patch({ remove: [admin()] });
+      expect([before, response.status, await roleIds()]).toEqual([
+        [adminRoleId, orgRole.id].sort(),
+        204,
+        [adminRoleId],
+      ]);
+    });
+  });
+
   it('lists resources accessible to membership', async () => {
     const { membership, org } = await setup();
 
