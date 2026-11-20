@@ -240,10 +240,9 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
   // Deleting a resource takes its descendants and their role assignments with
   // it. Without cascade_delete=true a resource that has either is refused,
   // rather than leaving children pointing at an id that no longer resolves.
-  app.delete('/authorization/resources/:resource_id', (c) => {
-    const resourceId = c.req.param('resource_id');
-    const resource = ws.authorizationResources.get(resourceId);
-    if (!resource) throw notFound('AuthorizationResource', resourceId);
+  const deleteResource = (c: Context, resource: WorkOSAuthorizationResource | undefined, ref: string) => {
+    if (!resource) throw notFound('AuthorizationResource', ref);
+    const resourceId = resource.id;
 
     if (resource.resource_type_slug === 'organization') {
       throw new WorkOSApiError(400, 'Cannot mark organization resource as deleting.', 'bad_request');
@@ -268,7 +267,17 @@ export function authorizationResourceRoutes(ctx: RouteContext): void {
     for (const assignment of groupAssignments) ws.groupRoleAssignments.delete(assignment.id);
     for (const id of subtree) ws.authorizationResources.delete(id);
     return c.body(null, 204);
-  });
+  };
+  app.delete('/authorization/resources/:resource_id', (c) =>
+    deleteResource(c, ws.authorizationResources.get(c.req.param('resource_id')), c.req.param('resource_id')),
+  );
+  app.delete('/authorization/organizations/:orgId/resources/:type_slug/:external_id', (c) =>
+    deleteResource(
+      c,
+      findResourceByExternalId(ws, c.req.param('orgId'), c.req.param('type_slug'), c.req.param('external_id')),
+      c.req.param('external_id'),
+    ),
+  );
 
   // Memberships that hold a permission on a resource. Production validates the query before
   // it resolves the resource, so a missing permission_slug is a 422 even for an unknown

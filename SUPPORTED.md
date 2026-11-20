@@ -21,7 +21,7 @@ in [Seed data](docs/seeding.md).
 
 <!-- gen:supported:begin -->
 
-The emulator implements **209 of 269** endpoints in the WorkOS OpenAPI spec (`@workos/openapi-spec@0.160.0`) (**77.7%**).
+The emulator implements **210 of 269** endpoints in the WorkOS OpenAPI spec (`@workos/openapi-spec@0.160.0`) (**78.1%**).
 
 | Feature                                                               | Read     | Write    | Set up                         |
 | --------------------------------------------------------------------- | -------- | -------- | ------------------------------ |
@@ -34,7 +34,7 @@ The emulator implements **209 of 269** endpoints in the WorkOS OpenAPI spec (`@w
 | [SSO](docs/behavior.md#sso)                                           | ⚠️ 5/8   | ⚠️ 4/11  | ✅ seed `connections`          |
 | [Directory Sync](docs/behavior.md#directory-sync)                     | ✅ 6/6   | ⚠️ 1/2   | ✅ seed `directories`          |
 | [Multi-Factor Auth](docs/behavior.md#multi-factor-auth)               | ✅ 2/2   | ✅ 5/5   | ⚠️ API only                    |
-| [FGA / Authorization](docs/behavior.md#fga--authorization)            | ✅ 19/19 | ⚠️ 24/27 | ✅ seed `roles`, `permissions` |
+| [FGA / Authorization](docs/behavior.md#fga--authorization)            | ✅ 19/19 | ⚠️ 25/27 | ✅ seed `roles`, `permissions` |
 | [Audit Logs](docs/behavior.md#audit-logs)                             | ⚠️ 3/4   | ⚠️ 3/4   | ⚠️ API only                    |
 | [Vault](docs/behavior.md#vault)                                       | ✅ 5/5   | ⚠️ 3/6   | ⚠️ API only                    |
 | [Feature Flags](docs/behavior.md#feature-flags)                       | ✅ 4/4   | ✅ 4/4   | ✅ seed `featureFlags`         |

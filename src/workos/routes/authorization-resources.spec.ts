@@ -528,6 +528,37 @@ describe('Authorization resource routes', () => {
     expect((await req(`/authorization/resources/${child.id}`)).status).toBe(404);
   });
 
+  it('deletes a resource by organization, type and external id', async () => {
+    const org = await createOrg('DelExt Org');
+    const create = async (body: Record<string, unknown>) =>
+      json(
+        await req('/authorization/resources', {
+          method: 'POST',
+          body: JSON.stringify({ organization_id: org.id, ...body }),
+        }),
+      );
+    const parent = await create({ resource_type_slug: 'workspace', external_id: 'ext-ws', name: 'ext-ws' });
+    const child = await create({
+      resource_type_slug: 'project',
+      external_id: 'ext-proj',
+      name: 'ext-proj',
+      parent_resource_id: parent.id,
+    });
+    const path = `/authorization/organizations/${org.id}/resources/workspace/ext-ws`;
+
+    const refused = await req(path, { method: 'DELETE' });
+    expect(refused.status).toBe(409);
+    expect((await json(refused)).code).toBe('resource_has_dependents');
+
+    expect((await req(`${path}?cascade_delete=true`, { method: 'DELETE' })).status).toBe(204);
+    expect((await req(path)).status).toBe(404);
+    expect((await req(`/authorization/resources/${child.id}`)).status).toBe(404);
+
+    const missing = await req(path, { method: 'DELETE' });
+    expect(missing.status).toBe(404);
+    expect((await json(missing)).code).toBe('entity_not_found');
+  });
+
   it('filters resources by external id and parent', async () => {
     const org = await createOrg('ListFilter Org');
     const parent = await json(
