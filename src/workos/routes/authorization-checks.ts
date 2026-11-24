@@ -455,6 +455,12 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
 
     const resource = resolveResourceTarget(ws, body, membership.organization_id);
 
+    // Production answers a repeated assignment with the one already held, still as a 201.
+    const existing = ws.roleAssignments
+      .findBy('organization_membership_id', membershipId)
+      .find((assignment) => assignment.role_id === role.id && assignment.resource_id === (resource?.id ?? null));
+    if (existing) return c.json(formatRoleAssignment(existing), 201);
+
     const assignment = ws.roleAssignments.insert({
       object: 'role_assignment',
       organization_membership_id: membershipId,

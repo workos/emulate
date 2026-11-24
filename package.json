@@ -1,6 +1,6 @@
 {
   "name": "@workos/emulate",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "type": "module",
   "description": "Local WorkOS API emulator for tests and development",
   "repository": {
@@ -56,16 +56,16 @@
     "@types/node": "~22.20.0",
     "@types/semver": "^7.7.1",
     "@workos-inc/node": "^10.8.0",
-    "@workos/openapi-spec": "^0.133.0",
+    "@workos/openapi-spec": "^0.160.0",
     "husky": "^9.1.7",
-    "oxfmt": "^0.72.0",
+    "oxfmt": "^0.78.0",
     "oxlint": "^1.77.0",
     "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=22.11"
   },
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.4",
   "scripts": {
     "clean": "rm -rf ./dist",
     "build": "rm -rf ./dist && tsc && chmod +x ./dist/cli.js",

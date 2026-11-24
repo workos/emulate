@@ -755,6 +755,18 @@ export const ID_PREFIX_REQUIREMENTS: Record<string, IdPrefixRequirement> = {
     source: 'Flag',
     conflicts: [],
   },
+  flag_rule: {
+    prefix: 'flag_rule',
+    example: 'flag_rule_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'FlagRule',
+    conflicts: [],
+  },
+  flag_target: {
+    prefix: 'flag_target',
+    example: 'flag_target_01EHZNVPK3SFK441A1RGBFSHRT',
+    source: 'FlagTarget',
+    conflicts: [],
+  },
   group: {
     prefix: 'group',
     example: 'group_01HXYZ123456789ABCDEFGHIJ',

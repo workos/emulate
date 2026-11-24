@@ -234,6 +234,7 @@ An invitation's `state` is derived when it is read, so one expires on its own on
 - **SAML and OIDC types only**, with the protocol's options present: `saml_options` carries `idp_metadata_url` or the manual IdP fields (`idp_sso_url` and at least one `idp_signing_certs` entry), `oidc_options` carries `discovery_endpoint`, `client_id` and a `client_secret` (or `token_authentication_method: private_key_jwt`). `connection_type` may be omitted and is then `GenericSAML` or `GenericOIDC` — production infers a vendor from the IdP, which the emulator cannot do. An OAuth or internal type is `connection_type_not_supported`; the cross-field failures (`connection_type_or_options_required`, `both_saml_and_oidc_options_provided`, `connection_type_conflicts_with_options`, `saml_options_required`, `oidc_options_required`, `incomplete_saml_options`, `ambiguous_saml_options`, `client_secret_required`) carry production's codes and messages. Certificates are not parsed and URLs are not fetched.
 - **A created connection starts `validating`** and announces nothing, as in production, where an IdP response has to prove the configuration first. The first login through it — `/sso/authorize` sends a `validating` connection through exactly as an active one — turns it `active` and emits `connection.activated`. A seeded connection keeps its declared `state` (default `active`) and its `domains`; the create endpoint has no `domains` field and ignores one, so a connection it makes has none. `name` defaults to the organization's name.
 - `GET /connections` lists SSO connections only: the OAuth, Magic Link and TestIdp types are left out, as production's listing leaves them out.
+- Every connection, in responses and in `connection.*` events, carries the deprecated `status` the spec requires beside `state`: `linked` for an `active` or `validating` connection and `unlinked` for an `inactive` one, as production derives it. `connection.activated` and `connection.deactivated` also carry the legacy `external_key` their payloads require; the REST Connection object has no such field, and `connection.deleted` carries neither.
 
 The authorization and token endpoints check what production checks:
 
@@ -330,8 +331,9 @@ Native AuthKit groups can receive scoped roles through
 one by ID or remove by role and resource criteria. Omitting the resource targets the
 organization's own resource. Direct role assignments also support criteria removal through
 `DELETE /authorization/organization_memberships/{id}/role_assignments`. Duplicate group
-assignments return `409` with code `duplicate_group_role_assignment`; an unknown role slug is a
-`404`, as is group criteria removal that matches nothing; roles and resources from another
+assignments return `409` with code `duplicate_group_role_assignment`, while a repeated direct
+assignment (same membership, role and resource) answers `201` with the assignment already held, as
+production does; an unknown role slug is a `404`, as is group criteria removal that matches nothing; roles and resources from another
 organization are rejected. Permission checks, effective-permission lists, and accessible-resource discovery resolve
 current group membership and include grants on resource ancestors. Removing a member or group
 revokes its derived access immediately. Membership and resource assignment lists expose inherited
@@ -340,7 +342,10 @@ Deleting a role, group, or resource also removes its group grants. The emulator 
 role-assignment webhook events. Bulk group assignment replacement is not yet supported.
 
 Resource updates accept the Node SDK's `PATCH` endpoints by ID and by organization, resource type,
-and external ID. The earlier `PUT`-by-ID endpoint remains available.
+and external ID. The earlier `PUT`-by-ID endpoint remains available. Deletes are served by ID and by
+organization, resource type, and external ID, with the same rules: `409` `resource_has_dependents`
+for a resource with descendants or role assignments unless `cascade_delete=true`, which deletes them
+with it.
 
 ## Audit Logs
 
