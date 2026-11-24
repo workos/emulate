@@ -341,7 +341,10 @@ Deleting a role, group, or resource also removes its group grants. The emulator 
 role-assignment webhook events. Bulk group assignment replacement is not yet supported.
 
 Resource updates accept the Node SDK's `PATCH` endpoints by ID and by organization, resource type,
-and external ID. The earlier `PUT`-by-ID endpoint remains available.
+and external ID. The earlier `PUT`-by-ID endpoint remains available. Deletes are served by ID and by
+organization, resource type, and external ID, with the same rules: `409` `resource_has_dependents`
+for a resource with descendants or role assignments unless `cascade_delete=true`, which deletes them
+with it.
 
 ## Audit Logs
 
