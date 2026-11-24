@@ -46,22 +46,94 @@ describe('Audit Logs routes', () => {
       body: JSON.stringify(body),
     });
 
-  it('creates an action schema', async () => {
-    const res = await req('/audit_logs/actions/user.login/schemas', {
-      method: 'POST',
-      body: JSON.stringify({ type: 'object', properties: {} }),
+  const postSchema = (action: string, body: unknown) =>
+    req(`/audit_logs/actions/${action}/schemas`, { method: 'POST', body: JSON.stringify(body) });
+
+  describe('action schemas', () => {
+    it('answers 201 with the created audit_log_schema, not the action', async () => {
+      const res = await postSchema('user.login', { targets: [{ type: 'user' }] });
+      expect(res.status).toBe(201);
+      const schema = await json(res);
+      expect(Object.keys(schema).sort()).toEqual(['created_at', 'object', 'targets', 'version']);
+      expect(schema.object).toBe('audit_log_schema');
+      expect(schema.version).toBe(1);
+      expect(schema.targets).toEqual([{ type: 'user' }]);
     });
-    expect(res.status).toBe(201);
-    const action = await json(res);
-    expect(action.object).toBe('audit_log_action');
-    expect(action.name).toBe('user.login');
+
+    it('carries actor and metadata only when the schema defines them', async () => {
+      const actor = { metadata: { type: 'object', properties: { role: { type: 'string' } } } };
+      const metadata = { type: 'object', properties: { plan: { type: 'string' } } };
+      const schema = await json(await postSchema('user.login', { actor, targets: [{ type: 'user' }], metadata }));
+      expect(schema.actor).toEqual(actor);
+      expect(schema.metadata).toEqual(metadata);
+    });
+
+    it('creates the action on its first schema, and the next version on every changed one', async () => {
+      expect((await json(await postSchema('user.login', { targets: [{ type: 'user' }] }))).version).toBe(1);
+      expect((await json(await postSchema('user.login', { targets: [{ type: 'team' }] }))).version).toBe(2);
+      expect((await json(await postSchema('user.logout', { targets: [{ type: 'user' }] }))).version).toBe(1);
+
+      const actions = await json(await req('/audit_logs/actions'));
+      expect(actions.data.map((a: any) => a.name).sort()).toEqual(['user.login', 'user.logout']);
+    });
+
+    // Production compares a submitted schema with the action's latest version and answers that
+    // version when they match, rather than storing the same schema twice.
+    it('answers an unchanged schema with the latest version', async () => {
+      const body = { actor: { metadata: { type: 'object' } }, targets: [{ type: 'user' }] };
+      const first = await json(await postSchema('user.login', body));
+      const repeat = await postSchema('user.login', body);
+      expect(repeat.status).toBe(201);
+      expect(await json(repeat)).toEqual(first);
+
+      // Only a schema that differs from the latest adds a version, and an earlier one repeated
+      // after it is a change again.
+      expect((await json(await postSchema('user.login', { targets: [{ type: 'team' }] }))).version).toBe(2);
+      expect((await json(await postSchema('user.login', body))).version).toBe(3);
+
+      const list = await json(await req('/audit_logs/actions/user.login/schemas'));
+      expect(list.data.map((s: any) => s.version)).toEqual([3, 2, 1]);
+    });
+
+    it("lists an action's schema versions, newest first by default", async () => {
+      await postSchema('user.login', { targets: [{ type: 'user' }] });
+      await postSchema('user.login', { targets: [{ type: 'team' }] });
+
+      const res = await req('/audit_logs/actions/user.login/schemas');
+      expect(res.status).toBe(200);
+      const list = await json(res);
+      expect(list.object).toBe('list');
+      expect(list.data.map((s: any) => s.version)).toEqual([2, 1]);
+      expect(list.data[0].targets).toEqual([{ type: 'team' }]);
+
+      const asc = await json(await req('/audit_logs/actions/user.login/schemas?order=asc&limit=1'));
+      expect(asc.data.map((s: any) => s.version)).toEqual([1]);
+    });
+
+    it('404s the schema list of an unknown action', async () => {
+      const res = await req('/audit_logs/actions/user.unknown/schemas');
+      expect(res.status).toBe(404);
+    });
+
+    it('serves createSchema and listSchemas to the Node SDK', async () => {
+      const workos = sdkClient(app, 'sk_test_org');
+      const created = await workos.auditLogs.createSchema({
+        action: 'user.signed_in',
+        targets: [{ type: 'user' }],
+        actor: { metadata: { role: 'string' } },
+      });
+      expect(created.object).toBe('audit_log_schema');
+      expect(created.version).toBe(1);
+      expect(created.targets).toEqual([{ type: 'user', metadata: undefined }]);
+      expect(created.actor).toEqual({ metadata: { role: 'string' } });
+
+      const list = await workos.auditLogs.listSchemas('user.signed_in');
+      expect(list.data.map((s) => s.version)).toEqual([1]);
+    });
   });
 
   it('lists actions', async () => {
-    await req('/audit_logs/actions/user.login/schemas', {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
+    await postSchema('user.login', { targets: [{ type: 'user' }] });
 
     const res = await req('/audit_logs/actions');
     expect(res.status).toBe(200);
