@@ -1,0 +1,34 @@
+name: Plumber
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  plumber:
+    name: Workflow scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Plumber reads the workflow states and one run log to work out what the
+      # job tokens can really do.
+      actions: read
+      # The findings go to code scanning.
+      security-events: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Scan the workflows
+        uses: getplumber/plumber@ec8cb3a7edd6a324b33e85109b627b2df6023d94 # v0.7.23
+        with:
+          # Fail under 85 points out of 100 rather than on any single finding.
+          min-points: 85
+          # A pull request from a fork gets a read-only token, so it skips the
+          # code scanning upload and keeps the rest of the scan.
+          upload-sarif: ${{ github.event.pull_request.head.repo.fork != true }}
