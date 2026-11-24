@@ -10,6 +10,7 @@ import { getWorkOSStore } from '../store.js';
 import {
   formatConnection,
   formatListResponse,
+  newConnectionExternalKey,
   isListedConnectionType,
   organizationSsoConnections,
 } from '../helpers.js';
@@ -278,6 +279,7 @@ export function connectionRoutes(ctx: RouteContext): void {
       name: (body.name as string | undefined) ?? org.name,
       state: 'validating',
       domains: [],
+      external_key: newConnectionExternalKey(),
     });
 
     return c.json(formatConnection(conn), 201);

@@ -195,6 +195,31 @@ describe('Authorization check + role assignment routes', () => {
     expect(body.resource).toEqual({ id: resource.id, external_id: 'doc-1', resource_type_slug: 'doc' });
   });
 
+  it('answers a repeated role assignment with the one already held', async () => {
+    const { membership, org } = await setup();
+    await req('/authorization/resources', {
+      method: 'POST',
+      body: JSON.stringify({ resource_type_slug: 'doc', external_id: 'doc-1', organization_id: org.id, name: 'doc-1' }),
+    });
+    const assign = (body: Record<string, unknown>) =>
+      req(`/authorization/organization_memberships/${membership.id}/role_assignments`, {
+        method: 'POST',
+        body: JSON.stringify({ role_slug: 'admin-role', ...body }),
+      });
+    const onDoc = { resource_external_id: 'doc-1', resource_type_slug: 'doc' };
+
+    const first = await assign(onDoc);
+    const second = await assign(onDoc);
+    expect(second.status).toBe(201);
+    expect((await json(second)).id).toBe((await json(first)).id);
+
+    const onOrg = await json(await assign({}));
+    expect(onOrg.id).not.toBe((await json(await assign(onDoc))).id);
+
+    const list = await json(await req(`/authorization/organization_memberships/${membership.id}/role_assignments`));
+    expect(list.data.length).toBe(2);
+  });
+
   it('creates a role assignment scoped to a resource by id', async () => {
     const { membership, org } = await setup();
 

@@ -419,6 +419,47 @@ describe('Membership routes', () => {
     expect(list.data[0].user.id).toBe(user.id);
   });
 
+  it('names the organization on create, GET, list, and update responses', async () => {
+    const org = await createOrg('Named Org');
+    const user = await createUser('named@test.com');
+    const created = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: user.id }),
+      }),
+    );
+    expect(created.organization_name).toBe('Named Org');
+
+    const got = await json(await req(`/user_management/organization_memberships/${created.id}`));
+    expect(got.organization_name).toBe('Named Org');
+
+    const list = await json(await req(`/user_management/organization_memberships?user_id=${user.id}`));
+    expect(list.data[0].organization_name).toBe('Named Org');
+
+    const updated = await json(
+      await req(`/user_management/organization_memberships/${created.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ role_slug: 'admin' }),
+      }),
+    );
+    expect(updated.organization_name).toBe('Named Org');
+  });
+
+  it('follows an organization rename', async () => {
+    const org = await createOrg('Old Name');
+    const user = await createUser('rename@test.com');
+    const created = await json(
+      await req('/user_management/organization_memberships', {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: org.id, user_id: user.id }),
+      }),
+    );
+    await req(`/organizations/${org.id}`, { method: 'PUT', body: JSON.stringify({ name: 'New Name' }) });
+
+    const got = await json(await req(`/user_management/organization_memberships/${created.id}`));
+    expect(got.organization_name).toBe('New Name');
+  });
+
   it('creates a membership holding several roles', async () => {
     const org = await createOrg('Multi Role Org');
     const user = await createUser('multi@test.com');
@@ -515,6 +556,7 @@ describe('Membership routes', () => {
     expect(event.data.role).toEqual({ slug: 'admin' });
     expect(event.data.roles).toEqual([{ slug: 'admin' }, { slug: 'guardian-analyst' }]);
     expect(event.data.user).toBeUndefined();
+    expect(event.data.organization_name).toBeUndefined();
   });
 
   it('rejects role_slug sent alongside role_slugs', async () => {

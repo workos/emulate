@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.1](https://github.com/workos/emulate/compare/v0.20.0...v0.20.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **docker:** pin the runtime image to Node 22.23.5 ([#203](https://github.com/workos/emulate/issues/203)) ([5515d07](https://github.com/workos/emulate/commit/5515d07706574454d4b0523ac2840e5f5caeb0f5))
+
 ## [0.20.0](https://github.com/workos/emulate/compare/v0.19.1...v0.20.0) (2026-11-11)
 
 

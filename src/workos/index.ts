@@ -70,6 +70,8 @@ import {
   formatMembershipEvent,
   formatGroup,
   formatConnection,
+  formatConnectionEvent,
+  newConnectionExternalKey,
   countsTowardConnectionLimit,
   organizationSsoConnections,
   formatSession,
@@ -807,6 +809,7 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: WorkOSSee
         name: connConfig.name,
         state: connConfig.state ?? 'active',
         domains,
+        external_key: newConnectionExternalKey(),
       });
 
       if (connConfig.profiles) {
@@ -1368,14 +1371,14 @@ export const workosPlugin: ServicePlugin = {
     ws.connections.setHooks({
       // The spec has no connection.created/updated — only activation state transitions
       onInsert: (c) => {
-        if (c.state === 'active') eventBus.emit({ event: EVENTS.connectionActivated, data: formatConnection(c) });
+        if (c.state === 'active') eventBus.emit({ event: EVENTS.connectionActivated, data: formatConnectionEvent(c) });
       },
       onUpdate: (c, prev) => {
         if (c.state === prev.state) return;
         if (c.state === 'active') {
-          eventBus.emit({ event: EVENTS.connectionActivated, data: formatConnection(c) });
+          eventBus.emit({ event: EVENTS.connectionActivated, data: formatConnectionEvent(c) });
         } else if (c.state === 'inactive') {
-          eventBus.emit({ event: EVENTS.connectionDeactivated, data: formatConnection(c) });
+          eventBus.emit({ event: EVENTS.connectionDeactivated, data: formatConnectionEvent(c) });
         }
       },
       onDelete: (c) => eventBus.emit({ event: EVENTS.connectionDeleted, data: formatConnection(c) }),

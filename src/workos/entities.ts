@@ -341,6 +341,11 @@ export interface WorkOSConnection extends Entity {
   name: string;
   state: 'active' | 'inactive' | 'validating';
   domains: WorkOSConnectionDomain[];
+  /**
+   * The legacy identifier `connection.activated` and `connection.deactivated` payloads carry.
+   * The REST Connection object does not expose it, so `formatConnection` leaves it out.
+   */
+  external_key: string;
 }
 
 export interface WorkOSSSOProfile extends Entity {
@@ -639,6 +644,18 @@ export interface WorkOSAuditLogAction extends Entity {
   name: string;
   description: string | null;
   condition: string | null;
+}
+
+/**
+ * One version of an action's schema, as `POST /audit_logs/actions/:actionName/schemas` stores
+ * it. Every create adds the next version. Kept in store data per action, not a collection: the
+ * spec's `AuditLogSchemaJson` has no `id`, so `id` is internal and only serves as a list cursor.
+ */
+export interface WorkOSAuditLogSchema extends Entity {
+  version: number;
+  actor?: Record<string, unknown>;
+  targets: Record<string, unknown>[];
+  metadata?: Record<string, unknown>;
 }
 
 /** The `actor` of an ingested event, as `AuditLogEventActorDto` takes it. */
