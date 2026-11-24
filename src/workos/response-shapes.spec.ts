@@ -107,6 +107,7 @@ const connection: WorkOSConnection = {
   name: 'Acme SSO',
   state: 'active',
   domains: [],
+  external_key: 'conn_ext_abc',
   created_at: TS,
   updated_at: TS,
 };

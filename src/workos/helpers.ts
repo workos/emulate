@@ -773,13 +773,36 @@ export function oneTimeCodeError(outcome: Exclude<OneTimeCodeOutcome, 'valid'>, 
 
 /**
  * `status` is required by the spec and read unconditionally by generated SDKs (workos-php throws
- * on a connection without it). It is deprecated in favor of `state`, and the docs do not say how
- * production derives it. It follows the directory precedent (`DIRECTORY_EVENT_STATES`), where
- * `linked` and `unlinked` are the older names of `active` and `inactive`; a `validating`
- * connection cannot authenticate users yet, so it reports `unlinked`.
+ * on a connection without it). It is deprecated in favor of `state`, and production derives it in
+ * `ConnectionsSerializer`: a `validating` connection is `linked` alongside an `active` one, and
+ * only `inactive` — with `deleting` and `requires_type`, which the emulator does not model — is
+ * `unlinked`. A new state has to pick a side here.
  */
+const CONNECTION_STATUSES: Record<WorkOSConnection['state'], 'linked' | 'unlinked'> = {
+  active: 'linked',
+  validating: 'linked',
+  inactive: 'unlinked',
+};
+
+/** `external_key` belongs to the connection event payloads, not to the REST Connection object. */
+const CONNECTION_EXCLUDE = new Set([...INTERNAL_FIELDS, 'external_key']);
+
 export function formatConnection(conn: WorkOSConnection): Record<string, unknown> {
-  return { ...formatEntity(conn), status: conn.state === 'active' ? 'linked' : 'unlinked' };
+  return { ...formatEntity(conn, { exclude: CONNECTION_EXCLUDE }), status: CONNECTION_STATUSES[conn.state] };
+}
+
+/**
+ * The `data` of a `connection.activated` or `connection.deactivated` event: the Connection object
+ * plus the `external_key` the event catalog requires. `connection.deleted` carries neither the
+ * external key nor the rest of the legacy fields, and stays on `formatConnection`.
+ */
+export function formatConnectionEvent(conn: WorkOSConnection): Record<string, unknown> {
+  return { ...formatConnection(conn), external_key: conn.external_key };
+}
+
+/** An opaque per-connection key; production mints a 25-character token for the same purpose. */
+export function newConnectionExternalKey(): string {
+  return randomBytes(12).toString('base64url');
 }
 
 /**

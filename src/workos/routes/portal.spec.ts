@@ -37,6 +37,7 @@ const insertConnection = (
     name: `${connectionType} ${state}`,
     state,
     domains: [],
+    external_key: 'conn_ext_portal',
   });
 
 describe('Portal routes', () => {

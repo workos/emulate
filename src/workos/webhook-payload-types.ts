@@ -88,6 +88,8 @@ export interface ConnectionEventData {
   connection_type: string;
   name: string;
   state: 'active' | 'inactive' | 'validating';
+  status: 'linked' | 'unlinked';
+  external_key: string;
   domains: Array<{ object: string; id: string; domain: string }>;
   created_at: string;
   updated_at: string;

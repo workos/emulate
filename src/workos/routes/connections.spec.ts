@@ -340,6 +340,7 @@ describe('Connection routes', () => {
 
   // The spec requires `status` beside `state`, and generated SDKs read it unconditionally:
   // workos-php's `Connection::fromArray()` throws a TypeError on a connection without it.
+  // Production's mapping (`ConnectionsSerializer`) counts a `validating` connection as `linked`.
   it('reports the deprecated status beside the state, in responses and events', async () => {
     seedFromConfig(store, 'http://localhost:0', {
       organizations: [{ name: 'Active Org' }, { name: 'Inactive Org' }, { name: 'Validating Org' }],
@@ -354,19 +355,23 @@ describe('Connection routes', () => {
     expect(Object.fromEntries(list.data.map((c: any) => [c.state, c.status]))).toEqual({
       active: 'linked',
       inactive: 'unlinked',
-      validating: 'unlinked',
+      validating: 'linked',
     });
 
     const created = await json(
       await create({ organization_id: (await createOrg('New Org')).id, saml_options: SAML_OPTIONS }),
     );
-    expect(created.status).toBe('unlinked');
-    expect((await json(await req(`/connections/${created.id}`))).status).toBe('unlinked');
+    expect(created.status).toBe('linked');
+    expect((await json(await req(`/connections/${created.id}`))).status).toBe('linked');
+
+    // `external_key` is an event-only legacy field: the REST object never carries it.
+    expect(created).not.toHaveProperty('external_key');
+    expect(list.data[0]).not.toHaveProperty('external_key');
 
     const activated = getWorkOSStore(store)
       .events.all()
       .find((e) => e.event === 'connection.activated');
-    expect(activated?.data).toMatchObject({ status: 'linked' });
+    expect(activated?.data).toMatchObject({ status: 'linked', external_key: expect.any(String) });
   });
 
   it('deletes a connection', async () => {
