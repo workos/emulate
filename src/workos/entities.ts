@@ -341,6 +341,11 @@ export interface WorkOSConnection extends Entity {
   name: string;
   state: 'active' | 'inactive' | 'validating';
   domains: WorkOSConnectionDomain[];
+  /**
+   * The legacy identifier `connection.activated` and `connection.deactivated` payloads carry.
+   * The REST Connection object does not expose it, so `formatConnection` leaves it out.
+   */
+  external_key: string;
 }
 
 export interface WorkOSSSOProfile extends Entity {
