@@ -68,13 +68,31 @@ describe('Audit Logs routes', () => {
       expect(schema.metadata).toEqual(metadata);
     });
 
-    it('creates the action on its first schema, and the next version on every other', async () => {
+    it('creates the action on its first schema, and the next version on every changed one', async () => {
       expect((await json(await postSchema('user.login', { targets: [{ type: 'user' }] }))).version).toBe(1);
       expect((await json(await postSchema('user.login', { targets: [{ type: 'team' }] }))).version).toBe(2);
       expect((await json(await postSchema('user.logout', { targets: [{ type: 'user' }] }))).version).toBe(1);
 
       const actions = await json(await req('/audit_logs/actions'));
       expect(actions.data.map((a: any) => a.name).sort()).toEqual(['user.login', 'user.logout']);
+    });
+
+    // Production compares a submitted schema with the action's latest version and answers that
+    // version when they match, rather than storing the same schema twice.
+    it('answers an unchanged schema with the latest version', async () => {
+      const body = { actor: { metadata: { type: 'object' } }, targets: [{ type: 'user' }] };
+      const first = await json(await postSchema('user.login', body));
+      const repeat = await postSchema('user.login', body);
+      expect(repeat.status).toBe(201);
+      expect(await json(repeat)).toEqual(first);
+
+      // Only a schema that differs from the latest adds a version, and an earlier one repeated
+      // after it is a change again.
+      expect((await json(await postSchema('user.login', { targets: [{ type: 'team' }] }))).version).toBe(2);
+      expect((await json(await postSchema('user.login', body))).version).toBe(3);
+
+      const list = await json(await req('/audit_logs/actions/user.login/schemas'));
+      expect(list.data.map((s: any) => s.version)).toEqual([3, 2, 1]);
     });
 
     it("lists an action's schema versions, newest first by default", async () => {

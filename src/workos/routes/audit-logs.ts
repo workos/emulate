@@ -164,9 +164,21 @@ export function auditLogRoutes(ctx: RouteContext): void {
   };
 
   /**
+   * What production compares a submitted schema against the latest version with. It hashes the
+   * whole built JSON schema (`findLatestUnmodifiedVersion`), which the emulator's stored
+   * `{actor, targets, metadata}` stands in for.
+   *
+   * shortcut: key order decides equality, so the same schema with its keys written in another
+   * order adds a version. Compare canonically if a caller ever reorders them.
+   */
+  const schemaShape = (s: Pick<WorkOSAuditLogSchema, 'actor' | 'targets' | 'metadata'>): string =>
+    JSON.stringify([s.actor ?? null, s.targets, s.metadata ?? null]);
+
+  /**
    * Create a schema. Production answers `201` with the created `audit_log_schema`, not the
-   * action, and creates the action first when it does not exist. Every create adds the next
-   * version of the action's schema.
+   * action, and creates the action first when it does not exist. A schema that matches the
+   * action's latest version answers that version instead of adding one; one that differs adds
+   * the next version.
    */
   app.post('/audit_logs/actions/:actionName/schemas', async (c) => {
     const actionName = c.req.param('actionName');
@@ -192,6 +204,9 @@ export function auditLogRoutes(ctx: RouteContext): void {
       created_at: now,
       updated_at: now,
     };
+
+    const latest = versions[versions.length - 1];
+    if (latest && schemaShape(latest) === schemaShape(schema)) return c.json(formatAuditLogSchema(latest), 201);
     store.setData(`${STORE_KEY_PREFIXES.auditSchema}${actionName}`, [...versions, schema]);
     return c.json(formatAuditLogSchema(schema), 201);
   });
