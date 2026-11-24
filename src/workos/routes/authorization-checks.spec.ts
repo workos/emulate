@@ -350,6 +350,7 @@ describe('Authorization check + role assignment routes', () => {
     const roleSlug = 'admin-role';
     const editor = { role_slug: 'editor', resource_type_slug: 'doc', resource_external_id: 'patch-doc' };
     let path: string;
+    let membershipId: string;
     let orgId: string;
     let resourceId: string;
     let assignmentId: string;
@@ -370,6 +371,7 @@ describe('Authorization check + role assignment routes', () => {
 
     beforeEach(async () => {
       const { membership, org, adminRole } = await setup();
+      membershipId = membership.id;
       path = `/authorization/organization_memberships/${membership.id}/role_assignments`;
       orgId = org.id;
       adminRoleId = adminRole.id;
@@ -490,6 +492,50 @@ describe('Authorization check + role assignment routes', () => {
         'NoResourceIdentifierProvided',
         [assignmentId],
       ]);
+    });
+
+    // Production's assertNotOnlyGroupSourced: the grant belongs to the group, so the user has to
+    // leave the group instead. A removal that matches nothing at all is still skipped.
+    it('refuses to remove a role held only through a group', async () => {
+      const group = await json(
+        await req(`/organizations/${orgId}/groups`, { method: 'POST', body: JSON.stringify({ name: 'Editors' }) }),
+      );
+      await req(`/organizations/${orgId}/groups/${group.id}/organization-memberships`, {
+        method: 'POST',
+        body: JSON.stringify({ organization_membership_id: membershipId }),
+      });
+      await req(`/authorization/groups/${group.id}/role_assignments`, {
+        method: 'POST',
+        body: JSON.stringify({ role_slug: 'editor', resource_id: resourceId }),
+      });
+
+      const response = await patch({ remove: [{ role_slug: 'editor', resource_id: resourceId }] });
+      // The group grant and the untouched direct one are both still listed.
+      const ids = await assignmentIds();
+      expect([response.status, (await json(response)).code, ids.includes(assignmentId), ids.length]).toEqual([
+        409,
+        'cannot_remove_group_sourced_role',
+        true,
+        2,
+      ]);
+    });
+
+    it('removes the direct grant when a group grants the same role', async () => {
+      const group = await json(
+        await req(`/organizations/${orgId}/groups`, { method: 'POST', body: JSON.stringify({ name: 'Admins' }) }),
+      );
+      await req(`/organizations/${orgId}/groups/${group.id}/organization-memberships`, {
+        method: 'POST',
+        body: JSON.stringify({ organization_membership_id: membershipId }),
+      });
+      await req(`/authorization/groups/${group.id}/role_assignments`, {
+        method: 'POST',
+        body: JSON.stringify({ role_slug: roleSlug, resource_id: resourceId }),
+      });
+
+      const response = await patch({ remove: [admin()] });
+      const left = await assignments();
+      expect([response.status, left.length, left[0]?.id === assignmentId]).toEqual([204, 1, false]);
     });
 
     it('removes only the organization role when its slug shadows an environment role', async () => {

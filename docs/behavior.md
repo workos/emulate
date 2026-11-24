@@ -334,14 +334,15 @@ selects a resource by `resource_id` or by `resource_type_slug` and `resource_ext
 All entries are validated before any assignments change. Matching uses the resolved role and
 resource IDs, so an organization role shadows an environment role with the same slug.
 
-| Code                              | Condition                                                                                              | Status |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------ | ------ |
-| —                                 | Update succeeds with no response body; existing adds and unmatched removals are skipped.               | 204    |
-| `role_assignment_update_overlap`  | Both lists resolve to the same role and resource pair.                                                 | 400    |
-| `entity_not_found`                | The membership, role, or resource is unknown, or the role or resource belongs to another organization. | 404    |
-| — or `unprocessable_entity`       | The request fails body validation, including the combined entry count.                                 | 422    |
-| `NoResourceIdentifierProvided`    | An entry has no resource selector.                                                                     | 422    |
-| `BothResourceIdentifiersProvided` | An entry provides both complete resource selectors.                                                    | 422    |
+| Code                               | Condition                                                                                              | Status |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------ | ------ |
+| —                                  | Update succeeds with no response body; existing adds and unmatched removals are skipped.               | 204    |
+| `role_assignment_update_overlap`   | Both lists resolve to the same role and resource pair.                                                 | 400    |
+| `entity_not_found`                 | The membership, role, or resource is unknown, or the role or resource belongs to another organization. | 404    |
+| `cannot_remove_group_sourced_role` | A removal matches only grants the membership holds through a group.                                    | 409    |
+| — or `unprocessable_entity`        | The request fails body validation, including the combined entry count.                                 | 422    |
+| `NoResourceIdentifierProvided`     | An entry has no resource selector.                                                                     | 422    |
+| `BothResourceIdentifiersProvided`  | An entry provides both complete resource selectors.                                                    | 422    |
 
 ### Native group authorization
 

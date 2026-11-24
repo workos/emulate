@@ -217,6 +217,25 @@ function roleAssignmentKey({ role_id, resource_id }: Pick<WorkOSRoleAssignment, 
   return JSON.stringify([role_id, resource_id]);
 }
 
+/**
+ * Production refuses to remove a role the membership holds only through a group
+ * (`assertNotOnlyGroupSourced`): the grant belongs to the group, so the user leaves the group
+ * instead. A removal that matches nothing at all is still skipped.
+ */
+function assertNotOnlyGroupSourced(ws: WorkOSStore, membershipId: string, removals: RoleAssignmentUpdateEntry[]): void {
+  const assignments = membershipRoleAssignments(ws, membershipId);
+  for (const entry of removals) {
+    const held = assignments.filter((assignment) => roleAssignmentKey(assignment) === roleAssignmentKey(entry));
+    if (held.length > 0 && held.every((assignment) => assignment.group_role_assignment_id)) {
+      throw new WorkOSApiError(
+        409,
+        `Cannot remove group-sourced role from organization membership '${membershipId}'. Remove the user from the group instead.`,
+        'cannot_remove_group_sourced_role',
+      );
+    }
+  }
+}
+
 function assertNoRoleAssignmentUpdateOverlap(add: RoleAssignmentUpdateEntry[], removed: ReadonlySet<string>): void {
   for (const entry of add) {
     if (removed.has(roleAssignmentKey(entry))) {
@@ -556,8 +575,10 @@ export function authorizationCheckRoutes(ctx: RouteContext): void {
     const { add, remove } = roleAssignmentUpdateLists(await parseJsonBody(c));
     const resolve = (entry: unknown) => resolveRoleAssignmentUpdateEntry(ws, membership.organization_id, entry);
     const additions = add.map(resolve);
-    const toRemove = new Set(remove.map(resolve).map(roleAssignmentKey));
+    const removals = remove.map(resolve);
+    const toRemove = new Set(removals.map(roleAssignmentKey));
     assertNoRoleAssignmentUpdateOverlap(additions, toRemove);
+    assertNotOnlyGroupSourced(ws, membershipId, removals);
 
     const assignments = ws.roleAssignments.findBy('organization_membership_id', membershipId);
     const held = new Set(assignments.map(roleAssignmentKey));
