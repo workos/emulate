@@ -324,16 +324,36 @@ Every organization owns an implicit `organization` resource whose `external_id` 
 organization's `external_id`, falling back to the organization id. Resources created without parent
 fields attach to it, and it cannot be created, updated, or deleted directly.
 
+### Membership role assignments
+
+Direct role assignments support criteria removal through
+`DELETE /authorization/organization_memberships/{id}/role_assignments`.
+
+`PATCH /authorization/organization_memberships/{id}/role_assignments` accepts `add` and `remove`
+lists, each defaulting to empty, with 1–100 entries combined. Each entry names a `role_slug` and
+selects a resource by `resource_id` or by `resource_type_slug` and `resource_external_id`.
+All entries are validated before any assignments change. Matching uses the resolved role and
+resource IDs, so an organization role shadows an environment role with the same slug.
+
+| Code                               | Condition                                                                                              | Status |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------ | ------ |
+| —                                  | Update succeeds with no response body; existing adds and unmatched removals are skipped.               | 204    |
+| `role_assignment_update_overlap`   | Both lists resolve to the same role and resource pair.                                                 | 400    |
+| `entity_not_found`                 | The membership, role, or resource is unknown, or the role or resource belongs to another organization. | 404    |
+| `cannot_remove_group_sourced_role` | A removal matches only grants the membership holds through a group.                                    | 409    |
+| — or `unprocessable_entity`        | The request fails body validation, including the combined entry count.                                 | 422    |
+| `NoResourceIdentifierProvided`     | An entry has no resource selector.                                                                     | 422    |
+| `BothResourceIdentifiersProvided`  | An entry provides both complete resource selectors.                                                    | 422    |
+
 ### Native group authorization
 
 Native AuthKit groups can receive scoped roles through
 `/authorization/groups/{groupId}/role_assignments`: create and list assignments, then get or delete
 one by ID or remove by role and resource criteria. Omitting the resource targets the
-organization's own resource. Direct role assignments also support criteria removal through
-`DELETE /authorization/organization_memberships/{id}/role_assignments`. Duplicate group
-assignments return `409` with code `duplicate_group_role_assignment`, while a repeated direct
-assignment (same membership, role and resource) answers `201` with the assignment already held, as
-production does; an unknown role slug is a `404`, as is group criteria removal that matches nothing; roles and resources from another
+organization's own resource. Duplicate group assignments return `409` with code
+`duplicate_group_role_assignment`, while a repeated direct assignment (same membership, role and
+resource) answers `201` with the assignment already held, as production does; an unknown role slug
+is a `404`, as is group criteria removal that matches nothing; roles and resources from another
 organization are rejected. Permission checks, effective-permission lists, and accessible-resource discovery resolve
 current group membership and include grants on resource ancestors. Removing a member or group
 revokes its derived access immediately. Membership and resource assignment lists expose inherited
