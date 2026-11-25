@@ -4,6 +4,7 @@ import {
   type ApiKeyMap,
   type RouteContext,
   parseJsonBody,
+  parseOAuthBody,
   WorkOSApiError,
   OauthApiError,
   NestNotFoundError,
@@ -373,7 +374,9 @@ export function ssoRoutes(ctx: RouteContext): void {
   });
 
   app.post('/sso/token', async (c) => {
-    const body = await parseJsonBody(c);
+    // JSON or application/x-www-form-urlencoded, as production accepts: @workos-inc/node's
+    // getProfileAndToken posts a URLSearchParams form, and RFC 6749 §4.1.3 requires one.
+    const body = await parseOAuthBody(c);
     const grantType = body.grant_type as string | undefined;
     const code = body.code as string;
 
