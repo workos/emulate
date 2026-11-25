@@ -15,15 +15,15 @@ const zxcvbnEnPackage = zxcvbnEnModule as unknown as typeof zxcvbnEnModule.defau
  * at the settings a new environment is born with: at least 10 characters, at most 72 bytes
  * (bcrypt's limit), not containing the account's email address, and a zxcvbn score of 3 or
  * more — scored by the same library, dictionaries and keyboard graphs production configures, so
- * the same passwords pass and fail. The breached-password lookup is off by default in
- * production and needs the network, and the password-history and compromised-password checks
- * read tables the emulator has no counterpart for, so none of those run here.
+ * the same passwords pass and fail. The breached-password lookup (on by default in production)
+ * needs the network, and the password-history and compromised-password checks read tables the
+ * emulator has no counterpart for, so none of those run here.
  */
 
 export const MINIMUM_PASSWORD_LENGTH = 10;
 /** bcrypt ignores everything past 72 bytes, so production refuses longer passwords outright. */
 export const MAXIMUM_PASSWORD_LENGTH_IN_BYTES = 72;
-const MINIMUM_ZXCVBN_SCORE = 3;
+export const MINIMUM_ZXCVBN_SCORE = 3;
 
 zxcvbnOptions.setOptions({
   graphs: zxcvbnCommonPackage.adjacencyGraphs,
