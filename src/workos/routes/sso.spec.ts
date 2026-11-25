@@ -7,6 +7,7 @@ import { STORE_KEYS } from '../constants.js';
 import type { Store } from '../../core/index.js';
 import { formatSSOProfile } from '../helpers.js';
 import type { WorkOSConnectionType, WorkOSSSOProfile } from '../entities.js';
+import { sdkClient } from '../sdk.test-utils.js';
 
 const apiKeys: ApiKeyMap = { sk_test_sso: { environment: 'test' } };
 const headers = { Authorization: 'Bearer sk_test_sso', 'Content-Type': 'application/json' };
@@ -101,6 +102,20 @@ describe('SSO routes', () => {
         expect((await token(code, { code_verifier: verifier })).status).toBe(400);
       });
     }
+
+    // The SDK posts the verifier in a URLSearchParams form, not JSON.
+    it('redeems S256 through @workos-inc/node getProfileAndToken', async () => {
+      const code = await authorize();
+      const workos = sdkClient(app, 'sk_test_sso');
+      const { accessToken, profile } = await workos.sso.getProfileAndToken({
+        clientId: 'client_x',
+        code,
+        codeVerifier: verifier,
+      });
+      expect(accessToken).toBeString();
+      expect(profile.id).toStartWith('prof_');
+      expect((await token(code, { code_verifier: verifier })).status).toBe(400);
+    });
 
     for (const [value, description] of [
       [undefined, 'A code_verifier is required because the authorization request included a code_challenge.'],
@@ -1128,6 +1143,50 @@ describe('SSO authentication events', () => {
     });
     expect(noCode.status).toBe(400);
     expect(await noCode.json()).toEqual({ error: 'invalid_request', error_description: 'code is required.' });
+  });
+
+  // @workos-inc/node's getProfileAndToken posts a URLSearchParams form
+  // (`application/x-www-form-urlencoded;charset=utf-8`), and production accepts it, so the
+  // exchange reads the form exactly as it reads JSON — failures included.
+  it('redeems a form-encoded exchange, as @workos-inc/node sends it', async () => {
+    const { org, conn } = await createOrgWithConnection();
+    const authorize = async () => {
+      const res = await app.request(
+        `/sso/authorize?client_id=client_x&organization=${org.id}&redirect_uri=http://localhost:3000/callback&login_hint=alice%40example.com`,
+      );
+      return new URL(res.headers.get('location')!).searchParams.get('code')!;
+    };
+    const post = (fields: Record<string, string>) =>
+      app.request('/sso/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+        body: new URLSearchParams(fields).toString(),
+      });
+
+    const code = await authorize();
+    const wrongSecret = await post({
+      grant_type: 'authorization_code',
+      code,
+      client_id: 'client_x',
+      client_secret: 'sk_wrong',
+    });
+    expect(wrongSecret.status).toBe(400);
+    expect(await wrongSecret.json()).toEqual({ error: 'invalid_client', error_description: 'Invalid client secret.' });
+
+    const res = await post({
+      grant_type: 'authorization_code',
+      code,
+      client_id: 'client_x',
+      client_secret: 'sk_test_sso',
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.access_token).toBeString();
+    expect(body.profile).toMatchObject({ email: 'alice@example.com', connection_id: conn.id, organization_id: org.id });
+
+    const workos = sdkClient(app, 'sk_test_sso');
+    const { profile } = await workos.sso.getProfileAndToken({ clientId: 'client_x', code: await authorize() });
+    expect(profile).toMatchObject({ email: 'alice@example.com', connectionId: conn.id, organizationId: org.id });
   });
 
   // Absent is a malformed request, not a request for an unsupported grant — and describing it as

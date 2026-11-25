@@ -224,9 +224,9 @@ export async function parseJsonBody(c: Context): Promise<Record<string, unknown>
 // Parses an OAuth request body whether the client sent JSON or
 // application/x-www-form-urlencoded. RFC 6749 §3.2 / RFC 8628 require the form encoding, and
 // WorkOS production accepts both on /user_management/authenticate for every grant (Nest's
-// default urlencoded parser is active there) and on /user_management/authorize/device. Dispatch
-// on Content-Type -- JSON goes through parseJsonBody, form-encoded through c.req.parseBody --
-// and return the same Record<string, unknown> the handlers index into.
+// default urlencoded parser is active there), on /user_management/authorize/device and on
+// /sso/token. Dispatch on Content-Type -- JSON goes through parseJsonBody, form-encoded through
+// c.req.parseBody -- and return the same Record<string, unknown> the handlers index into.
 export async function parseOAuthBody(c: Context): Promise<Record<string, unknown>> {
   const contentType = (c.req.header('content-type') ?? '').toLowerCase();
   if (contentType.includes('application/json')) {

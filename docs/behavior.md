@@ -241,6 +241,7 @@ The authorization and token endpoints check what production checks:
 - `GET /sso/authorize` requires `client_id`. Without one production lands on its own error page as `client_id_invalid`, before the `redirect_uri` is read; the emulator has no such page and registers no clients, so an absent id is `400 {"message": "Missing or invalid client_id.", "code": "client_id_invalid"}` and any id that is present is accepted.
 - An `inactive` connection is not a 404 but a redirect back to `redirect_uri` with `error=connection_unlinked`, production's description of the selector (`The connection 'conn_…' is inactive.`, or the organization, domain or provider variant), the `state`, and an `error_uri` pointing at the error-code reference — so a callback handler sees the failure the way it would in production.
 - `POST /sso/token` requires `client_id` and `client_secret`. The secret is an API key of the environment — in production it is looked up among the environment's keys, here among the emulator's (`sk_test_default`, or the keys you configured) — and a wrong one is `400 {"error": "invalid_client", "error_description": "Invalid client secret."}`, with no `authentication.sso_failed` event, since nothing was authenticated. The `client_id` is only required to be present, and becomes the access token's `aud`.
+- `POST /sso/token` takes its parameters as JSON or as an `application/x-www-form-urlencoded` form, as production does. `@workos-inc/node`'s `getProfileAndToken` sends the form.
 - An authorization code lives five minutes, as production's do.
 
 ### PKCE
