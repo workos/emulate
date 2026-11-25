@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.21.0](https://github.com/workos/emulate/compare/v0.20.1...v0.21.0) (2026-11-25)
+
+
+### Features
+
+* **authorization:** support PATCH for membership role assignments ([#212](https://github.com/workos/emulate/issues/212)) ([b3ab646](https://github.com/workos/emulate/commit/b3ab64642b06b829c52c35f5c51093b8252f00dd))
+
+
+### Bug Fixes
+
+* **audit-logs:** answer createSchema with the created schema, and list schemas ([#206](https://github.com/workos/emulate/issues/206)) ([96800ec](https://github.com/workos/emulate/commit/96800ec8468df0c00c4aa2c8eb5681f0aca802c5))
+* **authorization:** answer a repeated role assignment with the one already held ([#210](https://github.com/workos/emulate/issues/210)) ([c0963fa](https://github.com/workos/emulate/commit/c0963fa4d3d173874b528a07edb6de36b5d22458))
+* **authorization:** serve delete by organization, type and external id ([#209](https://github.com/workos/emulate/issues/209)) ([20b7954](https://github.com/workos/emulate/commit/20b79545282f33b6139525257d010e62bf155602))
+* **connections:** return the spec-required status on connection objects ([#198](https://github.com/workos/emulate/issues/198)) ([166442e](https://github.com/workos/emulate/commit/166442e3be6b52af3cda34341b3c37a3f40f42a4))
+* **memberships:** include organization_name on membership responses ([#205](https://github.com/workos/emulate/issues/205)) ([2052b91](https://github.com/workos/emulate/commit/2052b91b1b445e06bdaacb64f1acfa74d525a5be))
+* **sso:** accept form-encoded bodies on POST /sso/token ([#216](https://github.com/workos/emulate/issues/216)) ([31f5aeb](https://github.com/workos/emulate/commit/31f5aeb02841e97cf9de43809afcf4a44c786155))
+
 ## [0.20.1](https://github.com/workos/emulate/compare/v0.20.0...v0.20.1) (2026-11-17)
 
 
